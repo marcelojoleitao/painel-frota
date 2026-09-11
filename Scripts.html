@@ -14,6 +14,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
+const VERSAO_PAINEL = '2.1.1';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -849,7 +850,7 @@ function iniciar(dados) {
   ESTADO.veiculos = dados.veiculos || [];
   ESTADO.usuario = dados.usuario || {}; ESTADO.admin = !!(dados.usuario && dados.usuario.admin);
   txt('meta-usuario', (primeiroNome(ESTADO.usuario.nome) || ESTADO.usuario.email || '') + (ESTADO.usuario.lotacao ? ' • ' + ESTADO.usuario.lotacao : '') + (ESTADO.admin ? ' • administrador' : ''));
-  txt('meta-atualizado', 'Dados de ' + dados.meta.atualizadoEm + (dados.meta.doCache ? ' (cache)' : ''));
+  txt('meta-atualizado', 'Dados de ' + dados.meta.atualizadoEm + (dados.meta.doCache ? ' (cache)' : '') + ' • v' + VERSAO_PAINEL);
   document.querySelectorAll('.so-admin').forEach(e => e.classList.toggle('oculto', !ESTADO.admin));
   indexarPdfs(dados.pdfsOS || []);
   if (!ESTADO.colunasVisiveis) ESTADO.colunasVisiveis = new Set(COLUNAS.filter(c => c.on).map(c => c.k));
