@@ -58,8 +58,19 @@ const CONFIG = {
 /*  Entrada do Web App                                           */
 /* ------------------------------------------------------------ */
 
+/**
+ * Origem do HTML:
+ *   'github' — App/Login/Estilos/Scripts vêm do repositório (cache de 5 min).
+ *              Push no GitHub = painel atualizado, sem tocar no editor.
+ *   'local'  — usa os arquivos deste projeto (reserva).
+ * A troca também pode ser feita sem editar código:
+ * propriedade de script HTML_ORIGEM = github | local.
+ */
+const HTML_ORIGEM_PADRAO = 'github';
+const HTML_CACHE_SEG = 300;
+
 function doGet() {
-  const t = HtmlService.createTemplateFromFile('App');
+  const t = HtmlService.createTemplate(_arquivoHtml_('App'));
   t.titulo = CONFIG.TITULO;
   return t.evaluate()
     .setTitle(CONFIG.TITULO)
@@ -68,7 +79,39 @@ function doGet() {
 }
 
 function incluir(nome) {
+  return _arquivoHtml_(nome);
+}
+
+function _arquivoHtml_(nome) {
+  const origem = PropertiesService.getScriptProperties().getProperty('HTML_ORIGEM') || HTML_ORIGEM_PADRAO;
+  if (origem === 'github') {
+    const chave = 'html_' + nome;
+    const cache = CacheService.getScriptCache();
+    const guardadas = [];
+    for (let i = 0; ; i++) { const p = cache.get(chave + '_' + i); if (p === null) break; guardadas.push(p); }
+    if (guardadas.length) return guardadas.join('');
+    try {
+      const texto = _baixarDoGitHub_(nome + '.html');
+      if (texto !== null) {
+        const fatias = {}; let n = 0;
+        for (let i = 0; i < texto.length; i += 90000) fatias[chave + '_' + (n++)] = texto.substring(i, i + 90000);
+        cache.putAll(fatias, HTML_CACHE_SEG);
+        return texto;
+      }
+      Logger.log('HTML ' + nome + ' não encontrado no GitHub; usando arquivo local.');
+    } catch (e) { Logger.log('GitHub indisponível para ' + nome + ' (' + e + '); usando arquivo local.'); }
+  }
   return HtmlService.createHtmlOutputFromFile(nome).getContent();
+}
+
+/** Depois de um push, rode isto (ou espere até 5 min) para o painel refletir o GitHub. */
+function limparCacheHtml() {
+  const cache = CacheService.getScriptCache();
+  ['App', 'Login', 'Estilos', 'Scripts'].forEach(nome => {
+    const lista = []; for (let i = 0; i < 40; i++) lista.push('html_' + nome + '_' + i);
+    cache.removeAll(lista);
+  });
+  return 'Cache de HTML limpo — próximo acesso baixa do GitHub.';
 }
 
 /* ------------------------------------------------------------ */
