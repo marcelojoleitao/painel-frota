@@ -70,9 +70,12 @@ const HTML_ORIGEM_PADRAO = 'github';
 const HTML_CACHE_SEG = 300;
 
 function doGet() {
-  const t = HtmlService.createTemplate(_arquivoHtml_('App'));
-  t.titulo = CONFIG.TITULO;
-  return t.evaluate()
+  // Monta a página por substituição direta — não depende do motor de templates,
+  // que não processa scriptlets de conteúdo carregado em tempo de execução.
+  let pagina = _arquivoHtml_('App');
+  pagina = pagina.replace(/<\?=\s*titulo\s*\?>/g, CONFIG.TITULO);
+  pagina = pagina.replace(/<\?!=\s*incluir\(\s*'([^']+)'\s*\);?\s*\?>/g, function (m, nome) { return _arquivoHtml_(nome); });
+  return HtmlService.createHtmlOutput(pagina)
     .setTitle(CONFIG.TITULO)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, maximum-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
