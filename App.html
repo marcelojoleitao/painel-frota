@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title><?= titulo ?></title>
+  <?!= incluir('Estilos'); ?>
+</head>
+<body>
+
+<?!= incluir('Login'); ?>
+
+<!-- ===================== CARREGANDO ===================== -->
+<div id="tela-carregando" class="carregando oculto">
+  <div class="caixa">
+    <div class="spinner"></div>
+    <h1 id="carregando-titulo">Acessando Frota 16ª SPRF</h1>
+    <p id="carregando-msg">Lendo os dados e preparando o painel…</p>
+    <button id="btn-tentar" class="btn amarelo oculto" onclick="carregar(true)">Tentar de novo</button>
+    <button id="btn-voltar-login" class="btn claro oculto" onclick="sair()">Voltar ao login</button>
+  </div>
+</div>
+
+<!-- ===================== APLICATIVO ===================== -->
+<div id="tela-app" class="oculto">
+
+<header class="topo">
+  <div class="topo-marca">
+    <div class="topo-brasao">PRF</div>
+    <div>
+      <div class="topo-titulo">Painel da Frota</div>
+      <div class="topo-sub">16ª Superintendência — Ceará</div>
+    </div>
+  </div>
+
+  <nav class="topo-abas" id="abas">
+    <button class="topo-aba ativa" data-aba="painel">📊 <span class="txt">Painel</span></button>
+    <button class="topo-aba" data-aba="viaturas">🚓 <span class="txt">Viaturas</span></button>
+    <button class="topo-aba" data-aba="uso">⛽ <span class="txt">Abastecimento</span></button>
+    <button class="topo-aba" data-aba="manut">🔧 <span class="txt">Manutenção</span></button>
+    <button class="topo-aba" data-aba="os">🧾 <span class="txt">Ordens de serviço</span></button>
+    <button class="topo-aba" data-aba="pagamentos">💳 <span class="txt">Pagamentos</span></button>
+    <button class="topo-aba" data-aba="patrimonio">📑 <span class="txt">Documentação</span></button>
+  </nav>
+
+  <div class="topo-direita">
+    <div class="topo-meta">
+      <div id="meta-usuario"></div>
+      <div id="meta-atualizado"></div>
+    </div>
+    <button class="topo-btn icone" id="btn-filtros" title="Mostrar ou ocultar filtros">☰ <span class="txt">Filtros</span></button>
+    <button class="topo-btn icone" id="btn-atualizar" title="Reler a planilha agora">⟳</button>
+    <button class="topo-btn icone" id="btn-sair" title="Sair">⏻</button>
+  </div>
+</header>
+
+<div class="corpo" id="corpo">
+
+  <!-- --------- FILTROS --------- -->
+  <aside class="filtros" id="painel-filtros">
+    <div class="filtros-cab">
+      <h2>Filtros</h2>
+      <button class="link-btn" id="btn-limpar" disabled>Limpar tudo</button>
+    </div>
+
+    <div class="busca">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="busca" type="search" placeholder="Placa, placa reservada, modelo, tombamento, renavam…" autocomplete="off">
+    </div>
+
+    <div class="filtro">
+      <div class="filtro-cont" style="display:block; padding-top:6px">
+        <div class="alternador" id="alt-alienados">
+          <button data-v="ocultar" class="ativo">Ocultar alienados</button>
+          <button data-v="exibir">Exibir tudo</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="filtros-lista"></div>
+
+    <div class="filtro aberto">
+      <button class="filtro-cab">Odômetro <span class="seta">▾</span></button>
+      <div class="filtro-cont">
+        <div class="faixa">
+          <div><label>Mínimo (km)</label><input id="odo-min" type="number" inputmode="numeric" placeholder="0"></div>
+          <div><label>Máximo (km)</label><input id="odo-max" type="number" inputmode="numeric" placeholder="999999"></div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- --------- PRINCIPAL --------- -->
+  <main class="principal">
+
+    <div class="chips" id="chips"></div>
+
+    <!-- PAINEL -->
+    <section id="aba-painel">
+      <div class="kpis" id="kpis"></div>
+      <div class="grade" id="graficos"></div>
+    </section>
+
+    <!-- VIATURAS -->
+    <section id="aba-viaturas" class="oculto">
+      <div class="tabela-wrap">
+        <div class="tabela-barra">
+          <div class="resumo" id="tabela-resumo"></div>
+          <div class="espaco"></div>
+          <div class="seletor-colunas">
+            <button class="btn claro" id="btn-colunas">Colunas ▾</button>
+            <div class="menu oculto" id="menu-colunas"></div>
+          </div>
+          <button class="btn claro" id="btn-csv">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v3h16v-3"/></svg>
+            Exportar CSV
+          </button>
+        </div>
+        <div class="tabela-rol">
+          <table class="tabela" id="tabela">
+            <thead id="tabela-cab"></thead>
+            <tbody id="tabela-corpo"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ABASTECIMENTO -->
+    <section id="aba-uso" class="oculto">
+      <div class="periodo-barra" id="periodo-uso"></div>
+      <div class="kpis" id="kpis-uso"></div>
+      <div class="grade" id="graficos-uso"></div>
+    </section>
+
+    <!-- MANUTENÇÃO -->
+    <section id="aba-manut" class="oculto">
+      <div class="periodo-barra" id="periodo-manut"></div>
+      <div class="kpis" id="kpis-manut"></div>
+      <div class="grade" id="graficos-manut"></div>
+    </section>
+
+    <!-- ORDENS DE SERVIÇO -->
+    <section id="aba-os" class="oculto">
+      <div class="kpis" id="kpis-os"></div>
+      <div class="grade" id="graficos-os"></div>
+    </section>
+
+    <!-- PAGAMENTOS -->
+    <section id="aba-pagamentos" class="oculto">
+      <div class="periodo-barra" id="periodo-pag"></div>
+      <div class="kpis" id="kpis-pag"></div>
+      <div class="grade" id="graficos-pag"></div>
+    </section>
+
+    <!-- DOCUMENTAÇÃO / PATRIMÔNIO -->
+    <section id="aba-patrimonio" class="oculto">
+      <div class="subabas" id="subabas-patrimonio">
+        <button class="subaba ativa" data-sub="licenciamento">Licenciamento e multas</button>
+        <button class="subaba" data-sub="cedidos">Cedidos a municípios</button>
+        <button class="subaba so-admin oculto" data-sub="desfazimento">Em desfazimento</button>
+        <button class="subaba so-admin oculto" data-sub="analise">Análise de desfazimento</button>
+        <button class="subaba so-admin oculto" data-sub="solicitacoes">Solicitações de prefeituras</button>
+      </div>
+      <div id="patrimonio-conteudo"></div>
+    </section>
+
+  </main>
+</div>
+</div>
+
+<!-- ===================== FICHA ===================== -->
+<div class="gaveta-fundo" id="gaveta-fundo"></div>
+<div class="gaveta" id="gaveta" role="dialog" aria-modal="true">
+  <div class="gaveta-cab" id="gaveta-cab"></div>
+  <div class="gaveta-corpo" id="gaveta-corpo"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<?!= incluir('Scripts'); ?>
+</body>
+</html>

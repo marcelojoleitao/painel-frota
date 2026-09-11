@@ -1,0 +1,36 @@
+<div id="tela-login" class="login">
+  <div class="login-cartao">
+
+    <div class="login-brasao">
+      <div class="placa placa-marca">
+        <span class="placa-faixa">BRASIL</span>
+        <span class="placa-numero">PRF·16</span>
+      </div>
+    </div>
+
+    <h1 class="login-titulo">Painel da Frota</h1>
+    <p class="login-sub">16ª Superintendência — Ceará</p>
+
+    <div class="campo">
+      <label class="rotulo" for="login-email">E-mail funcional</label>
+      <input type="email" id="login-email" class="entrada"
+             autocomplete="username" inputmode="email"
+             placeholder="nome.sobrenome@prf.gov.br">
+    </div>
+
+    <div class="campo">
+      <label class="rotulo" for="login-matricula">Matrícula</label>
+      <div class="campo-senha">
+        <input type="password" id="login-matricula" class="entrada"
+               autocomplete="current-password" inputmode="numeric"
+               placeholder="Somente números">
+        <button type="button" class="botao-ver" id="btn-ver-matricula" aria-label="Mostrar matrícula">ver</button>
+      </div>
+    </div>
+
+    <button class="btn amarelo grande" id="btn-entrar">Entrar</button>
+
+    <p class="login-erro oculto" id="login-erro"></p>
+    <p class="login-rodape">Sem acesso? Fale com a Gestão Regional de Frota.</p>
+  </div>
+</div>

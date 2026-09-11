@@ -1,0 +1,1449 @@
+<script>
+/* ============================================================
+   PAINEL DA FROTA — 16ª SPRF/CE — lógica do navegador
+   Tudo (filtros, gráficos, tabela, ficha) roda localmente sobre
+   o payload carregado uma única vez de carregarDados().
+   ============================================================ */
+
+/* ---------- Acessores defensivos (nunca quebrar por DOM ausente) ---------- */
+function el(id) { const e = document.getElementById(id); if (!e) console.warn('Elemento ausente: #' + id); return e; }
+function htm(id, h) { const e = el(id); if (e) e.innerHTML = h; }
+function txt(id, t) { const e = el(id); if (e) e.textContent = t; }
+function cls(id, c, on) { const e = el(id); if (e) e.classList.toggle(c, !!on); }
+function val(id) { const e = el(id); return e ? e.value : ''; }
+function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
+
+/* ---------- Estado ---------- */
+const CHAVE_TOKEN = 'painel_frota_token';
+const ESTADO = {
+  token: null, usuario: null, admin: false,
+  uso: null, usoCarregando: false,
+  periodoUso: '12m', periodoManut: '12m', periodoPag: 'tudo',
+  pdfsPorOS: {}, pdfsPorPlaca: {}, filtroStatusOS: '', filtroStatusAceite: '',
+  dados: null,
+  veiculos: [],
+  filtros: {},          // chave -> Set de valores selecionados
+  busca: '',
+  odoMin: null, odoMax: null,
+  alienados: 'ocultar',
+  aba: 'painel',
+  subPatrimonio: 'licenciamento',
+  ordem: { campo: 'unidade', dir: 1 },
+  colunasVisiveis: null,
+  base: [], filtrado: [], porDim: {}
+};
+
+/* ---------- Dimensões filtráveis ---------- */
+const DIMENSOES = [
+  { k: 'unidade',     rotulo: 'Unidade SIPAC',        aberto: true },
+  { k: 'status',      rotulo: 'Status SIPAC',         aberto: true },
+  { k: 'tipo',        rotulo: 'Tipo de veículo' },
+  { k: 'uso',         rotulo: 'Uso SIPAC' },
+  { k: 'conceito',    rotulo: 'Conceito (PGF)',       ordem: 'alfa' },
+  { k: 'modelo',      rotulo: 'Marca/Modelo',         busca: true, ordem: 'alfa' },
+  { k: 'blind',       rotulo: 'Blindagem' },
+  { k: 'carac',       rotulo: 'Caracterizado' },
+  { k: 'prop',        rotulo: 'Propriedade' },
+  { k: 'statusLic',   rotulo: 'Licenciamento' },
+  { k: 'temMultas',   rotulo: 'Tem multas' },
+  { k: 'abast2m',     rotulo: 'Abasteceu nos últimos 2 meses' },
+  { k: 'placaVinc',   rotulo: 'Placa vinculada (reservada)' },
+  { k: 'emDesf',      rotulo: 'Em desfazimento',      admin: true },
+  { k: 'analiseDesf', rotulo: 'Análise de desfazimento', admin: true },
+  { k: 'anoEx',       rotulo: 'Ano exercício',        ordem: 'alfaDesc' },
+  { k: 'faixaIdade',  rotulo: 'Idade do veículo',     ordem: 'faixa' },
+  { k: 'comb',        rotulo: 'Combustível' },
+  { k: 'temFotos',    rotulo: 'Com fotos' }
+];
+const ROTULO_DIM = {}; DIMENSOES.forEach(d => { ROTULO_DIM[d.k] = d.rotulo; });
+ROTULO_DIM.faixaOdo = 'Odômetro';
+ROTULO_DIM.modeloCurto = 'Modelo';
+ROTULO_DIM.cessaoMunicipio = 'Município da cessão';
+ROTULO_DIM.mesLic = 'Mês do licenciamento';
+ROTULO_DIM.abast12m = 'Abasteceu em 12 meses';
+
+const ORDEM_FAIXA = ['Até 2 anos', '3 a 5 anos', '6 a 8 anos', '9 a 12 anos', 'Mais de 12 anos',
+                     'Até 50 mil km', '50 a 100 mil km', '100 a 150 mil km', '150 a 200 mil km', 'Mais de 200 mil km', 'Sem info'];
+
+const MESES = ['JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO', 'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO'];
+const PALETA = ['#1B4A8F', '#F2B705', '#1B7F3B', '#B3261E', '#5B4B8A', '#0E6E8C', '#A65B00', '#6B7690', '#3E9B5A', '#C2185B', '#00838F', '#7B1FA2'];
+const COR_STATUS = { 'DISPONÍVEL': '#1B7F3B', 'INDISPONÍVEL': '#B3261E', 'MANUTENÇÃO': '#A65B00', 'CEDIDO': '#5B4B8A', 'ALIENADO': '#6B7690', 'SINISTRADO': '#C2185B', 'ATUALIZAR PATRIMONIO': '#9AA3B5' };
+const COR_CONCEITO = { A: '#1B7F3B', B: '#3E9B5A', C: '#A65B00', D: '#B3261E' };
+
+/* ---------- Colunas da tabela ---------- */
+const COLUNAS = [
+  { k: 'unidade',     r: 'Unidade',        on: true,  cl: 'unidade-td' },
+  { k: 'placa',       r: 'Placa',          on: true,  tipo: 'placa' },
+  { k: 'placaRes',    r: 'Placa reservada',on: true,  tipo: 'placaRes' },
+  { k: 'modelo',      r: 'Marca/Modelo',   on: true,  cl: 'modelo-td' },
+  { k: 'tipo',        r: 'Tipo',           on: true },
+  { k: 'uso',         r: 'Uso SIPAC',      on: true,  cl: 'modelo-td' },
+  { k: 'status',      r: 'Status',         on: true,  tipo: 'status' },
+  { k: 'conceito',    r: 'Conceito',       on: true,  tipo: 'conceito' },
+  { k: 'odometro',    r: 'Odômetro',       on: true,  tipo: 'num' },
+  { k: 'anoFab',      r: 'Ano fab.',       on: true,  tipo: 'int' },
+  { k: 'anoEx',       r: 'Exercício',      on: false, tipo: 'int' },
+  { k: 'blind',       r: 'Blindada',       on: true,  tipo: 'simnao' },
+  { k: 'carac',       r: 'Caracterizado',  on: false, tipo: 'simnao' },
+  { k: 'abast2m',     r: 'Abast. 2m',      on: true,  tipo: 'simnao' },
+  { k: 'prop',        r: 'Propriedade',    on: false },
+  { k: 'statusLic',   r: 'Licenciamento',  on: false, tipo: 'lic' },
+  { k: 'vencLic',     r: 'Venc. licenc.',  on: false },
+  { k: 'qtdMultas',   r: 'Multas',         on: false, tipo: 'int' },
+  { k: 'valorMultas', r: 'R$ multas',      on: false, tipo: 'moeda' },
+  { k: 'kmR',         r: 'Km 12m',         on: false, tipo: 'num' },
+  { k: 'abastR',      r: 'R$ abast. 12m',  on: false, tipo: 'moeda' },
+  { k: 'manutR',      r: 'R$ manut. 12m',  on: false, tipo: 'moeda' },
+  { k: 'consumo',     r: 'Km/l',           on: false, tipo: 'dec' },
+  { k: 'comb',        r: 'Combustível',    on: false },
+  { k: 'cor',         r: 'Cor',            on: false },
+  { k: 'tombamento',  r: 'Tombamento',     on: false, tipo: 'mono' },
+  { k: 'renavam',     r: 'Renavam',        on: false, tipo: 'mono' },
+  { k: 'analiseDesf', r: 'Análise desf.',  on: false, admin: true },
+  { k: 'unidadeCurta',r: 'Unidade (resumo)',on: false },
+  { k: 'docs',        r: '',               on: true,  tipo: 'docs', fixa: true }
+];
+
+/* ============================================================
+   FILTRAGEM (facetada: contagens de cada dimensão ignoram ela mesma)
+   ============================================================ */
+function normalizar(s) { return String(s || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9]/g, ''); }
+
+function passaBase(v) {
+  if (ESTADO.alienados === 'ocultar' && (ESTADO.dados.meta.statusOcultosPadrao || []).indexOf(v.status) >= 0) return false;
+  if (ESTADO.odoMin !== null && (v.odometro === null || v.odometro < ESTADO.odoMin)) return false;
+  if (ESTADO.odoMax !== null && (v.odometro === null || v.odometro > ESTADO.odoMax)) return false;
+  if (ESTADO.busca) {
+    const q = ESTADO.busca;
+    const alvo = normalizar([v.placa, v.placaMerc, v.placaRes, v.modelo, v.modeloCurto, v.tombamento, v.renavam, v.chassi, v.unidade].join(' '));
+    if (alvo.indexOf(q) < 0) return false;
+  }
+  return true;
+}
+
+function passaDim(v, k) {
+  const sel = ESTADO.filtros[k];
+  if (!sel || sel.size === 0) return true;
+  return sel.has(String(v[k] === null || v[k] === undefined || v[k] === '' ? '(vazio)' : v[k]));
+}
+
+function aplicar() {
+  const dims = Object.keys(ESTADO.filtros).filter(k => ESTADO.filtros[k].size > 0);
+  ESTADO.base = ESTADO.veiculos.filter(passaBase);
+  ESTADO.filtrado = ESTADO.base.filter(v => dims.every(k => passaDim(v, k)));
+  ESTADO.porDim = {};
+  DIMENSOES.forEach(d => {
+    const outras = dims.filter(k => k !== d.k);
+    ESTADO.porDim[d.k] = ESTADO.base.filter(v => outras.every(k => passaDim(v, k)));
+  });
+  atualizarContagens();
+  renderChips();
+  renderAba();
+}
+
+function alternarFiltro(k, valor) {
+  if (!ESTADO.filtros[k]) ESTADO.filtros[k] = new Set();
+  const s = ESTADO.filtros[k];
+  const chave = String(valor);
+  if (s.has(chave)) s.delete(chave); else s.add(chave);
+  aplicar();
+}
+function definirFiltro(k, valores) { ESTADO.filtros[k] = new Set(valores.map(String)); aplicar(); }
+function limparFiltro(k) { delete ESTADO.filtros[k]; aplicar(); }
+function limparTudo() {
+  ESTADO.filtros = {}; ESTADO.busca = ''; ESTADO.odoMin = null; ESTADO.odoMax = null;
+  const b = el('busca'); if (b) b.value = '';
+  const mi = el('odo-min'); if (mi) mi.value = '';
+  const ma = el('odo-max'); if (ma) ma.value = '';
+  aplicar();
+}
+
+/* ============================================================
+   PAINEL DE FILTROS
+   ============================================================ */
+function contarPor(lista, k) {
+  const m = new Map();
+  lista.forEach(v => {
+    const x = v[k]; const chave = (x === null || x === undefined || x === '') ? '(vazio)' : String(x);
+    m.set(chave, (m.get(chave) || 0) + 1);
+  });
+  return m;
+}
+
+function ordenarChaves(chaves, contagem, modo) {
+  if (modo === 'alfa') return chaves.sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  if (modo === 'alfaDesc') return chaves.sort((a, b) => b.localeCompare(a, 'pt-BR'));
+  if (modo === 'faixa') return chaves.sort((a, b) => ORDEM_FAIXA.indexOf(a) - ORDEM_FAIXA.indexOf(b));
+  if (modo === 'mes') return chaves.sort((a, b) => MESES.indexOf(a) - MESES.indexOf(b));
+  return chaves.sort((a, b) => (contagem.get(b) || 0) - (contagem.get(a) || 0) || a.localeCompare(b, 'pt-BR'));
+}
+
+function construirFiltros() {
+  const cont = el('filtros-lista'); if (!cont) return;
+  cont.innerHTML = '';
+  DIMENSOES.forEach(d => {
+    if (d.admin && !ESTADO.admin) return;
+    const bloco = document.createElement('div');
+    bloco.className = 'filtro' + (d.aberto ? ' aberto' : '');
+    bloco.id = 'filtro-' + d.k;
+    bloco.innerHTML = `
+      <button class="filtro-cab" type="button">${d.rotulo} <span class="filtro-badge oculto" id="badge-${d.k}"></span><span class="seta">▾</span></button>
+      <div class="filtro-cont">
+        ${d.busca ? `<input class="filtro-busca" placeholder="Filtrar opções…" data-dim="${d.k}">` : ''}
+        <div class="filtro-opcoes" id="opcoes-${d.k}"></div>
+      </div>`;
+    bloco.querySelector('.filtro-cab').addEventListener('click', () => bloco.classList.toggle('aberto'));
+    const inp = bloco.querySelector('.filtro-busca');
+    if (inp) inp.addEventListener('input', () => renderOpcoes(d, inp.value));
+    cont.appendChild(bloco);
+  });
+}
+
+function renderOpcoes(d, filtroTexto) {
+  const cont = el('opcoes-' + d.k); if (!cont) return;
+  const contagem = contarPor(ESTADO.porDim[d.k] || [], d.k);
+  const todas = contarPor(ESTADO.base, d.k);
+  const sel = ESTADO.filtros[d.k] || new Set();
+  let chaves = Array.from(new Set([...todas.keys(), ...sel]));
+  chaves = ordenarChaves(chaves, contagem, d.ordem);
+  const q = normalizar(filtroTexto || '');
+  cont.innerHTML = chaves
+    .filter(c => !q || normalizar(c).indexOf(q) >= 0)
+    .map(c => {
+      const n = contagem.get(c) || 0;
+      return `<label class="opcao ${n === 0 && !sel.has(c) ? 'zerada' : ''}">
+        <input type="checkbox" ${sel.has(c) ? 'checked' : ''} data-dim="${d.k}" data-v="${escAttr(c)}">
+        <span class="rotulo" title="${escAttr(c)}">${esc(c)}</span><span class="qtd">${n}</span></label>`;
+    }).join('') || '<div class="cartao-dica">Nenhuma opção</div>';
+  cont.querySelectorAll('input[type=checkbox]').forEach(cb => cb.addEventListener('change', () => alternarFiltro(cb.dataset.dim, cb.dataset.v)));
+}
+
+function atualizarContagens() {
+  DIMENSOES.forEach(d => {
+    if (d.admin && !ESTADO.admin) return;
+    const inp = document.querySelector(`.filtro-busca[data-dim="${d.k}"]`);
+    renderOpcoes(d, inp ? inp.value : '');
+    const n = (ESTADO.filtros[d.k] || new Set()).size;
+    const b = el('badge-' + d.k); if (b) { b.textContent = n; b.classList.toggle('oculto', n === 0); }
+  });
+  const ativo = Object.values(ESTADO.filtros).some(s => s.size) || ESTADO.busca || ESTADO.odoMin !== null || ESTADO.odoMax !== null;
+  const bl = el('btn-limpar'); if (bl) bl.disabled = !ativo;
+}
+
+function renderChips() {
+  const partes = [];
+  Object.keys(ESTADO.filtros).forEach(k => {
+    const s = ESTADO.filtros[k]; if (!s.size) return;
+    const lista = Array.from(s);
+    const rot = ROTULO_DIM[k] || k;
+    const v = lista.length <= 2 ? lista.join(', ') : lista.length + ' selecionados';
+    partes.push(`<span class="chip"><small>${esc(rot)}:</small> ${esc(v)} <button title="Remover" data-k="${k}">×</button></span>`);
+  });
+  if (ESTADO.busca) partes.push(`<span class="chip"><small>Busca:</small> ${esc(val('busca'))} <button data-k="__busca">×</button></span>`);
+  if (ESTADO.odoMin !== null || ESTADO.odoMax !== null) partes.push(`<span class="chip"><small>Odômetro:</small> ${ESTADO.odoMin !== null ? fmtInt(ESTADO.odoMin) : '0'} – ${ESTADO.odoMax !== null ? fmtInt(ESTADO.odoMax) : '∞'} <button data-k="__odo">×</button></span>`);
+  const total = ESTADO.filtrado.length, base = ESTADO.base.length;
+  partes.push(`<span class="resumo"><b>${total}</b> de ${base} viaturas${ESTADO.alienados === 'ocultar' ? ' (alienados ocultos)' : ''}</span>`);
+  htm('chips', partes.join(''));
+  document.querySelectorAll('#chips .chip button').forEach(b => b.addEventListener('click', () => {
+    const k = b.dataset.k;
+    if (k === '__busca') { ESTADO.busca = ''; const i = el('busca'); if (i) i.value = ''; aplicar(); }
+    else if (k === '__odo') { ESTADO.odoMin = ESTADO.odoMax = null; const a = el('odo-min'), c = el('odo-max'); if (a) a.value = ''; if (c) c.value = ''; aplicar(); }
+    else limparFiltro(k);
+  }));
+}
+
+/* ============================================================
+   ABAS
+   ============================================================ */
+function mudarAba(aba) {
+  ESTADO.aba = aba;
+  document.querySelectorAll('#abas .topo-aba').forEach(b => b.classList.toggle('ativa', b.dataset.aba === aba));
+  ['painel', 'viaturas', 'uso', 'manut', 'os', 'pagamentos', 'patrimonio'].forEach(a => cls('aba-' + a, 'oculto', a !== aba));
+  renderAba();
+}
+function renderAba() {
+  const lista = ESTADO.filtrado;
+  if (ESTADO.aba === 'painel') renderPainel(lista);
+  else if (ESTADO.aba === 'viaturas') renderTabela(lista);
+  else if (ESTADO.aba === 'uso') renderUso(lista);
+  else if (ESTADO.aba === 'manut') renderManut(lista);
+  else if (ESTADO.aba === 'os') renderOS(lista);
+  else if (ESTADO.aba === 'pagamentos') renderPagamentos();
+  else if (ESTADO.aba === 'patrimonio') renderPatrimonio(lista);
+}
+
+/* ============================================================
+   PAINEL — KPIs e gráficos
+   ============================================================ */
+function renderPainel(lista) {
+  const n = lista.length;
+  const disp = lista.filter(v => v.status === 'DISPONÍVEL').length;
+  const blind = lista.filter(v => v.blind === 'Sim').length;
+  const licAtr = lista.filter(v => v.statusLic === 'Atrasado').length;
+  const comMultas = lista.filter(v => v.qtdMultas > 0);
+  const rsMultas = comMultas.reduce((s, v) => s + (v.valorMultas || 0), 0);
+  const cd = lista.filter(v => v.conceito === 'C' || v.conceito === 'D').length;
+  const semAb = lista.filter(v => v.abast2m === 'Não' && v.status === 'DISPONÍVEL').length;
+  const semFoto = lista.filter(v => v.temFotos === 'Não').length;
+  const idades = lista.filter(v => v.idade !== null).map(v => v.idade);
+  const idadeMedia = idades.length ? (idades.reduce((a, b) => a + b, 0) / idades.length) : null;
+
+  htm('kpis', [
+    kpi('Viaturas exibidas', n, textoBase(), '', null, true),
+    kpi('Disponíveis', disp, pct(disp, n), 'verde', { k: 'status', v: 'DISPONÍVEL' }),
+    kpi('Blindadas', blind, pct(blind, n), 'roxo', { k: 'blind', v: 'Sim' }),
+    kpi('Conceito C ou D', cd, pct(cd, n), 'ambar', { k: 'conceito', v: ['C', 'D'] }),
+    kpi('Licenciamento atrasado', licAtr, licAtr ? 'exige regularização' : 'tudo em dia', licAtr ? 'vermelho' : 'verde', { k: 'statusLic', v: 'Atrasado' }),
+    kpi('Com multas', comMultas.length, rsMultas ? fmtMoeda(rsMultas) + ' a pagar' : 'sem pendências', comMultas.length ? 'vermelho' : 'verde', { k: 'temMultas', v: 'Sim' }),
+    kpi('Disponíveis sem abastecer (2m)', semAb, 'possível ociosidade', 'ciano', { k: 'abast2m', v: 'Não' }),
+    kpi('Idade média', idadeMedia !== null ? idadeMedia.toFixed(1) + ' anos' : '—', semFoto ? semFoto + ' sem fotos' : 'todas com fotos', 'amarelo', null, true)
+  ].join(''));
+  ligarKpis();
+
+  const g = el('graficos'); if (!g) return;
+  g.innerHTML = '';
+  g.appendChild(cartaoRosca('Status SIPAC', lista, 'status', COR_STATUS));
+  g.appendChild(cartaoRosca('Conceito PGF', lista, 'conceito', COR_CONCEITO, 'alfa'));
+  g.appendChild(cartaoBarras('Viaturas por unidade', lista, 'unidade', { largo: true, max: 30 }));
+  g.appendChild(cartaoBarras('Por tipo de veículo', lista, 'tipo'));
+  g.appendChild(cartaoBarras('Por uso SIPAC', lista, 'uso'));
+  g.appendChild(cartaoBarras('Por modelo', lista, 'modeloCurto', { max: 15, filtroDim: 'modelo', mapa: v => v.modelo }));
+  g.appendChild(cartaoBarras('Ano de exercício (licenciamento)', lista, 'anoEx', { ordem: 'alfaDesc' }));
+  g.appendChild(cartaoBarras('Idade da frota', lista, 'faixaIdade', { ordem: 'faixa' }));
+  g.appendChild(cartaoBarras('Blindagem', lista, 'blind'));
+  g.appendChild(cartaoBarras('Caracterização', lista, 'carac'));
+  g.appendChild(cartaoBarras('Propriedade', lista, 'prop'));
+  g.appendChild(cartaoBarras('Licenciamento', lista, 'statusLic'));
+  g.appendChild(cartaoEmpilhado('Status por unidade', lista, 'unidade', 'status', COR_STATUS));
+  g.appendChild(cartaoEmpilhado('Conceito por unidade', lista, 'unidade', 'conceito', COR_CONCEITO));
+}
+
+function textoBase() { return ESTADO.base.length !== ESTADO.filtrado.length ? 'de ' + ESTADO.base.length + ' na base' : 'toda a base'; }
+function pct(a, b) { return b ? Math.round(a / b * 100) + '% do exibido' : '—'; }
+
+function kpi(rotulo, valor, sub, cor, filtro, estatico) {
+  const ativo = filtro && ESTADO.filtros[filtro.k] && [].concat(filtro.v).every(x => ESTADO.filtros[filtro.k].has(String(x)));
+  return `<div class="kpi ${cor || ''} ${ativo ? 'ativo' : ''} ${estatico ? 'estatico' : ''}" ${filtro ? `data-k="${filtro.k}" data-v='${JSON.stringify([].concat(filtro.v))}'` : ''}>
+    <div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${valor}</div><div class="kpi-sub">${sub}</div></div>`;
+}
+function ligarKpis() {
+  document.querySelectorAll('.kpi[data-k]').forEach(k => k.addEventListener('click', () => {
+    const vals = JSON.parse(k.dataset.v);
+    const s = ESTADO.filtros[k.dataset.k];
+    if (s && vals.every(x => s.has(String(x)))) limparFiltro(k.dataset.k); else definirFiltro(k.dataset.k, vals);
+  }));
+}
+
+/* ---------- cartão de barras (clicável = filtro cruzado) ---------- */
+function cartaoBarras(titulo, lista, k, op) {
+  op = op || {};
+  const dimFiltro = op.filtroDim || k;
+  const card = document.createElement('div');
+  card.className = 'cartao' + (op.largo ? ' largo' : '');
+  const contagem = contarPor(lista, k);
+  let chaves = ordenarChaves(Array.from(contagem.keys()), contagem, op.ordem);
+  const total = lista.length;
+  const cortado = op.max && chaves.length > op.max ? chaves.length - op.max : 0;
+  if (cortado) chaves = chaves.slice(0, op.max);
+  const maximo = Math.max(1, ...chaves.map(c => contagem.get(c)));
+  const sel = ESTADO.filtros[dimFiltro] || new Set();
+
+  // valores reais de filtro quando a chave exibida é derivada (ex.: modeloCurto -> modelo)
+  const mapaValores = {};
+  if (op.mapa) lista.forEach(v => { const c = String(v[k] || '(vazio)'); (mapaValores[c] = mapaValores[c] || new Set()).add(op.mapa(v)); });
+
+  card.innerHTML = `<div class="cartao-cab"><h3>${titulo}</h3><small>${chaves.length}${cortado ? ' de ' + (chaves.length + cortado) : ''} categorias</small></div>
+    <div class="barras ${chaves.length > 10 ? 'compacto' : ''}">
+    ${chaves.length ? chaves.map((c, i) => {
+      const n = contagem.get(c);
+      const selecionada = op.mapa ? Array.from(mapaValores[c] || []).some(x => sel.has(String(x))) : sel.has(c);
+      const cor = op.cores ? (op.cores[c] || PALETA[i % PALETA.length]) : (k === 'status' ? COR_STATUS[c] : k === 'conceito' ? COR_CONCEITO[c] : 'var(--azul-claro)');
+      return `<button class="barra ${selecionada ? 'selecionada' : ''}" data-c="${escAttr(c)}" title="Filtrar por ${escAttr(c)}">
+        <span class="rotulo">${esc(c)}</span>
+        <span class="trilha"><span class="preench" style="width:${Math.round(n / maximo * 100)}%; background:${cor || 'var(--azul-claro)'}"></span></span>
+        <span class="valor">${n} <small>${total ? Math.round(n / total * 100) : 0}%</small></span></button>`;
+    }).join('') : '<div class="vazio">Nada para exibir com os filtros atuais</div>'}
+    </div>${cortado ? `<div class="cartao-dica">+ ${cortado} categorias menores não exibidas. Use o filtro lateral para vê-las.</div>` : ''}`;
+  card.querySelectorAll('.barra').forEach(b => b.addEventListener('click', () => {
+    const c = b.dataset.c;
+    if (op.mapa) {
+      const reais = Array.from(mapaValores[c] || []);
+      const s = ESTADO.filtros[dimFiltro] || new Set();
+      const jaSel = reais.some(x => s.has(String(x)));
+      const novo = new Set(s); reais.forEach(x => jaSel ? novo.delete(String(x)) : novo.add(String(x)));
+      ESTADO.filtros[dimFiltro] = novo; aplicar();
+    } else alternarFiltro(dimFiltro, c);
+  }));
+  return card;
+}
+
+/* ---------- cartão de rosca (donut SVG) ---------- */
+function cartaoRosca(titulo, lista, k, cores, ordem) {
+  const card = document.createElement('div');
+  card.className = 'cartao';
+  const contagem = contarPor(lista, k);
+  const chaves = ordenarChaves(Array.from(contagem.keys()), contagem, ordem);
+  const total = lista.length;
+  const sel = ESTADO.filtros[k] || new Set();
+  const R = 60, C = 2 * Math.PI * R;
+  let acum = 0;
+  const fatias = chaves.map((c, i) => {
+    const n = contagem.get(c); const frac = total ? n / total : 0;
+    const cor = (cores && cores[c]) || PALETA[i % PALETA.length];
+    const dash = `${(frac * C).toFixed(2)} ${(C - frac * C).toFixed(2)}`;
+    const off = (-acum * C).toFixed(2); acum += frac;
+    return `<circle r="${R}" cx="75" cy="75" fill="none" stroke="${cor}" stroke-width="${sel.size && !sel.has(c) ? 12 : 20}" stroke-dasharray="${dash}" stroke-dashoffset="${off}" transform="rotate(-90 75 75)" data-c="${escAttr(c)}" style="cursor:pointer; opacity:${sel.size && !sel.has(c) ? .35 : 1}"><title>${esc(c)}: ${n}</title></circle>`;
+  }).join('');
+  card.innerHTML = `<div class="cartao-cab"><h3>${titulo}</h3><small>${total} viaturas</small></div>
+    <div class="rosca">
+      <svg viewBox="0 0 150 150">${fatias}<text x="75" y="80" class="rosca-centro">${total}</text><text x="75" y="96" class="rosca-centro-sub">viaturas</text></svg>
+      <div class="legenda">${chaves.map((c, i) => {
+        const n = contagem.get(c); const cor = (cores && cores[c]) || PALETA[i % PALETA.length];
+        return `<button class="legenda-item ${sel.has(c) ? 'selecionada' : ''}" data-c="${escAttr(c)}"><span class="cor" style="background:${cor}"></span><span>${esc(c)}</span><span class="qtd">${n}<span class="pct">${total ? Math.round(n / total * 100) : 0}%</span></span></button>`;
+      }).join('') || '<div class="vazio">Sem dados</div>'}</div>
+    </div>`;
+  card.querySelectorAll('[data-c]').forEach(e => e.addEventListener('click', () => alternarFiltro(k, e.dataset.c)));
+  return card;
+}
+
+/* ---------- cartão empilhado (dimensão x categoria) ---------- */
+function cartaoEmpilhado(titulo, lista, kLinha, kCat, cores) {
+  const card = document.createElement('div');
+  card.className = 'cartao largo';
+  const porLinha = new Map();
+  lista.forEach(v => {
+    const l = String(v[kLinha] || '(vazio)'), c = String(v[kCat] || '(vazio)');
+    if (!porLinha.has(l)) porLinha.set(l, new Map());
+    porLinha.get(l).set(c, (porLinha.get(l).get(c) || 0) + 1);
+  });
+  const cats = ordenarChaves(Array.from(contarPor(lista, kCat).keys()), contarPor(lista, kCat), kCat === 'conceito' ? 'alfa' : null);
+  const linhas = Array.from(porLinha.entries()).map(([l, m]) => ({ l, m, t: Array.from(m.values()).reduce((a, b) => a + b, 0) })).sort((a, b) => b.t - a.t);
+  const maximo = Math.max(1, ...linhas.map(x => x.t));
+  card.innerHTML = `<div class="cartao-cab"><h3>${titulo}</h3><small>${linhas.length} unidades</small></div>
+    <div class="legenda" style="flex-direction:row; flex-wrap:wrap; gap:10px; margin-bottom:8px">${cats.map((c, i) => `<span class="legenda-item" style="display:inline-grid; grid-template-columns:12px auto; cursor:default"><span class="cor" style="background:${(cores && cores[c]) || PALETA[i % PALETA.length]}"></span><span>${esc(c)}</span></span>`).join('')}</div>
+    <div class="barras compacto">${linhas.map(x => `<div class="barra" style="cursor:default">
+      <span class="rotulo" title="${escAttr(x.l)}">${esc(x.l)}</span>
+      <span class="trilha" style="display:flex">${cats.map((c, i) => { const n = x.m.get(c) || 0; return n ? `<span title="${escAttr(c)}: ${n}" style="width:${(n / maximo * 100).toFixed(1)}%; background:${(cores && cores[c]) || PALETA[i % PALETA.length]}; height:100%"></span>` : ''; }).join('')}</span>
+      <span class="valor">${x.t}</span></div>`).join('') || '<div class="vazio">Sem dados</div>'}</div>`;
+  return card;
+}
+
+/* ============================================================
+   TABELA DE VIATURAS
+   ============================================================ */
+function construirMenuColunas() {
+  const m = el('menu-colunas'); if (!m) return;
+  m.innerHTML = COLUNAS.filter(c => !c.fixa && !(c.admin && !ESTADO.admin)).map(c => `<label class="opcao"><input type="checkbox" data-col="${c.k}" ${ESTADO.colunasVisiveis.has(c.k) ? 'checked' : ''}><span class="rotulo">${c.r}</span></label>`).join('');
+  m.querySelectorAll('input').forEach(cb => cb.addEventListener('change', () => { cb.checked ? ESTADO.colunasVisiveis.add(cb.dataset.col) : ESTADO.colunasVisiveis.delete(cb.dataset.col); renderTabela(ESTADO.filtrado); }));
+}
+
+function valorOrdenacao(v, k) {
+  const x = v[k];
+  if (x === null || x === undefined || x === '') return null;
+  return typeof x === 'number' ? x : String(x).toUpperCase();
+}
+
+function renderTabela(lista) {
+  const cols = COLUNAS.filter(c => (ESTADO.colunasVisiveis.has(c.k) || c.fixa) && !(c.admin && !ESTADO.admin));
+  const { campo, dir } = ESTADO.ordem;
+  const ordenada = lista.slice().sort((a, b) => {
+    const va = valorOrdenacao(a, campo), vb = valorOrdenacao(b, campo);
+    if (va === null && vb === null) return 0; if (va === null) return 1; if (vb === null) return -1;
+    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
+    return String(va).localeCompare(String(vb), 'pt-BR') * dir || a.placa.localeCompare(b.placa);
+  });
+
+  htm('tabela-cab', '<tr>' + cols.map(c => `<th data-k="${c.k}" class="${campo === c.k ? 'ordenada' : ''}">${c.r}${campo === c.k ? `<span class="ord">${dir > 0 ? '▲' : '▼'}</span>` : ''}</th>`).join('') + '</tr>');
+  htm('tabela-corpo', ordenada.map(v => `<tr class="linha" data-placa="${escAttr(v.placa)}">${cols.map(c => celula(v, c)).join('')}</tr>`).join('') ||
+    `<tr><td colspan="${cols.length}"><div class="vazio"><b>Nenhuma viatura com esses filtros</b>Ajuste ou limpe os filtros à esquerda.</div></td></tr>`);
+  txt('tabela-resumo', '');
+  htm('tabela-resumo', `<b>${lista.length}</b> viaturas • clique na linha para abrir a ficha`);
+
+  document.querySelectorAll('#tabela-cab th').forEach(th => th.addEventListener('click', () => {
+    if (th.dataset.k === 'docs') return;
+    if (ESTADO.ordem.campo === th.dataset.k) ESTADO.ordem.dir *= -1; else ESTADO.ordem = { campo: th.dataset.k, dir: 1 };
+    renderTabela(ESTADO.filtrado);
+  }));
+  document.querySelectorAll('#tabela-corpo tr.linha').forEach(tr => tr.addEventListener('click', e => {
+    if (e.target.closest('a')) return;
+    abrirFicha(tr.dataset.placa);
+  }));
+}
+
+function celula(v, c) {
+  const x = v[c.k];
+  switch (c.tipo) {
+    case 'placa': return `<td>${placaHtml(v.placa, 'mini')}</td>`;
+    case 'placaRes': return `<td>${v.placaRes ? placaHtml(v.placaRes, 'mini reservada') : '<span class="nao">—</span>'}</td>`;
+    case 'status': return `<td>${badgeStatus(x)}</td>`;
+    case 'conceito': return `<td>${conceitoHtml(x)}</td>`;
+    case 'num': return `<td class="num">${x === null ? '—' : fmtInt(x)}</td>`;
+    case 'int': return `<td class="num">${x === null ? '—' : x}</td>`;
+    case 'dec': return `<td class="num">${x === null ? '—' : fmtDec(x)}</td>`;
+    case 'moeda': return `<td class="num">${x ? fmtMoeda(x) : '—'}</td>`;
+    case 'simnao': return `<td class="${x === 'Sim' ? 'sim' : 'nao'}">${x || '—'}</td>`;
+    case 'lic': return `<td class="${x === 'Atrasado' ? 'alerta-txt' : x === 'Em dia' ? 'ok-txt' : ''}">${esc(x || '—')}</td>`;
+    case 'mono': return `<td style="font-family:var(--fonte-dados)">${esc(x || '—')}</td>`;
+    case 'docs': { const n = pdfsDaViatura(v).length; return `<td class="acoes">${iconeDoc(v.linkTomb, 'Tombamento (PDF)', icoPdf())}${iconeDoc(v.linkCrlv, 'CRLV', icoDoc())}${iconeDoc(v.temFotos === 'Sim' ? '#' : '', 'Fotos', icoFoto(), true)}${n ? `<span class="icone-doc" title="${n} OS em PDF — abrir ficha" onclick="event.stopPropagation(); abrirFicha(this.closest('tr').dataset.placa)" style="color:var(--ambar)">${icoOs()}</span>` : ''}</td>`; }
+    default: return `<td class="${c.cl || ''}" title="${escAttr(x || '')}">${esc(x || '—')}</td>`;
+  }
+}
+
+function iconeDoc(link, titulo, svg, interno) {
+  if (!link) return `<span class="icone-doc inativo" title="${titulo}: não disponível">${svg}</span>`;
+  if (interno) return `<span class="icone-doc" title="${titulo}" onclick="event.stopPropagation(); abrirFicha(this.closest('tr').dataset.placa)">${svg}</span>`;
+  return `<a class="icone-doc" href="${escAttr(link)}" target="_blank" rel="noopener" title="${titulo}" onclick="event.stopPropagation()">${svg}</a>`;
+}
+
+function exportarCsv() {
+  const cols = COLUNAS.filter(c => ESTADO.colunasVisiveis.has(c.k) && c.k !== 'docs');
+  const linhas = [cols.map(c => c.r)];
+  ESTADO.filtrado.forEach(v => linhas.push(cols.map(c => {
+    const x = v[c.k]; if (x === null || x === undefined) return '';
+    if (typeof x === 'number') return String(x).replace('.', ',');
+    return String(x).replace(/\n/g, ' ');
+  })));
+  const csv = '\ufeff' + linhas.map(l => l.map(x => `"${String(x).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'frota_16sprf_' + new Date().toISOString().slice(0, 10) + '.csv'; a.click();
+  toast(ESTADO.filtrado.length + ' viaturas exportadas');
+}
+
+/* ============================================================
+   CESSÕES, DESFAZIMENTO, LICENCIAMENTO
+   ============================================================ */
+function renderPatrimonio(lista) {
+  document.querySelectorAll('#subabas-patrimonio .subaba').forEach(b => b.classList.toggle('ativa', b.dataset.sub === ESTADO.subPatrimonio));
+  const c = el('patrimonio-conteudo'); if (!c) return;
+  let sub = ESTADO.subPatrimonio;
+  if (!ESTADO.admin && ['desfazimento', 'analise', 'solicitacoes'].indexOf(sub) >= 0) { sub = ESTADO.subPatrimonio = 'licenciamento'; }
+  let h = '';
+
+  if (sub === 'cedidos') {
+    const ced = lista.filter(v => v.status === 'CEDIDO');
+    const porMun = contarPor(ced, 'cessaoMunicipio');
+    h += `<div class="kpis">${kpi('Viaturas cedidas', ced.length, porMun.size + ' municípios', 'roxo', null, true)}${kpi('Última cessão', ultimaData(ced.map(v => v.cessaoData)) || '—', 'pela data registrada', '', null, true)}</div>`;
+    h += `<div class="grade" style="margin-bottom:14px"><div class="cartao largo" id="cart-mun"></div></div>`;
+    h += tabelaSimples(ced.slice().sort((a, b) => chaveData(b.cessaoData).localeCompare(chaveData(a.cessaoData))),
+      [['Placa', v => placaHtml(v.placa, 'mini')], ['Modelo', v => esc(v.modelo)], ['Município', v => esc(v.cessaoMunicipio || '—')], ['Data', v => v.cessaoData || '—'],
+       ['Processo SEI', v => `<span style="font-family:var(--fonte-dados)">${esc(v.cessaoProcesso || '—')}</span>`], ['Tombamento', v => esc(v.tombamento || '—')], ['Unidade', v => esc(v.unidade)]],
+      'Nenhuma viatura cedida com os filtros atuais');
+    c.innerHTML = h;
+    const cm = el('cart-mun'); if (cm) cm.replaceWith(cartaoBarras('Cessões por município', ced, 'cessaoMunicipio', { largo: true, filtroDim: 'cessaoMunicipio' }));
+  }
+
+  else if (sub === 'desfazimento') {
+    const d = lista.filter(v => v.emDesf === 'Sim');
+    h += `<div class="kpis">${kpi('Em processo de desfazimento', d.length, 'com processo SEI aberto', 'ambar', null, true)}${kpi('Sugeridas para desfazimento', lista.filter(v => v.sugDesf === 'Sim').length, 'coluna "Sugestão Desfazimento"', '', null, true)}</div>`;
+    h += tabelaSimples(d, [['Placa', v => placaHtml(v.placa, 'mini')], ['Modelo', v => esc(v.modelo)], ['Tipo', v => esc(v.tipo)], ['Conceito', v => conceitoHtml(v.conceito)], ['Ano fab.', v => v.anoFab || '—'],
+      ['Ano desf.', v => v.desfAno || '—'], ['Processo SEI', v => `<span style="font-family:var(--fonte-dados)">${esc(v.desfProcesso || '—')}</span>`], ['Análise', v => esc(v.analiseDesf || '—')], ['Unidade', v => esc(v.unidade)]],
+      'Nenhuma viatura em desfazimento com os filtros atuais');
+    c.innerHTML = h;
+  }
+
+  else if (sub === 'analise') {
+    const alvo = lista.filter(v => ['ANTIECONÔMICO', 'OCIOSO', 'IRRECUPERÁVEL'].indexOf(v.analiseDesf) >= 0);
+    h += `<div class="kpis">${kpi('Antieconômico', lista.filter(v => v.analiseDesf === 'ANTIECONÔMICO').length, '', 'vermelho', { k: 'analiseDesf', v: 'ANTIECONÔMICO' })}${kpi('Ocioso', lista.filter(v => v.analiseDesf === 'OCIOSO').length, '', 'ambar', { k: 'analiseDesf', v: 'OCIOSO' })}${kpi('Irrecuperável', lista.filter(v => v.analiseDesf === 'IRRECUPERÁVEL').length, '', 'vermelho', { k: 'analiseDesf', v: 'IRRECUPERÁVEL' })}${kpi('Sem informação', lista.filter(v => v.analiseDesf === 'SEM INFORMAÇÃO' || !v.analiseDesf).length, '', '', { k: 'analiseDesf', v: 'SEM INFORMAÇÃO' })}</div>`;
+    h += `<div class="grade" style="margin-bottom:14px"><div id="cart-an"></div><div id="cart-an2"></div></div>`;
+    h += `<h3 style="font-size:14px; margin:0 0 8px">Candidatas a desfazimento (antieconômico, ocioso ou irrecuperável) — ${alvo.length}</h3>`;
+    h += tabelaSimples(alvo, [['Placa', v => placaHtml(v.placa, 'mini')], ['Modelo', v => esc(v.modelo)], ['Análise', v => esc(v.analiseDesf)], ['Conceito', v => conceitoHtml(v.conceito)], ['Idade', v => v.idade !== null ? v.idade + ' anos' : '—'],
+      ['Odômetro', v => fmtInt(v.odometro)], ['R$ manut. 12m', v => fmtMoeda(v.manutR || 0)], ['Km 12m', v => fmtInt(v.kmR || 0)], ['Já em desf.', v => v.emDesf], ['Unidade', v => esc(v.unidade)]], 'Nenhuma');
+    c.innerHTML = h; ligarKpis();
+    const a1 = el('cart-an'); if (a1) a1.replaceWith(cartaoBarras('Análise de desfazimento (05/2025)', lista, 'analiseDesf'));
+    const a2 = el('cart-an2'); if (a2) a2.replaceWith(cartaoEmpilhado('Análise por unidade', lista, 'unidade', 'analiseDesf', { 'VEÍCULO OPERACIONAL': '#1B7F3B', 'ANTIECONÔMICO': '#B3261E', 'OCIOSO': '#A65B00', 'IRRECUPERÁVEL': '#7A1712', 'RECUPERÁVEL': '#0E6E8C', 'VEÍCULO DE EXPOSIÇÃO': '#5B4B8A', 'SEM INFORMAÇÃO': '#9AA3B5' }));
+  }
+
+  else if (sub === 'solicitacoes') {
+    const s = ESTADO.dados.solicitacoes || [];
+    const porMun = new Map(); s.forEach(x => porMun.set(x.municipio, (porMun.get(x.municipio) || 0) + 1));
+    h += `<div class="kpis">${kpi('Solicitações registradas', s.length, porMun.size + ' municípios', 'roxo', null, true)}${kpi('Última solicitação', ultimaData(s.map(x => x.data)) || '—', 'pela data do ofício', '', null, true)}</div>`;
+    h += tabelaSimples(s.slice().reverse(), [['Processo SEI', x => `<span style="font-family:var(--fonte-dados)">${esc(x.processo)}</span>`], ['Data do ofício', x => esc(x.data)], ['Pedido', x => esc(x.pedido)], ['Município', x => esc(x.municipio)]],
+      'Nenhuma aba de solicitações foi encontrada na planilha base (cabeçalho esperado: Processo | Data Ofício | Município).', false);
+    c.innerHTML = h;
+  }
+
+  else if (sub === 'licenciamento') {
+    const atr = lista.filter(v => v.statusLic === 'Atrasado');
+    const mul = lista.filter(v => v.qtdMultas > 0);
+    const rs = mul.reduce((s, v) => s + (v.valorMultas || 0), 0);
+    h += `<div class="kpis">${kpi('Licenciamento atrasado', atr.length, 'de ' + lista.length + ' exibidas', atr.length ? 'vermelho' : 'verde', { k: 'statusLic', v: 'Atrasado' })}${kpi('Com multas', mul.length, mul.reduce((s, v) => s + v.qtdMultas, 0) + ' autos', mul.length ? 'vermelho' : 'verde', { k: 'temMultas', v: 'Sim' })}${kpi('Valor a pagar', fmtMoeda(rs), 'soma das multas listadas', 'ambar', null, true)}${kpi('Débito IPVA ou licenciamento', lista.filter(v => v.debIpva === 'SIM' || v.debLic === 'SIM').length, 'segundo DETRAN', '', null, true)}</div>`;
+    h += `<div class="grade" style="margin-bottom:14px"><div id="cart-lic"></div><div id="cart-mes"></div></div>`;
+    h += `<h3 style="font-size:14px; margin:0 0 8px">Licenciamento atrasado — ${atr.length}</h3>`;
+    h += tabelaSimples(atr, [['Placa', v => placaHtml(v.placa, 'mini')], ['Modelo', v => esc(v.modelo)], ['Exercício', v => v.anoEx || '—'], ['Vencimento', v => v.vencLic || '—'], ['Mês', v => esc(v.mesLic || '—')], ['Status', v => badgeStatus(v.status)], ['Unidade', v => esc(v.unidade)]], 'Nenhuma viatura atrasada');
+    h += `<h3 style="font-size:14px; margin:16px 0 8px">Multas — ${mul.length} viaturas</h3>`;
+    h += tabelaSimples(mul.sort((a, b) => b.valorMultas - a.valorMultas), [['Placa', v => placaHtml(v.placa, 'mini')], ['Modelo', v => esc(v.modelo)], ['Autos', v => v.qtdMultas], ['A pagar', v => fmtMoeda(v.valorMultas)], ['Última infração', v => esc((v.multas[0] || {}).descricao || '')], ['Unidade', v => esc(v.unidade)]], 'Nenhuma multa registrada');
+    c.innerHTML = h; ligarKpis();
+    const l1 = el('cart-lic'); if (l1) l1.replaceWith(cartaoBarras('Situação do licenciamento', lista, 'statusLic'));
+    const l2 = el('cart-mes'); if (l2) l2.replaceWith(cartaoBarras('Mês de vencimento do licenciamento', lista, 'mesLic', { ordem: 'mes', filtroDim: 'mesLic' }));
+  }
+
+  c.querySelectorAll('tr.linha[data-placa]').forEach(tr => tr.addEventListener('click', () => abrirFicha(tr.dataset.placa)));
+}
+
+function chaveData(d) { return String(d || '').split(' ')[0].split('/').reverse().join(''); }
+function ultimaData(datas) {
+  const ord = datas.filter(Boolean).map(d => ({ d, k: chaveData(d) })).sort((a, b) => b.k.localeCompare(a.k));
+  return ord.length ? ord[0].d : '';
+}
+function tabelaSimples(lista, cols, vazio, clicavel) {
+  if (!lista.length) return `<div class="cartao"><div class="vazio">${vazio}</div></div>`;
+  return `<div class="tabela-wrap"><div class="tabela-rol" style="max-height:none"><table class="tabela-simples"><thead><tr>${cols.map(c => `<th>${c[0]}</th>`).join('')}</tr></thead><tbody>
+    ${lista.map(v => `<tr class="${clicavel === false ? '' : 'linha'}" ${v.placa ? `data-placa="${escAttr(v.placa)}"` : ''}>${cols.map(c => `<td>${c[1](v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`;
+}
+
+/* ============================================================
+   FICHA DA VIATURA
+   ============================================================ */
+function abrirFicha(placa) {
+  const v = ESTADO.veiculos.find(x => x.placa === placa); if (!v) return;
+  const gestores = (ESTADO.dados.gestores || []).filter(g => g.unidadeSipac === v.unidade || g.unidade === v.unidade || g.unidade === v.unidadeCurta);
+  const os = (ESTADO.dados.os || []).filter(o => o.placa === v.placa || o.placa === v.placaMerc || (v.placaRes && o.placa === v.placaRes));
+
+  htm('gaveta-cab', `
+    <div class="placas">${placaHtml(v.placa, 'ficha')}${v.placaRes ? placaHtml(v.placaRes, 'ficha reservada') : ''}</div>
+    <div class="titulo"><h2>${esc(v.modelo)}</h2>
+      <div class="sub"><span>${esc(v.unidade || 'sem unidade')}</span> • <span>${esc(v.tipo)}</span> • <span>${esc(v.uso)}</span>
+        ${badgeStatus(v.status)} ${conceitoHtml(v.conceito)}</div></div>
+    <button class="gaveta-fechar" onclick="fecharFicha()" title="Fechar (Esc)">×</button>`);
+
+  const fotos = ['FD', 'LE', 'TR', 'LD'].map(ang => {
+    const url = v.fotos && v.fotos[ang]; const nome = { FD: 'Dianteira', LE: 'Lateral esq.', TR: 'Traseira', LD: 'Lateral dir.' }[ang];
+    if (!url) return `<div><div class="foto sem">${nome}<br>sem foto</div><div class="foto-data">&nbsp;</div></div>`;
+    const id = idDrive(url);
+    const img = id ? `https://drive.google.com/thumbnail?id=${id}&sz=w900` : url;
+    const link = id ? `https://drive.google.com/file/d/${id}/view` : url;
+    const data = id ? ((ESTADO.dados.datasFotos || {})[id] || '') : '';
+    return `<div><a class="foto" href="${escAttr(link)}" target="_blank" rel="noopener"><img src="${escAttr(img)}" alt="${nome}" loading="lazy" onerror="this.parentNode.classList.add('sem'); this.remove();"><span class="rotulo">${nome}</span></a><div class="foto-data">${data ? esc(data) : '<span style="opacity:.5">data não disponível</span>'}</div></div>`;
+  }).join('');
+
+  const multasHtml = v.qtdMultas ? v.multas.map(m => `<div class="multa"><b>${esc(m.ait)}</b> — ${esc(m.descricao)}<div class="linha2">Infração ${esc(m.infracao)} • Venc. ${esc(m.venc)} • Valor ${fmtMoeda(m.valor)} • <b>A pagar ${fmtMoeda(m.aPagar)}</b></div></div>`).join('')
+    : `<div class="ok-txt">Sem multas</div>`;
+
+  const pdfsV = pdfsDaViatura(v);
+  const osHtml = (os.length ? os.map(o => `<div class="os-item ${o.origem === 'ACEITE' ? 'aceite' : ''}"><b>OS ${esc(o.os)}</b> ${pdfLinkHtml(o.os)} • ${esc(o.status)} • ${o.valor ? fmtMoeda(o.valor) : ''}${o.oficina ? ' • ' + esc(o.oficina) : ''}${o.limiteAceite ? ' • aceite até ' + prazoHtml(o.limiteISO, o.limiteAceite) : ''}<div class="linha2" style="color:var(--tinta-suave)">${esc(o.data)}${o.relato ? ' • ' + esc(o.relato) : ''}${o.obs ? ' • ' + esc(o.obs) : ''}</div></div>`).join('')
+    : `<div class="nao">Nenhuma OS pendente ou aguardando aceite no GoodManager</div>`) +
+    (pdfsV.length ? `<div class="k" style="font-size:11px; color:var(--tinta-suave); text-transform:uppercase; letter-spacing:.06em; margin:10px 0 4px">Ordens de serviço em PDF (${pdfsV.length})</div><div style="display:flex; flex-wrap:wrap; gap:6px">${pdfsV.map(f => `<a class="pdf-link" href="${escAttr(f.url)}" target="_blank" rel="noopener" title="${escAttr(f.pasta)}">${icoPdf()} ${esc(f.nome.replace(/\.pdf$/i, ''))}</a>`).join('')}</div>` : '');
+
+  const gestorHtml = gestores.length ? gestores.map(g => `<div class="gestor-card"><div class="avatar">${esc(iniciais(g.nome))}</div><div><div class="nome">${esc(g.nome)}</div><div class="det">${esc(g.funcao)} • ${esc(g.unidade)}${g.matricula ? ' • mat. ' + esc(g.matricula) : ''}</div><div class="det">${g.telefone ? `<a href="tel:${escAttr(g.telefone.replace(/\D/g, ''))}">${esc(g.telefone)}</a>` : ''}${g.email ? ` • <a href="mailto:${escAttr(g.email)}">${esc(g.email)}</a>` : ''}</div></div></div>`).join('<hr style="border:0; border-top:1px solid var(--borda); margin:8px 0">')
+    : `<div class="nao">Nenhum gestor cadastrado para ${esc(v.unidade || 'esta unidade')} na aba Gestores</div>`;
+
+  htm('gaveta-corpo', `
+    <div class="gaveta-acoes">
+      ${v.linkTomb ? `<a class="btn" href="${escAttr(v.linkTomb)}" target="_blank" rel="noopener">${icoPdf()} Termo de tombamento</a>` : `<button class="btn" disabled>${icoPdf()} Sem tombamento</button>`}
+      ${v.linkCrlv ? `<a class="btn" href="${escAttr(v.linkCrlv)}" target="_blank" rel="noopener">${icoDoc()} CRLV</a>` : `<button class="btn" disabled>${icoDoc()} Sem CRLV</button>`}
+      <button class="btn claro" onclick="copiar('${escAttr(v.placa)}')">Copiar placa</button>
+      ${v.placaRes ? `<button class="btn claro" onclick="copiar('${escAttr(v.placaRes)}')">Copiar placa reservada</button>` : ''}
+      <button class="btn claro" onclick="copiar('${escAttr(v.renavam)}')">Copiar Renavam</button>
+    </div>
+    <div class="fotos">${fotos}</div>
+
+    ${secao('Identificação', grade([
+      ['Marca/Modelo', v.modelo], ['Tipo', v.tipo], ['Categoria', v.categoria], ['Espécie', v.especie], ['Cor', v.cor], ['Combustível', v.comb],
+      ['Ano fabricação / modelo', (v.anoFab || '—') + ' / ' + (v.anoMod || '—')], ['Idade', v.idade !== null ? v.idade + ' anos' : ''],
+      ['Renavam', v.renavam, 'mono'], ['Chassi', v.chassi, 'mono'], ['Motor', v.motor, 'mono'], ['Placa Mercosul', v.placaMerc, 'mono'],
+      ['FIPE', v.fipe, 'mono'], ['Município emplacamento', v.municipio], ['Nacionalidade', v.nacionalidade],
+      ['Blindagem', v.blind], ['Caracterizado', v.carac], ['Propriedade', v.prop], ['CNPJ proprietário', v.cnpj, 'mono']]))}
+
+    ${secao('Patrimônio e SIPAC', grade([
+      ['Unidade SIPAC', v.unidade], ['Uso SIPAC', v.uso], ['Status SIPAC', v.status], ['Tombamento', v.tombamento, 'mono'],
+      ['Unidade de tombamento', v.unidTomb, '', true], ['Nº CRV', v.crv, 'mono'], ['Código de segurança CRV', v.codCrv, 'mono'], ['CRV físico', v.crvFisico],
+      ['Placa reservada', v.placaRes, 'mono'], ['Frequência de uso', v.freq]]))}
+
+    ${secao('Licenciamento e restrições', grade([
+      ['Ano exercício', v.anoEx], ['Vencimento', v.vencLic], ['Situação', v.statusLic], ['Mês', v.mesLic],
+      ['Débito IPVA', v.debIpva], ['Débito licenciamento', v.debLic], ['Pendência de recall', v.recall], ['Queixa de roubo', v.roubo]]) +
+      (v.restricoes ? `<div class="dado largo" style="margin-top:8px"><div class="k">Restrições (DETRAN)</div><div class="pre">${esc(v.restricoes)}</div></div>` : ''),
+      v.statusLic === 'Atrasado' ? '<span class="badge indisponivel">Atrasado</span>' : v.statusLic === 'Em dia' ? '<span class="badge disponivel">Em dia</span>' : '')}
+
+    ${secao('Multas', multasHtml + (v.multasConsultaEm ? `<div class="cartao-dica">Consulta DETRAN em ${esc(v.multasConsultaEm)}</div>` : ''), v.qtdMultas ? `<span class="badge indisponivel">${v.qtdMultas} auto(s) • ${fmtMoeda(v.valorMultas)}</span>` : '<span class="badge disponivel">Sem multas</span>')}
+
+    ${secao('Uso nos últimos 12 meses (ConsultaBD)', grade([
+      ['Odômetro atual', v.odometro !== null ? fmtInt(v.odometro) + ' km' : ''], ['Km rodados', v.kmR !== null ? fmtInt(v.kmR) + ' km' : ''],
+      ['Abastecimentos', v.qtdAbast], ['Litros', v.litros !== null ? fmtInt(v.litros) : ''], ['Gasto abastecimento', v.abastR ? fmtMoeda(v.abastR) : ''],
+      ['Consumo médio', v.consumo ? fmtDec(v.consumo) + ' km/l' : ''], ['R$/km abastecimento', v.abastRsKm ? 'R$ ' + fmtDec(v.abastRsKm) : ''],
+      ['Gasto manutenção', v.manutR ? fmtMoeda(v.manutR) : ''], ['R$/km manutenção', v.manutRsKm ? 'R$ ' + fmtDec(v.manutRsKm) : ''],
+      ['Abasteceu (2 meses)', v.abast2m], ['Abasteceu (12 meses)', v.abast12m]]))}
+
+    ${secaoHistorico(v)}
+
+    ${(v.status === 'CEDIDO' || v.obsCessao || v.obs || (ESTADO.admin && (v.desf || v.sugDesf || v.analiseDesf))) ? secao(ESTADO.admin ? 'Desfazimento e cessão' : 'Cessão', grade(ESTADO.admin ? [
+      ['Análise (05/2025)', v.analiseDesf], ['Sugestão de desfazimento', v.sugDesf], ['Ano do desfazimento', v.desfAno], ['Processo SEI desfazimento', v.desfProcesso, 'mono'],
+      ['Cedida ao município', v.cessaoMunicipio], ['Data da cessão', v.cessaoData], ['Processo SEI cessão', v.cessaoProcesso, 'mono']] : [
+      ['Cedida ao município', v.cessaoMunicipio], ['Data da cessão', v.cessaoData], ['Processo SEI cessão', v.cessaoProcesso, 'mono']]) +
+      (v.obsCessao ? `<div class="dado largo" style="margin-top:8px"><div class="k">Observação</div><div class="v">${esc(v.obsCessao)}</div></div>` : '') +
+      (v.obs ? `<div class="dado largo" style="margin-top:8px"><div class="k">Observações DETRAN</div><div class="v">${esc(v.obs)}</div></div>` : ''),
+      (ESTADO.admin && v.emDesf === 'Sim') ? '<span class="badge manutencao">Em desfazimento</span>' : '') : ''}
+
+    ${(v.statusInv || v.obsInv) ? secao('Inventário', grade([['Status inventário', v.statusInv], ['Observações', v.obsInv, '', true]])) : ''}
+
+    ${secao('Ordens de serviço', osHtml, (os.length ? `<span class="badge manutencao">${os.length} em andamento</span> ` : '') + (pdfsV.length ? `<span class="badge neutro">${pdfsV.length} PDF</span>` : ''))}
+    ${secao('Gestor de frota da unidade', gestorHtml)}
+  `);
+
+  cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
+  const corpo = el('gaveta-corpo'); if (corpo) corpo.scrollTop = 0;
+  document.body.style.overflow = 'hidden';
+}
+function fecharFicha() { cls('gaveta-fundo', 'aberta', false); cls('gaveta', 'aberta', false); document.body.style.overflow = ''; }
+
+function secao(titulo, corpo, tag) {
+  return `<div class="secao"><div class="secao-cab"><h4>${titulo}</h4>${tag ? `<span class="tag">${tag}</span>` : ''}</div><div class="secao-corpo">${corpo}</div></div>`;
+}
+function grade(pares) {
+  return `<div class="grade-dados">${pares.filter(p => p[1] !== null && p[1] !== undefined && p[1] !== '' && p[1] !== '— / —').map(p =>
+    `<div class="dado ${p[3] ? 'largo' : ''}"><div class="k">${p[0]}</div><div class="v ${p[2] || ''}">${esc(p[1])}</div></div>`).join('') || '<div class="nao">Sem informações</div>'}</div>`;
+}
+
+/* ============================================================
+   COMPONENTES E FORMATAÇÃO
+   ============================================================ */
+function placaHtml(p, variante) {
+  const v = variante || '';
+  return `<span class="placa ${v.indexOf('mini') >= 0 ? 'placa-mini' : ''} ${v.indexOf('ficha') >= 0 ? 'placa-ficha' : ''} ${v.indexOf('reservada') >= 0 ? 'placa-reservada' : ''}"><span class="placa-faixa">${v.indexOf('reservada') >= 0 ? 'RESERVADA' : 'BRASIL'}</span><span class="placa-numero">${esc(p)}</span></span>`;
+}
+function badgeStatus(s) {
+  const c = { 'DISPONÍVEL': 'disponivel', 'INDISPONÍVEL': 'indisponivel', 'MANUTENÇÃO': 'manutencao', 'CEDIDO': 'cedido', 'ALIENADO': 'alienado', 'SINISTRADO': 'sinistrado', 'ATUALIZAR PATRIMONIO': 'atualizar' }[s] || 'neutro';
+  return `<span class="badge ${c}">${esc(s || '—')}</span>`;
+}
+function conceitoHtml(c) { return c ? `<span class="conceito c-${esc(c)}" title="Conceito ${esc(c)}">${esc(c)}</span>` : '<span class="nao">—</span>'; }
+function idDrive(url) { const m = String(url).match(/[?&]id=([\w-]{10,})|\/d\/([\w-]{10,})/); return m ? (m[1] || m[2]) : ''; }
+function primeiroNome(n) { const p = String(n || '').trim().split(/\s+/); return p.length > 1 ? (p[0] + ' ' + p[p.length - 1]).replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, c => c.toLowerCase()) : p[0] || ''; }
+function iniciais(nome) { return String(nome).split(/\s+/).filter(Boolean).slice(0, 2).map(p => p[0]).join('').toUpperCase(); }
+function fmtInt(n) { return (n === null || n === undefined || isNaN(n)) ? '—' : Math.round(n).toLocaleString('pt-BR'); }
+function fmtDec(n) { return (n === null || n === undefined || isNaN(n)) ? '—' : Number(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtMoeda(n) { return (n === null || n === undefined || isNaN(n)) ? '—' : Number(n).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
+function esc(s) { return String(s === null || s === undefined ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function escAttr(s) { return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+function icoPdf() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 14h8M8 18h5"/></svg>'; }
+function icoDoc() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h6M7 13h10M7 16h4"/></svg>'; }
+function icoOs() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="m9 15 2 2 4-4"/></svg>'; }
+function icoFoto() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7l1.5-3h5L16 7"/><circle cx="12" cy="13" r="3.5"/></svg>'; }
+function copiar(t) { (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast(t + ' copiado'), () => toast('Não foi possível copiar')); }
+let toastTimer = null;
+function toast(msg) { const t = el('toast'); if (!t) return; t.textContent = msg; t.classList.add('visivel'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('visivel'), 2400); }
+
+
+/* ============================================================
+   EVENTOS
+   ============================================================ */
+function debounce(fn, ms) { let t; return function () { clearTimeout(t); t = setTimeout(fn, ms); }; }
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('#abas .topo-aba').forEach(b => b.addEventListener('click', () => mudarAba(b.dataset.aba)));
+  document.querySelectorAll('#subabas-patrimonio .subaba').forEach(b => b.addEventListener('click', () => { ESTADO.subPatrimonio = b.dataset.sub; renderPatrimonio(ESTADO.filtrado); }));
+  ouvir('busca', 'input', debounce(() => { ESTADO.busca = normalizar(val('busca')); aplicar(); }, 200));
+  ouvir('odo-min', 'change', () => { const n = parseInt(val('odo-min'), 10); ESTADO.odoMin = isNaN(n) ? null : n; aplicar(); });
+  ouvir('odo-max', 'change', () => { const n = parseInt(val('odo-max'), 10); ESTADO.odoMax = isNaN(n) ? null : n; aplicar(); });
+  ouvir('btn-limpar', 'click', limparTudo);
+  ouvir('btn-atualizar', 'click', () => { ESTADO.uso = null; carregar(true); });
+  ouvir('btn-sair', 'click', sair);
+  ouvir('btn-entrar', 'click', entrar);
+  ouvir('login-matricula', 'keydown', e => { if (e.key === 'Enter') entrar(); });
+  ouvir('login-email', 'keydown', e => { if (e.key === 'Enter') { const m = el('login-matricula'); if (m) m.focus(); } });
+  ouvir('btn-ver-matricula', 'click', () => { const m = el('login-matricula'), b = el('btn-ver-matricula'); if (!m) return; m.type = m.type === 'password' ? 'text' : 'password'; if (b) b.textContent = m.type === 'password' ? 'ver' : 'ocultar'; });
+  document.querySelectorAll('#periodo-uso, #periodo-manut').forEach(() => {});
+  ouvir('btn-csv', 'click', exportarCsv);
+  ouvir('btn-colunas', 'click', e => { e.stopPropagation(); cls('menu-colunas', 'oculto', !el('menu-colunas').classList.contains('oculto')); });
+  document.addEventListener('click', e => { if (!e.target.closest('.seletor-colunas')) cls('menu-colunas', 'oculto', true); });
+  ouvir('btn-filtros', 'click', () => {
+    const corpo = el('corpo'), painel = el('painel-filtros');
+    if (window.innerWidth <= 900) painel.classList.toggle('aberta'); else corpo.classList.toggle('sem-filtros');
+  });
+  document.querySelectorAll('#alt-alienados button').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('#alt-alienados button').forEach(x => x.classList.toggle('ativo', x === b));
+    ESTADO.alienados = b.dataset.v; aplicar();
+  }));
+  ouvir('gaveta-fundo', 'click', fecharFicha);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') fecharFicha(); });
+  // fecha o painel de filtros no celular ao tocar fora
+  document.addEventListener('click', e => {
+    if (window.innerWidth > 900) return;
+    const p = el('painel-filtros');
+    if (p && p.classList.contains('aberta') && !e.target.closest('#painel-filtros') && !e.target.closest('#btn-filtros')) p.classList.remove('aberta');
+  });
+  iniciarSessao();
+});
+
+/* ============================================================
+   SESSÃO E LOGIN
+   ============================================================ */
+function guardar(k, v) { try { localStorage.setItem(k, v); } catch (e) { try { sessionStorage.setItem(k, v); } catch (e2) {} } }
+function lerGuardado(k) { try { return localStorage.getItem(k) || sessionStorage.getItem(k); } catch (e) { return null; } }
+function apagar(k) { try { localStorage.removeItem(k); sessionStorage.removeItem(k); } catch (e) {} }
+
+function iniciarSessao() {
+  const t = lerGuardado(CHAVE_TOKEN);
+  if (t) { ESTADO.token = t; mostrarTela('carregando'); carregar(false); }
+  else mostrarTela('login');
+}
+
+function mostrarTela(qual) {
+  cls('tela-login', 'oculto', qual !== 'login');
+  cls('tela-carregando', 'oculto', qual !== 'carregando');
+  cls('tela-app', 'oculto', qual !== 'app');
+  if (qual === 'login') { const e = el('login-email'); if (e) setTimeout(() => e.focus(), 50); }
+}
+
+function entrar() {
+  const email = val('login-email').trim(), matricula = val('login-matricula').trim();
+  const btn = el('btn-entrar'), erro = el('login-erro');
+  if (erro) erro.classList.add('oculto');
+  if (!email || !matricula) { if (erro) { erro.textContent = 'Informe e-mail e matrícula.'; erro.classList.remove('oculto'); } return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Entrando…'; }
+  google.script.run
+    .withSuccessHandler(r => {
+      if (btn) { btn.disabled = false; btn.textContent = 'Entrar'; }
+      if (!r || !r.ok) { if (erro) { erro.textContent = (r && r.erro) || 'Não foi possível entrar.'; erro.classList.remove('oculto'); } return; }
+      ESTADO.token = r.token; guardar(CHAVE_TOKEN, r.token);
+      const m = el('login-matricula'); if (m) m.value = '';
+      mostrarTela('carregando'); carregar(false);
+    })
+    .withFailureHandler(e => {
+      if (btn) { btn.disabled = false; btn.textContent = 'Entrar'; }
+      if (erro) { erro.textContent = 'Sem conexão com o servidor: ' + (e && e.message ? e.message : e); erro.classList.remove('oculto'); }
+    })
+    .login(email, matricula);
+}
+
+function sair() {
+  const t = ESTADO.token;
+  apagar(CHAVE_TOKEN); ESTADO.token = null; ESTADO.dados = null; ESTADO.uso = null; ESTADO.admin = false;
+  fecharFicha(); mostrarTela('login');
+  if (t) google.script.run.sair(t);
+}
+
+function sessaoExpirou(r) {
+  if (r && r.expirado) { apagar(CHAVE_TOKEN); ESTADO.token = null; mostrarTela('login'); const e = el('login-erro'); if (e) { e.textContent = 'Sua sessão expirou. Entre novamente.'; e.classList.remove('oculto'); } return true; }
+  return false;
+}
+
+/* ============================================================
+   CARGA
+   ============================================================ */
+function carregar(forcar) {
+  mostrarTela('carregando');
+  cls('tela-carregando', 'erro', false); cls('btn-tentar', 'oculto', true); cls('btn-voltar-login', 'oculto', true);
+  txt('carregando-titulo', forcar ? 'Atualizando Frota 16ª SPRF' : 'Acessando Frota 16ª SPRF');
+  txt('carregando-msg', 'Lendo os dados e preparando o painel…');
+  google.script.run
+    .withSuccessHandler(dados => {
+      if (sessaoExpirou(dados)) return;
+      if (!dados || dados.erro) return falhaCarga(dados ? dados.erro : 'Resposta vazia do servidor.');
+      iniciar(dados);
+      if (forcar) toast('Dados relidos da planilha às ' + dados.meta.atualizadoEm);
+    })
+    .withFailureHandler(e => falhaCarga(e && e.message ? e.message : String(e)))
+    .carregarDados(ESTADO.token, !!forcar);
+}
+
+function falhaCarga(msg) {
+  cls('tela-carregando', 'erro', true);
+  txt('carregando-titulo', 'Não foi possível carregar');
+  txt('carregando-msg', msg);
+  cls('btn-tentar', 'oculto', false); cls('btn-voltar-login', 'oculto', false);
+}
+
+function iniciar(dados) {
+  ESTADO.dados = dados;
+  ESTADO.veiculos = dados.veiculos || [];
+  ESTADO.usuario = dados.usuario || {}; ESTADO.admin = !!(dados.usuario && dados.usuario.admin);
+  txt('meta-usuario', (primeiroNome(ESTADO.usuario.nome) || ESTADO.usuario.email || '') + (ESTADO.usuario.lotacao ? ' • ' + ESTADO.usuario.lotacao : '') + (ESTADO.admin ? ' • administrador' : ''));
+  txt('meta-atualizado', 'Dados de ' + dados.meta.atualizadoEm + (dados.meta.doCache ? ' (cache)' : ''));
+  document.querySelectorAll('.so-admin').forEach(e => e.classList.toggle('oculto', !ESTADO.admin));
+  indexarPdfs(dados.pdfsOS || []);
+  if (!ESTADO.colunasVisiveis) ESTADO.colunasVisiveis = new Set(COLUNAS.filter(c => c.on).map(c => c.k));
+  construirFiltros();
+  construirMenuColunas();
+  aplicar();
+  mostrarTela('app');
+}
+
+/** Carga sob demanda de AbastBD/ManutBD (agregados). */
+function garantirUso(depois) {
+  if (ESTADO.uso) { depois(); return; }
+  if (ESTADO.usoCarregando) return;
+  ESTADO.usoCarregando = true;
+  google.script.run
+    .withSuccessHandler(r => {
+      ESTADO.usoCarregando = false;
+      if (sessaoExpirou(r)) return;
+      if (!r || r.erro) { toast('Não foi possível ler abastecimento/manutenção: ' + (r && r.erro)); return; }
+      ESTADO.uso = r; indexarUso(); depois();
+    })
+    .withFailureHandler(e => { ESTADO.usoCarregando = false; toast('Erro ao ler abastecimento/manutenção: ' + (e && e.message ? e.message : e)); renderAba(); })
+    .carregarUso(ESTADO.token, false);
+}
+
+function indexarUso() {
+  const u = ESTADO.uso;
+  u.abastPorPlaca = {}; (u.abast || []).forEach(a => { (u.abastPorPlaca[a.p] = u.abastPorPlaca[a.p] || []).push(a); });
+  Object.values(u.abastPorPlaca).forEach(l => l.sort((a, b) => b.m.localeCompare(a.m)));
+  u.manutPorPlaca = {}; (u.manut || []).forEach(m => { (u.manutPorPlaca[m.p] = u.manutPorPlaca[m.p] || []).push(m); });
+  u.mesesAbast = Array.from(new Set((u.abast || []).map(a => a.m))).sort();
+  u.mesesManut = Array.from(new Set((u.manut || []).map(m => m.d.substring(0, 7)))).sort();
+}
+
+function telaCarregandoUso(idKpis, idGraf) {
+  htm(idKpis, '');
+  htm(idGraf, `<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div><b>Lendo AbastBD e ManutBD</b>Primeira leitura agrega todas as transações do GoodManager — pode levar alguns segundos.</div></div>`);
+}
+
+/* ============================================================
+   PERÍODO (compartilhado por Abastecimento e Manutenção)
+   ============================================================ */
+function opcoesPeriodo(meses) {
+  const anos = Array.from(new Set(meses.map(m => m.substring(0, 4)))).sort().reverse();
+  const op = [{ k: '3m', r: '3 meses' }, { k: '6m', r: '6 meses' }, { k: '12m', r: '12 meses' }, { k: '24m', r: '24 meses' }];
+  anos.forEach(a => op.push({ k: 'ano:' + a, r: a }));
+  op.push({ k: 'tudo', r: 'Tudo' });
+  return op;
+}
+function faixaPeriodo(chave, meses) {
+  if (!meses.length) return ['0000-00', '9999-99'];
+  const ult = meses[meses.length - 1];
+  if (chave === 'tudo') return [meses[0], ult];
+  if (chave.indexOf('ano:') === 0) { const a = chave.substring(4); return [a + '-01', a + '-12']; }
+  const n = parseInt(chave, 10) || 12;
+  const [y, m] = ult.split('-').map(Number);
+  const d = new Date(y, m - 1 - (n - 1), 1);
+  return [d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2), ult];
+}
+function mesesEntre(ini, fim) {
+  const out = []; let [y, m] = ini.split('-').map(Number); const [fy, fm] = fim.split('-').map(Number);
+  while (y < fy || (y === fy && m <= fm)) { out.push(y + '-' + ('0' + m).slice(-2)); m++; if (m > 12) { m = 1; y++; } }
+  return out;
+}
+function rotMes(m) { return m.substring(5, 7) + '/' + m.substring(2, 4); }
+function brDia(iso) { return iso ? iso.substring(8, 10) + '/' + iso.substring(5, 7) + '/' + iso.substring(0, 4) : ''; }
+
+function renderPeriodo(idCont, chaveEstado, meses, nota) {
+  const c = el(idCont); if (!c) return;
+  const atual = ESTADO[chaveEstado];
+  c.innerHTML = `<span class="rotulo">Período</span>` + opcoesPeriodo(meses).map(o => `<button class="subaba ${o.k === atual ? 'ativa' : ''}" data-k="${o.k}">${o.r}</button>`).join('') + (nota ? `<span class="nota">${nota}</span>` : '');
+  c.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { ESTADO[chaveEstado] = b.dataset.k; renderAba(); }));
+}
+
+/* ---------- gráfico de colunas (série mensal) ---------- */
+function cartaoColunas(titulo, meses, serieA, serieB, fmtA, fmtB, rotA, rotB) {
+  const card = document.createElement('div'); card.className = 'cartao largo';
+  const maxA = Math.max(1, ...meses.map(m => serieA[m] || 0)), maxB = serieB ? Math.max(1, ...meses.map(m => serieB[m] || 0)) : 1;
+  const passo = meses.length > 24 ? Math.ceil(meses.length / 24) : 1;
+  card.innerHTML = `<div class="cartao-cab"><h3>${titulo}</h3><small>${meses.length} meses</small></div>
+    <div class="colunas">${meses.map((m, i) => `<div class="coluna" title="${rotMes(m)}: ${fmtA(serieA[m] || 0)}${serieB ? ' • ' + fmtB(serieB[m] || 0) : ''}">
+      <span class="val">${fmtA(serieA[m] || 0)}</span>
+      <div style="display:flex; gap:1px; align-items:flex-end; width:100%; height:100%">
+        <div class="preench" style="height:${Math.round((serieA[m] || 0) / maxA * 100)}%"></div>
+        ${serieB ? `<div class="preench alt" style="height:${Math.round((serieB[m] || 0) / maxB * 100)}%"></div>` : ''}
+      </div>
+      <span class="rot">${i % passo === 0 ? rotMes(m) : ''}</span></div>`).join('')}</div>
+    <div class="serie-legenda"><span>${rotA}</span>${serieB ? `<span class="alt">${rotB}</span>` : ''}</div>`;
+  return card;
+}
+
+/* ============================================================
+   ABASTECIMENTO (AbastBD)
+   ============================================================ */
+function renderUso(lista) {
+  if (!ESTADO.uso) { telaCarregandoUso('kpis-uso', 'graficos-uso'); htm('periodo-uso', ''); garantirUso(() => renderUso(ESTADO.filtrado)); return; }
+  const u = ESTADO.uso;
+  const [ini, fim] = faixaPeriodo(ESTADO.periodoUso, u.mesesAbast);
+  const meses = mesesEntre(ini, fim);
+  renderPeriodo('periodo-uso', 'periodoUso', u.mesesAbast, `AbastBD: ${fmtInt(u.meta.abastLinhas)} transações, ${brDia(u.meta.abastDe)} a ${brDia(u.meta.abastAte)}`);
+
+  const porPlaca = {}; lista.forEach(v => { porPlaca[v.placa] = v; if (v.placaMerc && v.placaMerc !== v.placa) porPlaca[v.placaMerc] = v; });
+  const regs = (u.abast || []).filter(a => a.m >= ini && a.m <= fim && porPlaca[a.p]);
+  const veic = a => porPlaca[a.p];
+
+  const tot = regs.reduce((s, a) => { s.v += a.v; s.l += a.l; s.km += a.km; s.q += a.q; return s; }, { v: 0, l: 0, km: 0, q: 0 });
+  const placasAtivas = new Set(regs.map(a => a.p)).size;
+  const nMeses = meses.length;
+  const disponiveisSem = lista.filter(v => v.status === 'DISPONÍVEL' && !regs.some(a => a.p === v.placa || a.p === v.placaMerc));
+
+  htm('kpis-uso', [
+    kpi('Gasto com abastecimento', fmtMoeda(tot.v), fmtMoeda(tot.v / Math.max(1, nMeses)) + ' por mês', 'ciano', null, true),
+    kpi('Km rodados', fmtInt(tot.km), fmtInt(tot.km / Math.max(1, nMeses)) + ' km por mês', '', null, true),
+    kpi('Litros', fmtInt(tot.l), fmtInt(tot.q) + ' abastecimentos', 'ambar', null, true),
+    kpi('Consumo médio', tot.l ? fmtDec(tot.km / tot.l) + ' km/l' : '—', 'km ÷ litros no período', 'verde', null, true),
+    kpi('R$ por km', tot.km ? 'R$ ' + fmtDec(tot.v / tot.km) : '—', 'preço médio R$ ' + (tot.l ? fmtDec(tot.v / tot.l) : '—') + '/l', 'roxo', null, true),
+    kpi('Viaturas que abasteceram', placasAtivas, 'de ' + lista.length + ' exibidas', '', null, true),
+    kpi('Disponíveis sem abastecer', disponiveisSem.length, 'no período — possível ociosidade', disponiveisSem.length ? 'vermelho' : 'verde', null, true)
+  ].join(''));
+
+  const g = el('graficos-uso'); if (!g) return; g.innerHTML = '';
+  const sMes = {}, sKm = {}; regs.forEach(a => { sMes[a.m] = (sMes[a.m] || 0) + a.v; sKm[a.m] = (sKm[a.m] || 0) + a.km; });
+  g.appendChild(cartaoColunas('Evolução mensal — gasto e km', meses, sMes, sKm, fmtMoeda, x => fmtInt(x) + ' km', 'Gasto (R$)', 'Km rodados'));
+  g.appendChild(cartaoAgregado('Gasto por unidade', regs, a => veic(a).unidade, a => a.v, fmtMoeda, 'unidade'));
+  g.appendChild(cartaoAgregado('Km rodados por unidade', regs, a => veic(a).unidade, a => a.km, x => fmtInt(x) + ' km', 'unidade'));
+  g.appendChild(cartaoAgregado('Gasto por tipo de veículo', regs, a => veic(a).tipo, a => a.v, fmtMoeda, 'tipo'));
+  g.appendChild(cartaoAgregado('Gasto por uso SIPAC', regs, a => veic(a).uso, a => a.v, fmtMoeda, 'uso'));
+  g.appendChild(cartaoAgregado('Litros por combustível', regs, a => a.comb, a => a.l, x => fmtInt(x) + ' l'));
+  g.appendChild(cartaoRazao('Consumo (km/l) por modelo', regs, a => veic(a).modeloCurto, a => a.km, a => a.l, x => fmtDec(x) + ' km/l', 15));
+  g.appendChild(cartaoRazao('R$ por km por tipo', regs, a => veic(a).tipo, a => a.v, a => a.km, x => 'R$ ' + fmtDec(x)));
+  g.appendChild(cartaoTopRegs('Maior gasto com combustível', regs, veic, a => a.v, fmtMoeda));
+  g.appendChild(cartaoTopRegs('Que mais rodaram', regs, veic, a => a.km, x => fmtInt(x) + ' km'));
+  g.appendChild(cartaoTopRegs('Pior consumo (km/l, mín. 500 km)', regs, veic, a => a.km, x => fmtDec(x) + ' km/l', { razao: a => a.l, minimo: 500, asc: true }));
+  g.appendChild(cartaoPostos(u.postos));
+  g.appendChild(cartaoAlertas(u.abastAlertas, porPlaca, ini, fim));
+  g.appendChild(cartaoConferencia(lista, u));
+  if (disponiveisSem.length) g.appendChild(cartaoListaPlacas('Disponíveis sem abastecimento no período', disponiveisSem));
+}
+
+/* agregado genérico: soma de valor por chave; clicável quando a chave é uma dimensão */
+function cartaoAgregado(titulo, regs, fChave, fValor, fmt, dim, op) {
+  op = op || {};
+  const card = document.createElement('div'); card.className = 'cartao' + (op.largo ? ' largo' : '');
+  const m = new Map(); regs.forEach(r => { const k = fChave(r) || '(vazio)'; m.set(k, (m.get(k) || 0) + fValor(r)); });
+  let chaves = Array.from(m.keys()).filter(k => m.get(k) > 0).sort((a, b) => m.get(b) - m.get(a));
+  if (op.max) chaves = chaves.slice(0, op.max);
+  const maximo = Math.max(1, ...chaves.map(k => m.get(k))); const total = Array.from(m.values()).reduce((a, b) => a + b, 0);
+  const sel = dim ? (ESTADO.filtros[dim] || new Set()) : new Set();
+  card.innerHTML = `<div class="cartao-cab"><h3>${titulo}</h3><small>total ${fmt(total)}</small></div><div class="barras ${chaves.length > 10 ? 'compacto' : ''}">
+    ${chaves.map(k => `<button class="barra ${sel.has(k) ? 'selecionada' : ''}" data-c="${escAttr(k)}" ${dim ? '' : 'style="cursor:default"'}><span class="rotulo">${esc(k)}</span><span class="trilha"><span class="preench" style="width:${Math.round(m.get(k) / maximo * 100)}%; background:${op.cor || 'var(--azul-claro)'}"></span></span><span class="valor">${fmt(m.get(k))} <small>${total ? Math.round(m.get(k) / total * 100) : 0}%</small></span></button>`).join('') || '<div class="vazio">Sem registros no período</div>'}</div>`;
+  if (dim) card.querySelectorAll('.barra').forEach(b => b.addEventListener('click', () => alternarFiltro(dim, b.dataset.c)));
+  return card;
+}
+
+function cartaoRazao(titulo, regs, fChave, fNum, fDen, fmt, max) {
+  const card = document.createElement('div'); card.className = 'cartao';
+  const m = new Map(); regs.forEach(r => { const k = fChave(r) || '(vazio)'; const a = m.get(k) || { n: 0, d: 0 }; a.n += fNum(r); a.d += fDen(r); m.set(k, a); });
+  let chaves = Array.from(m.keys()).filter(k => m.get(k).d > 0 && m.get(k).n > 0).sort((a, b) => (m.get(b).n / m.get(b).d) - (m.get(a).n / m.get(a).d));
+  if (max) chaves = chaves.slice(0, max);
+  const maximo = Math.max(0.0001, ...chaves.map(k => m.get(k).n / m.get(k).d));
+  card.innerHTML = `<div class="cartao-cab"><h3>${titulo}</h3><small>ponderado pelo total</small></div><div class="barras ${chaves.length > 10 ? 'compacto' : ''}">
+    ${chaves.map(k => { const r = m.get(k).n / m.get(k).d; return `<div class="barra" style="cursor:default"><span class="rotulo">${esc(k)}</span><span class="trilha"><span class="preench" style="width:${Math.round(r / maximo * 100)}%; background:var(--ciano)"></span></span><span class="valor">${fmt(r)}</span></div>`; }).join('') || '<div class="vazio">Sem registros no período</div>'}</div>`;
+  return card;
+}
+
+/* top 10 por placa a partir dos registros (soma por placa) */
+function cartaoTopRegs(titulo, regs, veic, fValor, fmt, op) {
+  op = op || {};
+  const card = document.createElement('div'); card.className = 'cartao';
+  const m = new Map();
+  regs.forEach(r => { const v = veic(r); const a = m.get(v.placa) || { v: v, n: 0, d: 0 }; a.n += fValor(r); a.d += op.razao ? op.razao(r) : 1; m.set(v.placa, a); });
+  let lista = Array.from(m.values()).filter(a => op.razao ? (a.d > 0 && a.n >= (op.minimo || 0)) : a.n > 0)
+    .map(a => ({ v: a.v, x: op.razao ? a.n / a.d : a.n }));
+  lista.sort((a, b) => op.asc ? a.x - b.x : b.x - a.x); lista = lista.slice(0, 10);
+  const maximo = Math.max(0.0001, ...lista.map(a => a.x));
+  card.innerHTML = `<div class="cartao-cab"><h3>${titulo}</h3><small>top 10</small></div><div class="barras compacto">
+    ${lista.map(a => `<button class="barra" data-placa="${escAttr(a.v.placa)}" title="${escAttr(a.v.modelo)} — ${escAttr(a.v.unidade)}"><span class="rotulo"><b style="font-family:var(--fonte-dados)">${esc(a.v.placa)}</b> <small style="color:var(--tinta-suave)">${esc(a.v.modeloCurto)} • ${esc(a.v.unidadeCurta)}</small></span><span class="trilha"><span class="preench" style="width:${Math.round(a.x / maximo * 100)}%; background:var(--roxo)"></span></span><span class="valor">${fmt(a.x)}</span></button>`).join('') || '<div class="vazio">Sem registros</div>'}</div><div class="cartao-dica">Clique para abrir a ficha</div>`;
+  card.querySelectorAll('.barra').forEach(b => b.addEventListener('click', () => abrirFicha(b.dataset.placa)));
+  return card;
+}
+
+function cartaoPostos(postos) {
+  const card = document.createElement('div'); card.className = 'cartao';
+  const lista = (postos || []).slice(0, 12); const maximo = Math.max(1, ...lista.map(p => p.v));
+  card.innerHTML = `<div class="cartao-cab"><h3>Postos mais usados</h3><small>toda a base, todos os períodos</small></div><div class="barras compacto">
+    ${lista.map(p => `<div class="barra" style="cursor:default" title="${escAttr(p.nome)}"><span class="rotulo">${esc(p.nome)} <small style="color:var(--tinta-suave)">${esc(p.cid)}/${esc(p.uf)}</small></span><span class="trilha"><span class="preench" style="width:${Math.round(p.v / maximo * 100)}%; background:var(--ambar)"></span></span><span class="valor">${fmtMoeda(p.v)} <small>${p.q}×</small></span></div>`).join('') || '<div class="vazio">Sem dados</div>'}</div>`;
+  return card;
+}
+
+function cartaoAlertas(alertas, porPlaca, ini, fim) {
+  const card = document.createElement('div'); card.className = 'cartao largo';
+  const lista = (alertas || []).filter(a => porPlaca[a.p] && a.d.substring(0, 7) >= ini && a.d.substring(0, 7) <= fim);
+  const porTipo = contarPor(lista, 't');
+  const cor = t => /RETROATIVO|BAIXO/.test(t) ? '' : /FORA/.test(t) ? 'info' : 'amb';
+  card.innerHTML = `<div class="cartao-cab"><h3>Alertas de abastecimento</h3><small>${lista.length} ocorrências no período</small></div>
+    <div class="legenda" style="flex-direction:row; flex-wrap:wrap; gap:8px; margin-bottom:8px">${Array.from(porTipo.entries()).map(([t, n]) => `<span class="badge ${/RETROATIVO|BAIXO/.test(t) ? 'indisponivel' : /FORA/.test(t) ? 'neutro' : 'manutencao'}">${esc(t)}: ${n}</span>`).join('')}</div>
+    <div class="mini-tabela">${lista.slice(0, 80).map(a => `<div class="alerta-item ${cor(a.t)}" data-placa="${escAttr(porPlaca[a.p].placa)}"><span class="t">${esc(a.t)}</span> • <b style="font-family:var(--fonte-dados)">${esc(a.p)}</b> ${esc(porPlaca[a.p].modeloCurto)} • ${brDia(a.d)} • ${esc(a.det)}${a.mot ? ' • ' + esc(a.mot) : ''} • ${fmtMoeda(a.v)}</div>`).join('') || '<div class="vazio">Nenhum alerta no período</div>'}
+    ${lista.length > 80 ? `<div class="cartao-dica">Exibindo 80 de ${lista.length}. Filtre por unidade ou placa para ver os demais.</div>` : ''}</div>
+    <div class="cartao-dica">Critérios: consumo &lt; 3 ou &gt; 25 km/l, mais de 100 litros, abastecimento fora do CE, odômetro menor que o anterior.</div>`;
+  card.querySelectorAll('.alerta-item').forEach(a => a.addEventListener('click', () => abrirFicha(a.dataset.placa)));
+  return card;
+}
+
+/** Confere as colunas "12 meses" da ConsultaBD com o cálculo direto na AbastBD/ManutBD. */
+function cartaoConferencia(lista, u) {
+  const card = document.createElement('div'); card.className = 'cartao largo';
+  const [ini, fim] = faixaPeriodo('12m', u.mesesAbast);
+  const [mi, mf] = faixaPeriodo('12m', u.mesesManut.length ? u.mesesManut : u.mesesAbast);
+  const linhas = [];
+  lista.forEach(v => {
+    const ab = (u.abastPorPlaca[v.placa] || []).concat(v.placaMerc && v.placaMerc !== v.placa ? (u.abastPorPlaca[v.placaMerc] || []) : []).filter(a => a.m >= ini && a.m <= fim);
+    const ma = (u.manutPorPlaca[v.placa] || []).filter(m => m.d.substring(0, 7) >= mi && m.d.substring(0, 7) <= mf);
+    const cA = ab.reduce((s, a) => s + a.v, 0), cK = ab.reduce((s, a) => s + a.km, 0), cM = ma.reduce((s, m) => s + m.v, 0);
+    const dA = cA - (v.abastR || 0), dK = cK - (v.kmR || 0), dM = cM - (v.manutR || 0);
+    const rel = (d, b) => Math.abs(d) / Math.max(1, Math.abs(b));
+    if (Math.abs(dA) > 100 && rel(dA, v.abastR) > 0.1 || Math.abs(dK) > 500 && rel(dK, v.kmR) > 0.1 || Math.abs(dM) > 100 && rel(dM, v.manutR) > 0.1)
+      linhas.push({ v, cA, cK, cM, dA, dK, dM });
+  });
+  linhas.sort((a, b) => (Math.abs(b.dA) + Math.abs(b.dM)) - (Math.abs(a.dA) + Math.abs(a.dM)));
+  card.innerHTML = `<div class="cartao-cab"><h3>Conferência ConsultaBD × AbastBD/ManutBD (12 meses)</h3><small>${linhas.length ? linhas.length + ' viaturas divergem' : 'tudo confere'}</small></div>
+    <div class="cartao-dica" style="margin:0 0 8px">Compara as colunas "Soma … (12 meses)" da ConsultaBD com o cálculo direto nas transações (${rotMes(ini)} a ${rotMes(fim)}). Diferenças acima de 10% e R$ 100 / 500 km aparecem abaixo.</div>
+    ${linhas.length ? `<div class="mini-tabela"><table class="tabela-simples"><thead><tr><th>Placa</th><th>Modelo</th><th>Abast. ConsultaBD</th><th>Abast. calculado</th><th>Km ConsultaBD</th><th>Km calculado</th><th>Manut. ConsultaBD</th><th>Manut. calculado</th></tr></thead><tbody>
+      ${linhas.slice(0, 40).map(l => `<tr class="linha" data-placa="${escAttr(l.v.placa)}"><td><b style="font-family:var(--fonte-dados)">${esc(l.v.placa)}</b></td><td>${esc(l.v.modeloCurto)}</td>
+        <td class="num">${fmtMoeda(l.v.abastR || 0)}</td><td class="num ${Math.abs(l.dA) > 100 ? 'confere-dif' : 'confere-ok'}">${fmtMoeda(l.cA)}</td>
+        <td class="num">${fmtInt(l.v.kmR || 0)}</td><td class="num ${Math.abs(l.dK) > 500 ? 'confere-dif' : 'confere-ok'}">${fmtInt(l.cK)}</td>
+        <td class="num">${fmtMoeda(l.v.manutR || 0)}</td><td class="num ${Math.abs(l.dM) > 100 ? 'confere-dif' : 'confere-ok'}">${fmtMoeda(l.cM)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="ok-txt">As colunas de 12 meses da ConsultaBD batem com as transações.</div>'}`;
+  card.querySelectorAll('tr.linha').forEach(t => t.addEventListener('click', () => abrirFicha(t.dataset.placa)));
+  return card;
+}
+
+function cartaoListaPlacas(titulo, veics) {
+  const card = document.createElement('div'); card.className = 'cartao largo';
+  card.innerHTML = `<div class="cartao-cab"><h3>${titulo}</h3><small>${veics.length} viaturas</small></div>
+    <div style="display:flex; flex-wrap:wrap; gap:6px">${veics.map(v => `<button class="subaba" data-placa="${escAttr(v.placa)}" title="${escAttr(v.modelo)} — ${escAttr(v.unidade)}" style="font-family:var(--fonte-dados)">${esc(v.placa)} <small style="font-family:var(--fonte); font-weight:500; color:var(--tinta-suave)">${esc(v.unidadeCurta)}</small></button>`).join('')}</div>`;
+  card.querySelectorAll('button').forEach(b => b.addEventListener('click', () => abrirFicha(b.dataset.placa)));
+  return card;
+}
+
+/* ============================================================
+   MANUTENÇÃO (ManutBD)
+   ============================================================ */
+function renderManut(lista) {
+  if (!ESTADO.uso) { telaCarregandoUso('kpis-manut', 'graficos-manut'); htm('periodo-manut', ''); garantirUso(() => renderManut(ESTADO.filtrado)); return; }
+  const u = ESTADO.uso;
+  const mesesBase = u.mesesManut.length ? u.mesesManut : u.mesesAbast;
+  const [ini, fim] = faixaPeriodo(ESTADO.periodoManut, mesesBase);
+  const meses = mesesEntre(ini, fim);
+  renderPeriodo('periodo-manut', 'periodoManut', mesesBase, `ManutBD: ${fmtInt(u.meta.manutLinhas)} transações, ${brDia(u.meta.manutDe)} a ${brDia(u.meta.manutAte)}`);
+
+  const porPlaca = {}; lista.forEach(v => { porPlaca[v.placa] = v; if (v.placaMerc && v.placaMerc !== v.placa) porPlaca[v.placaMerc] = v; });
+  const regs = (u.manut || []).filter(m => { const mm = m.d.substring(0, 7); return mm >= ini && mm <= fim && porPlaca[m.p]; });
+  const veic = m => porPlaca[m.p];
+  const abRegs = (u.abast || []).filter(a => a.m >= ini && a.m <= fim && porPlaca[a.p]);
+  const kmPeriodo = abRegs.reduce((s, a) => s + a.km, 0);
+  const kmPorPlaca = {}; abRegs.forEach(a => { const p = veic(a).placa; kmPorPlaca[p] = (kmPorPlaca[p] || 0) + a.km; });
+
+  const total = regs.reduce((s, m) => s + m.v, 0);
+  const placas = new Set(regs.map(m => veic(m).placa));
+  const acid = regs.filter(m => m.acid);
+  const nMeses = meses.length;
+
+  // recorrência: mesma placa com serviços em intervalos curtos (< 30 dias)
+  const porP = {}; regs.forEach(m => (porP[veic(m).placa] = porP[veic(m).placa] || []).push(m));
+  const retornos = [];
+  Object.keys(porP).forEach(p => {
+    const l = porP[p].slice().sort((a, b) => a.d.localeCompare(b.d));
+    for (let i = 1; i < l.length; i++) {
+      const dias = (new Date(l[i].d) - new Date(l[i - 1].d)) / 86400000;
+      if (dias >= 1 && dias <= 30 && l[i].ofi === l[i - 1].ofi && l[i].v > 0) retornos.push({ v: veic(l[i]), a: l[i - 1], b: l[i], dias: Math.round(dias) });
+    }
+  });
+
+  htm('kpis-manut', [
+    kpi('Gasto com manutenção', fmtMoeda(total), fmtMoeda(total / Math.max(1, nMeses)) + ' por mês', 'ambar', null, true),
+    kpi('Serviços', regs.length, 'ticket médio ' + fmtMoeda(regs.length ? total / regs.length : 0), '', null, true),
+    kpi('Viaturas atendidas', placas.size, 'de ' + lista.length + ' exibidas • ' + fmtMoeda(placas.size ? total / placas.size : 0) + ' cada', 'ciano', null, true),
+    kpi('R$ por km', kmPeriodo ? 'R$ ' + fmtDec(total / kmPeriodo) : '—', 'sobre ' + fmtInt(kmPeriodo) + ' km (AbastBD)', 'roxo', null, true),
+    kpi('Retornos à oficina', retornos.length, 'mesma oficina entre 1 e 30 dias', retornos.length ? 'vermelho' : 'verde', null, true),
+    kpi('Acidentes', acid.length, fmtMoeda(acid.reduce((s, m) => s + m.v, 0)), acid.length ? 'vermelho' : 'verde', null, true)
+  ].join(''));
+
+  const g = el('graficos-manut'); if (!g) return; g.innerHTML = '';
+  const sMes = {}, sQtd = {}; regs.forEach(m => { const mm = m.d.substring(0, 7); sMes[mm] = (sMes[mm] || 0) + m.v; sQtd[mm] = (sQtd[mm] || 0) + 1; });
+  g.appendChild(cartaoColunas('Evolução mensal — gasto e quantidade de serviços', meses, sMes, sQtd, fmtMoeda, x => x + ' serv.', 'Gasto (R$)', 'Serviços'));
+  g.appendChild(cartaoAgregado('Gasto por unidade', regs, m => veic(m).unidade, m => m.v, fmtMoeda, 'unidade'));
+  g.appendChild(cartaoAgregado('Gasto por tipo de estabelecimento', regs, m => m.te, m => m.v, fmtMoeda, null, { cor: 'var(--ambar)' }));
+  g.appendChild(cartaoAgregado('Gasto por tipo de veículo', regs, m => veic(m).tipo, m => m.v, fmtMoeda, 'tipo'));
+  g.appendChild(cartaoAgregado('Gasto por modelo', regs, m => veic(m).modeloCurto, m => m.v, fmtMoeda, null, { max: 15 }));
+  g.appendChild(cartaoMediaPorViatura('Gasto médio por viatura, por modelo', regs, m => veic(m).modeloCurto, m => m.v, fmtMoeda, 15));
+  g.appendChild(cartaoAgregado('Gasto por idade da viatura', regs, m => veic(m).faixaIdade, m => m.v, fmtMoeda, 'faixaIdade'));
+  g.appendChild(cartaoAgregado('Gasto por conceito', regs, m => veic(m).conceito, m => m.v, fmtMoeda, 'conceito'));
+  g.appendChild(cartaoAgregado('Oficinas — maior faturamento', regs, m => m.ofi + (m.cid ? ' (' + m.cid + ')' : ''), m => m.v, fmtMoeda, null, { max: 15, cor: 'var(--ambar)' }));
+  g.appendChild(cartaoAgregado('Oficinas — mais serviços', regs, m => m.ofi, m => 1, x => x + ' serv.', null, { max: 15, cor: 'var(--ciano)' }));
+  g.appendChild(cartaoTopRegs('Maior gasto por viatura', regs, veic, m => m.v, fmtMoeda));
+  g.appendChild(cartaoTopRegs('Mais serviços por viatura', regs, veic, m => 1, x => x + ' serv.'));
+  g.appendChild(cartaoCustoKm('Maior custo de manutenção por km (mín. 1.000 km)', regs, veic, kmPorPlaca));
+  g.appendChild(cartaoRetornos(retornos));
+  g.appendChild(cartaoTabelaManut(regs, veic));
+}
+
+/* gasto médio por viatura dentro do grupo (soma ÷ nº de placas distintas) */
+function cartaoMediaPorViatura(titulo, regs, fChave, fValor, fmt, max) {
+  const vistos = {};
+  const regs2 = regs.map(r => { const k = fChave(r) + '|' + r.p; const primeira = !vistos[k]; vistos[k] = true; return { r, primeira }; });
+  return cartaoRazao(titulo, regs2, x => fChave(x.r), x => fValor(x.r), x => x.primeira ? 1 : 0, fmt, max);
+}
+
+function cartaoCustoKm(titulo, regs, veic, kmPorPlaca) {
+  const card = document.createElement('div'); card.className = 'cartao';
+  const m = new Map(); regs.forEach(r => { const v = veic(r); m.set(v.placa, { v, s: (m.get(v.placa) || { s: 0 }).s + r.v }); });
+  const lista = Array.from(m.values()).filter(a => (kmPorPlaca[a.v.placa] || 0) >= 1000).map(a => ({ v: a.v, x: a.s / kmPorPlaca[a.v.placa], s: a.s, km: kmPorPlaca[a.v.placa] })).sort((a, b) => b.x - a.x).slice(0, 10);
+  const maximo = Math.max(0.0001, ...lista.map(a => a.x));
+  card.innerHTML = `<div class="cartao-cab"><h3>${titulo}</h3><small>top 10</small></div><div class="barras compacto">
+    ${lista.map(a => `<button class="barra" data-placa="${escAttr(a.v.placa)}" title="${fmtMoeda(a.s)} em ${fmtInt(a.km)} km"><span class="rotulo"><b style="font-family:var(--fonte-dados)">${esc(a.v.placa)}</b> <small style="color:var(--tinta-suave)">${esc(a.v.modeloCurto)} • ${esc(a.v.unidadeCurta)}</small></span><span class="trilha"><span class="preench" style="width:${Math.round(a.x / maximo * 100)}%; background:var(--vermelho)"></span></span><span class="valor">R$ ${fmtDec(a.x)}/km</span></button>`).join('') || '<div class="vazio">Sem viaturas com km suficiente</div>'}</div><div class="cartao-dica">Km do mesmo período, apurado na AbastBD</div>`;
+  card.querySelectorAll('.barra').forEach(b => b.addEventListener('click', () => abrirFicha(b.dataset.placa)));
+  return card;
+}
+
+function cartaoRetornos(retornos) {
+  const card = document.createElement('div'); card.className = 'cartao largo';
+  retornos.sort((a, b) => b.b.d.localeCompare(a.b.d));
+  card.innerHTML = `<div class="cartao-cab"><h3>Retornos à mesma oficina entre 1 e 30 dias</h3><small>${retornos.length} ocorrências</small></div>
+    <div class="mini-tabela">${retornos.slice(0, 60).map(r => `<div class="alerta-item amb" data-placa="${escAttr(r.v.placa)}"><span class="t">${r.dias} DIAS</span> • <b style="font-family:var(--fonte-dados)">${esc(r.v.placa)}</b> ${esc(r.v.modeloCurto)} • ${esc(r.b.ofi)} • ${brDia(r.a.d)} (${fmtMoeda(r.a.v)}) → ${brDia(r.b.d)} (${fmtMoeda(r.b.v)})</div>`).join('') || '<div class="vazio">Nenhum retorno no período</div>'}</div>
+    <div class="cartao-dica">Lançamentos no mesmo dia (peças + mão de obra da mesma OS) não contam. Pode indicar retrabalho, garantia não acionada ou serviço fracionado.</div>`;
+  card.querySelectorAll('.alerta-item').forEach(a => a.addEventListener('click', () => abrirFicha(a.dataset.placa)));
+  return card;
+}
+
+function cartaoTabelaManut(regs, veic) {
+  const card = document.createElement('div'); card.className = 'cartao largo';
+  const lista = regs.slice().sort((a, b) => b.d.localeCompare(a.d));
+  card.innerHTML = `<div class="cartao-cab"><h3>Serviços no período</h3><small>${lista.length} registros${lista.length > 200 ? ' (exibindo 200 — filtre para ver os demais)' : ''}</small></div>
+    <div class="mini-tabela"><table class="tabela-simples"><thead><tr><th>Data</th><th>Placa</th><th>Modelo</th><th>Unidade</th><th>Oficina</th><th>Tipo</th><th>Cidade</th><th>Odômetro</th><th>Valor</th></tr></thead><tbody>
+    ${lista.slice(0, 200).map(m => { const v = veic(m); return `<tr class="linha" data-placa="${escAttr(v.placa)}"><td style="font-family:var(--fonte-dados); white-space:nowrap">${brDia(m.d)}</td><td><b style="font-family:var(--fonte-dados)">${esc(v.placa)}</b></td><td>${esc(v.modeloCurto)}</td><td>${esc(v.unidadeCurta)}</td><td>${esc(m.ofi)}</td><td>${esc(m.te)}</td><td>${esc(m.cid)}</td><td class="num">${m.odo ? fmtInt(m.odo) : '—'}</td><td class="num">${fmtMoeda(m.v)}${m.acid ? ' <span class="badge indisponivel">acidente</span>' : ''}</td></tr>`; }).join('')}</tbody></table></div>`;
+  card.querySelectorAll('tr.linha').forEach(t => t.addEventListener('click', () => abrirFicha(t.dataset.placa)));
+  return card;
+}
+
+/* ============================================================
+   FICHA — histórico de abastecimento e manutenção
+   ============================================================ */
+function secaoHistorico(v) {
+  if (!ESTADO.uso) {
+    return secao('Histórico de abastecimento e manutenção', `<button class="btn claro" onclick="garantirUso(() => abrirFicha('${escAttr(v.placa)}'))">Carregar histórico do GoodManager</button><div class="cartao-dica">Lê a AbastBD e a ManutBD (uma vez por sessão).</div>`);
+  }
+  const u = ESTADO.uso;
+  const ab = (u.abastPorPlaca[v.placa] || []).concat(v.placaMerc && v.placaMerc !== v.placa ? (u.abastPorPlaca[v.placaMerc] || []) : []).sort((a, b) => b.m.localeCompare(a.m));
+  const ma = (u.manutPorPlaca[v.placa] || []).concat(v.placaMerc && v.placaMerc !== v.placa ? (u.manutPorPlaca[v.placaMerc] || []) : []).sort((a, b) => b.d.localeCompare(a.d));
+  const totAb = ab.reduce((s, a) => s + a.v, 0), totKm = ab.reduce((s, a) => s + a.km, 0), totL = ab.reduce((s, a) => s + a.l, 0), totMa = ma.reduce((s, m) => s + m.v, 0);
+  const primeiro = ab.length ? ab[ab.length - 1].m : '';
+  const html = `
+    <div class="grade-dados" style="margin-bottom:10px">
+      <div class="dado"><div class="k">Abastecimento (histórico)</div><div class="v">${fmtMoeda(totAb)}</div></div>
+      <div class="dado"><div class="k">Km rodados</div><div class="v">${fmtInt(totKm)} km</div></div>
+      <div class="dado"><div class="k">Consumo</div><div class="v">${totL ? fmtDec(totKm / totL) + ' km/l' : '—'}</div></div>
+      <div class="dado"><div class="k">Manutenção (histórico)</div><div class="v">${fmtMoeda(totMa)} <small style="font-weight:500; color:var(--tinta-suave)">${ma.length} serviços</small></div></div>
+      <div class="dado"><div class="k">Custo total por km</div><div class="v">${totKm ? 'R$ ' + fmtDec((totAb + totMa) / totKm) : '—'}</div></div>
+      <div class="dado"><div class="k">Registros desde</div><div class="v">${primeiro ? rotMes(primeiro) : '—'}</div></div>
+    </div>
+    <div class="grade-dados" style="grid-template-columns: 1fr 1fr; gap:14px">
+      <div><div class="k" style="font-size:11px; color:var(--tinta-suave); text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px">Abastecimento por mês (últimos 24)</div>
+        <div class="mini-tabela" style="max-height:260px">${ab.slice(0, 24).map(a => `<div class="linha-timeline"><span class="d">${rotMes(a.m)}</span><span>${a.q}× • ${fmtInt(a.l)} l • ${fmtInt(a.km)} km${a.oMax ? ' • odô ' + fmtInt(a.oMax) : ''}</span><span class="v">${fmtMoeda(a.v)}</span></div>`).join('') || '<div class="nao">Sem abastecimentos registrados</div>'}</div></div>
+      <div><div class="k" style="font-size:11px; color:var(--tinta-suave); text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px">Manutenções (todas)</div>
+        <div class="mini-tabela" style="max-height:260px">${ma.slice(0, 60).map(m => `<div class="linha-timeline"><span class="d">${brDia(m.d).substring(0, 5)}/${m.d.substring(2, 4)}</span><span>${esc(m.ofi)} <small style="color:var(--tinta-suave)">${esc(m.te)}${m.odo ? ' • ' + fmtInt(m.odo) + ' km' : ''}</small>${m.acid ? ' <span class="badge indisponivel">acidente</span>' : ''}</span><span class="v">${fmtMoeda(m.v)}</span></div>`).join('') || '<div class="nao">Sem manutenções registradas</div>'}</div></div>
+    </div>`;
+  return secao('Histórico de abastecimento e manutenção (GoodManager)', html, `<span class="badge neutro">${ab.length} meses • ${ma.length} serviços</span>`);
+}
+
+
+/* ============================================================
+   PDFs DE ORDENS DE SERVIÇO (índice do Drive)
+   ============================================================ */
+function indexarPdfs(lista) {
+  ESTADO.pdfsPorOS = {}; ESTADO.pdfsPorPlaca = {};
+  lista.forEach(f => {
+    (f.os || []).forEach(o => { (ESTADO.pdfsPorOS[o] = ESTADO.pdfsPorOS[o] || []).push(f); });
+    (f.placas || []).forEach(p => { (ESTADO.pdfsPorPlaca[p] = ESTADO.pdfsPorPlaca[p] || []).push(f); });
+  });
+  ESTADO.pdfsTotal = lista.length;
+}
+function pdfsDaOS(os) { return ESTADO.pdfsPorOS[String(os || '').replace(/\D/g, '')] || []; }
+function pdfsDaViatura(v) {
+  const vistos = {}; const saida = [];
+  const add = f => { if (!vistos[f.id]) { vistos[f.id] = 1; saida.push(f); } };
+  (ESTADO.pdfsPorPlaca[v.placa] || []).forEach(add);
+  if (v.placaMerc && v.placaMerc !== v.placa) (ESTADO.pdfsPorPlaca[v.placaMerc] || []).forEach(add);
+  if (v.placaRes) (ESTADO.pdfsPorPlaca[v.placaRes] || []).forEach(add);
+  // OS do GoodManager desta viatura que têm PDF nomeado só pelo número
+  (ESTADO.dados.os || []).filter(o => o.placa === v.placa || o.placa === v.placaMerc).forEach(o => pdfsDaOS(o.os).forEach(add));
+  return saida;
+}
+function pdfLinkHtml(os) {
+  const l = pdfsDaOS(os);
+  if (!l.length) return '';
+  return l.map(f => `<a class="pdf-link" href="${escAttr(f.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="${escAttr(f.nome)}">${icoPdf()} PDF</a>`).join(' ');
+}
+function diasAte(iso) {
+  if (!iso) return null;
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  return Math.round((new Date(iso + 'T00:00:00') - hoje) / 86400000);
+}
+function prazoHtml(iso, texto) {
+  const d = diasAte(iso);
+  if (d === null) return esc(texto || '—');
+  const cls = d < 0 ? 'vencido' : d <= 3 ? 'urgente' : 'ok';
+  const rot = d < 0 ? `vencido há ${-d} d` : d === 0 ? 'vence hoje' : `${d} d`;
+  return `<span class="prazo ${cls}" title="${esc(texto)}">${esc((texto || '').substring(0, 10))} <small>(${rot})</small></span>`;
+}
+
+/* ============================================================
+   ORDENS DE SERVIÇO
+   ============================================================ */
+function renderOS(lista) {
+  const porPlaca = {}; ESTADO.veiculos.forEach(v => { porPlaca[v.placa] = v; if (v.placaMerc) porPlaca[v.placaMerc] = v; });
+  const filtroAtivo = Object.values(ESTADO.filtros).some(s => s.size) || ESTADO.busca || ESTADO.odoMin !== null || ESTADO.odoMax !== null;
+  const exib = new Set(lista.map(v => v.placa));
+  const passa = o => { const v = porPlaca[o.placa]; return v ? exib.has(v.placa) : !filtroAtivo; };
+  const todas = (ESTADO.dados.os || []).filter(passa);
+  const pend = todas.filter(o => o.origem === 'PENDENTE');
+  const ace = todas.filter(o => o.origem === 'ACEITE');
+  const cobradas = pend.filter(o => /^cobradas$/i.test(o.status.trim()));
+  const emAndamento = pend.filter(o => !/^cobradas$/i.test(o.status.trim()));
+  const gestor = pend.filter(o => /aguardando\s+cliente/i.test(o.status));
+  const agAceite = ace.filter(o => /aguardando/i.test(o.status));
+  const vencidos = agAceite.filter(o => diasAte(o.limiteISO) !== null && diasAte(o.limiteISO) < 0);
+  const urgentes = agAceite.filter(o => { const d = diasAte(o.limiteISO); return d !== null && d >= 0 && d <= 3; });
+  const orcadoPend = emAndamento.reduce((s, o) => s + (o.valor || 0), 0);
+
+  htm('kpis-os', [
+    kpi('OS em andamento', emAndamento.length, fmtMoeda(orcadoPend) + ' orçado', 'ambar', null, true),
+    kpi('Aguardando gestor', gestor.length, 'status "Aguardando CLIENTE"', gestor.length ? 'vermelho' : 'verde', null, true),
+    kpi('Aguardando aceite', agAceite.length, fmtMoeda(agAceite.reduce((s, o) => s + (o.valor || 0), 0)), agAceite.length ? 'ambar' : 'verde', null, true),
+    kpi('Aceite vencido', vencidos.length, 'prazo final ultrapassado', vencidos.length ? 'vermelho' : 'verde', null, true),
+    kpi('Aceite vence em ≤ 3 dias', urgentes.length, 'atenção do gestor', urgentes.length ? 'ambar' : 'verde', null, true),
+    kpi('OS cobradas (lista)', cobradas.length, fmtMoeda(cobradas.reduce((s, o) => s + (o.aprovado || o.valor || 0), 0)), 'ciano', null, true),
+    kpi('PDFs de OS no Drive', ESTADO.pdfsTotal || 0, 'pasta de ordens de serviço', '', null, true)
+  ].join(''));
+
+  const g = el('graficos-os'); if (!g) return; g.innerHTML = '';
+  g.appendChild(cartaoAgregado('OS por status', pend, o => o.status, o => 1, x => x + ' OS', null, { largo: true, cor: 'var(--ambar)' }));
+  g.appendChild(cartaoAgregado('Valor orçado por unidade (em andamento)', emAndamento, o => o.unidade, o => o.valor || 0, fmtMoeda, null));
+  g.appendChild(cartaoAgregado('Valor orçado por oficina (em andamento)', emAndamento, o => o.oficina, o => o.valor || 0, fmtMoeda, null, { max: 12 }));
+  g.appendChild(cartaoTabelaAceites(ace, porPlaca));
+  g.appendChild(cartaoTabelaOS(pend, porPlaca));
+}
+
+function botoesStatus(lista, chaveEstado, aoClicar) {
+  const contagem = contarPor(lista, 'status');
+  const chaves = ordenarChaves(Array.from(contagem.keys()), contagem);
+  const atual = ESTADO[chaveEstado];
+  const html = `<div class="filtro-status"><button class="subaba ${!atual ? 'ativa' : ''}" data-s="">Todas (${lista.length})</button>${chaves.map(c => `<button class="subaba ${atual === c ? 'ativa' : ''}" data-s="${escAttr(c)}">${esc(c)} (${contagem.get(c)})</button>`).join('')}</div>`;
+  return { html, ligar: card => card.querySelectorAll('.filtro-status button').forEach(b => b.addEventListener('click', () => { ESTADO[chaveEstado] = b.dataset.s; aoClicar(); })) };
+}
+
+function cartaoTabelaAceites(ace, porPlaca) {
+  const card = document.createElement('div'); card.className = 'cartao largo';
+  const bs = botoesStatus(ace, 'filtroStatusAceite', () => renderOS(ESTADO.filtrado));
+  let lista = ESTADO.filtroStatusAceite ? ace.filter(o => o.status === ESTADO.filtroStatusAceite) : ace;
+  lista = lista.slice().sort((a, b) => { const da = diasAte(a.limiteISO), db = diasAte(b.limiteISO); if (da === null && db === null) return 0; if (da === null) return 1; if (db === null) return -1; return da - db; });
+  card.innerHTML = `<div class="cartao-cab"><h3>Aceites — acompanhamento do prazo</h3><small>${lista.length} OS</small></div>${bs.html}
+    <div class="mini-tabela" style="max-height:420px"><table class="tabela-simples"><thead><tr><th>OS</th><th>Placa</th><th>Modelo</th><th>Unidade</th><th>Aprovação</th><th>Conclusão</th><th>Valor</th><th>Prazo p/ aceite</th><th>Status</th><th>Obs.</th></tr></thead><tbody>
+    ${lista.slice(0, 300).map(o => { const v = porPlaca[o.placa]; return `<tr class="${v ? 'linha' : ''}" ${v ? `data-placa="${escAttr(v.placa)}"` : ''}><td><b style="font-family:var(--fonte-dados)">${esc(o.os)}</b> ${pdfLinkHtml(o.os)}</td><td style="font-family:var(--fonte-dados)">${esc(o.placa)}</td><td>${esc(v ? v.modeloCurto : o.modelo)}</td><td>${esc(o.unidade)}</td><td style="white-space:nowrap">${esc((o.data || '').substring(0, 10))}</td><td style="white-space:nowrap">${esc((o.conclusao || '').substring(0, 10))}</td><td class="num">${fmtMoeda(o.valor || 0)}</td><td>${/aguardando|contest/i.test(o.status) ? prazoHtml(o.limiteISO, o.limiteAceite) : esc((o.limiteAceite || '').substring(0, 10) || '—')}</td><td>${badgeStatusOS(o.status)}</td><td title="${escAttr(o.obs)}">${esc((o.obs || '').substring(0, 60))}</td></tr>`; }).join('') || '<tr><td colspan="10"><div class="vazio">Nenhuma OS</div></td></tr>'}</tbody></table></div>
+    <div class="cartao-dica">Fonte: aba Aceites (col. H = Data Final p/ Aceite, col. I = Status). Vermelho = prazo vencido; laranja = vence em até 3 dias.</div>`;
+  bs.ligar(card);
+  card.querySelectorAll('tr.linha').forEach(t => t.addEventListener('click', () => abrirFicha(t.dataset.placa)));
+  return card;
+}
+
+function cartaoTabelaOS(pend, porPlaca) {
+  const card = document.createElement('div'); card.className = 'cartao largo';
+  const bs = botoesStatus(pend, 'filtroStatusOS', () => renderOS(ESTADO.filtrado));
+  const lista = (ESTADO.filtroStatusOS ? pend.filter(o => o.status === ESTADO.filtroStatusOS) : pend).slice().sort((a, b) => (b.valor || 0) - (a.valor || 0));
+  card.innerHTML = `<div class="cartao-cab"><h3>Ordens de serviço — status (aba OS, col. G)</h3><small>${lista.length} OS</small></div>${bs.html}
+    <div class="mini-tabela" style="max-height:520px"><table class="tabela-simples"><thead><tr><th>OS</th><th>Placa</th><th>Modelo</th><th>Unidade</th><th>Oficina</th><th>Orçado</th><th>Aprovado</th><th>Status</th><th>Observações / relato</th></tr></thead><tbody>
+    ${lista.slice(0, 400).map(o => { const v = porPlaca[o.placa]; return `<tr class="${v ? 'linha' : ''}" ${v ? `data-placa="${escAttr(v.placa)}"` : ''}><td><b style="font-family:var(--fonte-dados)">${esc(o.os)}</b> ${pdfLinkHtml(o.os)}</td><td style="font-family:var(--fonte-dados)">${esc(o.placa)}</td><td>${esc(v ? v.modeloCurto : o.modelo)}</td><td>${esc(o.unidade)}</td><td title="${escAttr(o.oficina)}">${esc((o.oficina || '').substring(0, 32))}</td><td class="num">${fmtMoeda(o.valor || 0)}</td><td class="num">${o.aprovado ? fmtMoeda(o.aprovado) : '—'}</td><td>${badgeStatusOS(o.status)}</td><td title="${escAttr([o.obs, o.relato, o.justificativa].filter(Boolean).join(' • '))}">${esc([o.obs, o.relato].filter(Boolean).join(' • ').substring(0, 80))}</td></tr>`; }).join('') || '<tr><td colspan="9"><div class="vazio">Nenhuma OS</div></td></tr>'}</tbody></table></div>`;
+  bs.ligar(card);
+  card.querySelectorAll('tr.linha').forEach(t => t.addEventListener('click', () => abrirFicha(t.dataset.placa)));
+  return card;
+}
+
+function badgeStatusOS(s) {
+  const t = String(s || '');
+  const c = /^cobradas$/i.test(t.trim()) ? 'alienado' : /aceitos/i.test(t) ? 'disponivel' : /aguardando\s+cliente|contest/i.test(t) ? 'indisponivel' : /aguardando|revis|não enviadas/i.test(t) ? 'manutencao' : /aprovad|conclu/i.test(t) ? 'neutro' : 'cedido';
+  return `<span class="badge ${c}">${esc(t || '—')}</span>`;
+}
+
+/* ============================================================
+   PAGAMENTOS (títulos Ticket Log)
+   ============================================================ */
+/** Mapeia as colunas das abas de títulos pelo cabeçalho real. */
+function mapearTitulos(tab, tipo) {
+  if (!tab || !tab.cab) return { linhas: [], cab: [], aba: '' };
+  const cab = tab.cab.map(c => normalizar(c));
+  const col = (...regs) => { for (const r of regs) { const i = cab.findIndex(c => r.test(c)); if (i >= 0) return i; } return -1; };
+  const I = {
+    titulo: col(/^TITULO$/, /TITULO/), nf: col(/^NOTAFISCAL$/, /NOTAFISCAL/), bruto: col(/VALORBRUTO/), juros: col(/JUROS/),
+    emissao: col(/DATADEEMISSAO|EMISS/), venc: col(/VENC/), comp: col(/COMPET/), np: col(/NOTADEPAGAMENTO/), sei: col(/^PROCESSOSEI$/, /PROCESSO/),
+    desconto: col(/DESCONTO/), glosaIMR: col(/GLOSAIMR/), glosaPrecos: col(/GLOSAPRECOS/),
+    pecas: col(/^VALOREMPECAS$/), mo: col(/^VALORMAODEOBRA$/), pecasAcid: col(/PECASACIDENTE/), moAcid: col(/MAODEOBRAACIDENTE/),
+    seiAtesto: col(/SEIATESTO/), seiRel: col(/SEIRELATORIO(ABAST|MANUT)/), seiNF: col(/^SEINF$/), seiGlosa: col(/SEIRELATORIOGLOSA/), seiIMR: col(/SEIIMR/), chave: col(/CHAVE/)
+  };
+  const num = x => (typeof x === 'number') ? x : (parseFloat(String(x || '').replace(/R\$\s?/, '').replace(/\./g, '').replace(',', '.')) || 0);
+  const g = (l, k) => I[k] >= 0 ? l[I[k]] : '';
+  const linhas = tab.linhas.map(l => {
+    const comp = String(g(l, 'comp') || '');
+    let mes = ''; const m = comp.match(/(\d{1,2})\/(\d{4})/); if (m) mes = m[2] + '-' + ('0' + m[1]).slice(-2);
+    const t = {
+      tipo, titulo: String(g(l, 'titulo') || '').replace(/\.0$/, ''), nf: String(g(l, 'nf') || '').replace(/\.0$/, ''),
+      bruto: num(g(l, 'bruto')), juros: num(g(l, 'juros')), emissao: String(g(l, 'emissao') || ''), venc: String(g(l, 'venc') || ''), comp, mes,
+      np: String(g(l, 'np') || ''), sei: String(g(l, 'sei') || ''), desconto: num(g(l, 'desconto')), glosaIMR: num(g(l, 'glosaIMR')), glosaPrecos: num(g(l, 'glosaPrecos')),
+      pecas: num(g(l, 'pecas')), mo: num(g(l, 'mo')), pecasAcid: num(g(l, 'pecasAcid')), moAcid: num(g(l, 'moAcid')),
+      docs: { Atesto: g(l, 'seiAtesto'), Relatório: g(l, 'seiRel'), NF: g(l, 'seiNF'), 'Rel. glosa': g(l, 'seiGlosa'), IMR: g(l, 'seiIMR') }, chave: String(g(l, 'chave') || '')
+    };
+    t.glosa = t.glosaIMR + t.glosaPrecos;
+    t.liquido = t.bruto - t.desconto - t.glosa;
+    return t;
+  }).filter(t => t.titulo);
+  return { linhas, cab: tab.cab, aba: tab.aba, I };
+}
+
+function renderPagamentos() {
+  const T = ESTADO.dados.titulos || {};
+  const g = el('graficos-pag'); if (!g) return;
+  if (T.erro || (!T.abast && !T.manut)) {
+    htm('kpis-pag', ''); htm('periodo-pag', '');
+    g.innerHTML = `<div class="cartao largo"><div class="vazio"><b>Planilha de títulos indisponível</b>${esc(T.erro || 'Abas "Títulos Abast." / "Títulos Manut." não encontradas.')}<br><small>Confira ID_TITULOS em CONFIG e o compartilhamento da planilha com a conta que executa o app.</small></div></div>`;
+    return;
+  }
+  const A = mapearTitulos(T.abast, 'Abastecimento'), M = mapearTitulos(T.manut, 'Manutenção');
+  const todos = A.linhas.concat(M.linhas);
+  const meses = Array.from(new Set(todos.map(t => t.mes).filter(Boolean))).sort();
+  const [ini, fim] = faixaPeriodo(ESTADO.periodoPag, meses);
+  renderPeriodo('periodo-pag', 'periodoPag', meses, `${A.linhas.length} títulos de abastecimento • ${M.linhas.length} de manutenção`);
+  const sel = todos.filter(t => t.mes >= ini && t.mes <= fim);
+  const ab = sel.filter(t => t.tipo === 'Abastecimento'), ma = sel.filter(t => t.tipo === 'Manutenção');
+  const soma = (l, k) => l.reduce((s, t) => s + (t[k] || 0), 0);
+  const semNP = sel.filter(t => !t.np);
+  const vencAberto = semNP.filter(t => { const v = t.venc.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); return v && diasAte(v[3] + '-' + ('0' + v[2]).slice(-2) + '-' + ('0' + v[1]).slice(-2)) < 0; });
+  const nMeses = mesesEntre(ini, fim).length;
+
+  htm('kpis-pag', [
+    kpi('Faturado (bruto)', fmtMoeda(soma(sel, 'bruto')), fmtMoeda(soma(sel, 'bruto') / Math.max(1, nMeses)) + ' por mês • ' + sel.length + ' títulos', '', null, true),
+    kpi('Abastecimento', fmtMoeda(soma(ab, 'bruto')), 'líquido ' + fmtMoeda(soma(ab, 'liquido')), 'ciano', null, true),
+    kpi('Manutenção', fmtMoeda(soma(ma, 'bruto')), 'peças ' + fmtMoeda(soma(ma, 'pecas') + soma(ma, 'pecasAcid')) + ' • mão de obra ' + fmtMoeda(soma(ma, 'mo') + soma(ma, 'moAcid')), 'ambar', null, true),
+    kpi('Desconto contratual', fmtMoeda(soma(sel, 'desconto')), '4,67% sobre abastecimento', 'verde', null, true),
+    kpi('Glosas', fmtMoeda(soma(sel, 'glosa')), 'IMR ' + fmtMoeda(soma(sel, 'glosaIMR')) + ' • preços abusivos ' + fmtMoeda(soma(sel, 'glosaPrecos')), soma(sel, 'glosa') ? 'verde' : '', null, true),
+    kpi('Juros cobrados', fmtMoeda(soma(sel, 'juros')), soma(sel, 'juros') ? sel.filter(t => t.juros).length + ' títulos com juros' : 'nenhum', soma(sel, 'juros') ? 'vermelho' : 'verde', null, true),
+    kpi('Sem nota de pagamento', semNP.length, vencAberto.length ? vencAberto.length + ' já vencidos' : 'a liquidar', vencAberto.length ? 'vermelho' : semNP.length ? 'ambar' : 'verde', null, true),
+    kpi('Acidentes (manutenção)', fmtMoeda(soma(ma, 'pecasAcid') + soma(ma, 'moAcid')), ma.filter(t => t.pecasAcid || t.moAcid).length + ' títulos com acidente', 'roxo', null, true)
+  ].join(''));
+
+  g.innerHTML = '';
+  const mm = mesesEntre(ini, fim);
+  const serie = (l, k) => { const o = {}; l.forEach(t => { o[t.mes] = (o[t.mes] || 0) + (t[k] || 0); }); return o; };
+  g.appendChild(cartaoColunas('Faturamento bruto por competência', mm, serie(ab, 'bruto'), serie(ma, 'bruto'), fmtMoeda, fmtMoeda, 'Abastecimento', 'Manutenção'));
+  g.appendChild(cartaoColunas('Manutenção — peças × mão de obra', mm, serie(ma.map(t => ({ mes: t.mes, x: t.pecas + t.pecasAcid })), 'x'), serie(ma.map(t => ({ mes: t.mes, x: t.mo + t.moAcid })), 'x'), fmtMoeda, fmtMoeda, 'Peças', 'Mão de obra'));
+  g.appendChild(cartaoColunas('Glosas por competência', mm, serie(sel, 'glosaIMR'), serie(sel, 'glosaPrecos'), fmtMoeda, fmtMoeda, 'Glosa IMR', 'Glosa preços abusivos'));
+  if (T.glosaHist && T.glosaHist.length) {
+    const gh = {}; const mh = []; T.glosaHist.forEach(x => { const m = x.comp.match(/(\d{1,2})\/(\d{4})/); if (!m) return; const k = m[2] + '-' + ('0' + m[1]).slice(-2); gh[k] = x.valor; mh.push(k); });
+    mh.sort();
+    g.appendChild(cartaoColunas('Histórico de glosa de preços abusivos (aba Resumo Glosa, desde ' + rotMes(mh[0]) + ')', mh, gh, null, fmtMoeda, null, 'Glosa preços abusivos (R$)'));
+  }
+  g.appendChild(cartaoAgregado('Por ano (bruto)', sel, t => t.mes.substring(0, 4), t => t.bruto, fmtMoeda, null));
+  g.appendChild(cartaoDeducoes(sel));
+  g.appendChild(cartaoTabelaTitulos('Títulos de abastecimento', ab, 'Abastecimento'));
+  g.appendChild(cartaoTabelaTitulos('Títulos de manutenção', ma, 'Manutenção'));
+}
+
+function cartaoDeducoes(sel) {
+  const card = document.createElement('div'); card.className = 'cartao';
+  const soma = k => sel.reduce((s, t) => s + (t[k] || 0), 0);
+  const itens = [['Bruto faturado', soma('bruto')], ['(−) Desconto contratual', soma('desconto')], ['(−) Glosa IMR', soma('glosaIMR')], ['(−) Glosa preços abusivos', soma('glosaPrecos')], ['(=) Líquido', soma('liquido')], ['(+) Juros cobrados pela Ticket', soma('juros')]];
+  card.innerHTML = `<div class="cartao-cab"><h3>Composição do período</h3><small>${sel.length} títulos</small></div><div class="grade-dados">${itens.map(i => `<div class="dado"><div class="k">${i[0]}</div><div class="v ${/Glosa|Desconto/.test(i[0]) ? 'ok-txt' : /Juros/.test(i[0]) && i[1] ? 'alerta-txt' : ''}">${fmtMoeda(i[1])}</div></div>`).join('')}</div>
+    <div class="cartao-dica">Líquido = bruto − desconto contratual − glosas. Juros aparecem destacados na NF e não entram no atesto.</div>`;
+  return card;
+}
+
+function cartaoTabelaTitulos(titulo, lista, tipo) {
+  const card = document.createElement('div'); card.className = 'cartao largo';
+  const ordenada = lista.slice().sort((a, b) => (b.mes || '').localeCompare(a.mes || ''));
+  const abast = tipo === 'Abastecimento';
+  const cab = abast ? ['Compet.', 'Título', 'NF', 'Emissão', 'Venc.', 'Bruto', 'Desc. 4,67%', 'Glosa IMR', 'Glosa preços', 'Líquido', 'Juros', 'Nota pagto', 'Processo SEI', 'Docs SEI']
+                    : ['Compet.', 'Título', 'NF', 'Emissão', 'Venc.', 'Bruto', 'Peças', 'Mão de obra', 'Peças acid.', 'MO acid.', 'Glosa IMR', 'Líquido', 'Juros', 'Nota pagto', 'Processo SEI', 'Docs SEI'];
+  const docsHtml = t => Object.keys(t.docs).filter(k => t.docs[k]).map(k => `<span class="badge neutro" title="${k}: SEI ${esc(t.docs[k])}" style="cursor:pointer" onclick="copiar('${escAttr(String(t.docs[k]))}')">${k} ${esc(String(t.docs[k]))}</span>`).join(' ');
+  const sei = t => t.sei ? `<span style="font-family:var(--fonte-dados); cursor:pointer" title="Clique para copiar" onclick="copiar('${escAttr(t.sei)}')">${esc(t.sei)}</span>` : '—';
+  const np = t => t.np ? esc(t.np) : '<span class="badge manutencao">pendente</span>';
+  const money = x => `<td class="num">${x ? fmtMoeda(x) : '—'}</td>`;
+  card.innerHTML = `<div class="cartao-cab"><h3>${titulo}</h3><small>${ordenada.length} títulos • clique no SEI para copiar</small></div>
+    <div class="mini-tabela" style="max-height:520px"><table class="tabela-simples"><thead><tr>${cab.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>
+    ${ordenada.map(t => abast
+      ? `<tr><td style="white-space:nowrap">${esc(t.comp)}</td><td style="font-family:var(--fonte-dados)">${esc(t.titulo)}</td><td style="font-family:var(--fonte-dados)">${esc(t.nf)}</td><td>${esc(t.emissao)}</td><td>${esc(t.venc)}</td>${money(t.bruto)}${money(t.desconto)}${money(t.glosaIMR)}${money(t.glosaPrecos)}${money(t.liquido)}${money(t.juros)}<td>${np(t)}</td><td>${sei(t)}</td><td>${docsHtml(t)}</td></tr>`
+      : `<tr><td style="white-space:nowrap">${esc(t.comp)}</td><td style="font-family:var(--fonte-dados)">${esc(t.titulo)}</td><td style="font-family:var(--fonte-dados)">${esc(t.nf)}</td><td>${esc(t.emissao)}</td><td>${esc(t.venc)}</td>${money(t.bruto)}${money(t.pecas)}${money(t.mo)}${money(t.pecasAcid)}${money(t.moAcid)}${money(t.glosaIMR)}${money(t.liquido)}${money(t.juros)}<td>${np(t)}</td><td>${sei(t)}</td><td>${docsHtml(t)}</td></tr>`
+    ).join('') || `<tr><td colspan="${cab.length}"><div class="vazio">Nenhum título no período</div></td></tr>`}</tbody></table></div>`;
+  return card;
+}
+
+</script>
