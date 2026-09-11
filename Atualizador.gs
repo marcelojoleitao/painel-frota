@@ -42,7 +42,7 @@
  */
 
 const GITHUB = {
-  repo:   'SEU_USUARIO/painel-frota',   // ex.: 'marcelojol/painel-frota'
+  repo:   'marcelojoleitao/painel-frota',
   branch: 'main',
 
   // Arquivos do projeto → caminho no repositório
