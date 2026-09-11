@@ -50,6 +50,11 @@ const CONFIG = {
   STATUS_OCULTOS_PADRAO: ['ALIENADO'],
   CACHE_SEG: 3600,        // 1 h (máximo do CacheService: 6 h). Use instalarGatilho() para manter aquecido.
 
+  // Edição (somente ADMINS): coluna bloqueada se tiver fórmula nas linhas de
+  // verificação ou fundo nessas cores (azul = fórmula, cinza = preenchida por script)
+  EDICAO_CORES_BLOQUEADAS: ['#cfe2f3', '#e8e8e8'],
+  EDICAO_LINHAS_VERIFICACAO: [2, 3],
+
   TITULO: 'Painel da Frota — 16ª SPRF/CE',
   FUSO: 'America/Fortaleza'
 };
@@ -208,7 +213,11 @@ function carregarDados(token, forcarAtualizacao) {
   } else payload.meta.doCache = true;
 
   payload.usuario = { email: sessao.email, nome: sessao.nome || '', lotacao: sessao.lotacao || '', admin: !!sessao.admin };
-  if (!sessao.admin) payload.solicitacoes = [];   // dado sensível: só administrador
+  if (!sessao.admin) { payload.solicitacoes = []; payload.edicao = null; }
+  else {
+    try { payload.edicao = _mapaEdicao_(SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_BASE)).lista; }
+    catch (e) { payload.edicao = null; Logger.log('Mapa de edição: ' + e); }
+  }
   return payload;
 }
 
@@ -558,6 +567,140 @@ function instalarGatilho() {
   else gatilho.everyMinutes(30).create();
   aquecerCache();
   return 'Gatilho instalado.';
+}
+
+/* ------------------------------------------------------------ */
+/*  EDIÇÃO DA ConsultaBD (somente administrador)                 */
+/* ------------------------------------------------------------ */
+
+/**
+ * Classifica cada coluna da ConsultaBD como editável ou bloqueada.
+ * Bloqueada = fórmula em qualquer linha de verificação OU fundo azul/cinza
+ * (cores em CONFIG). A verificação é feita na hora, direto na planilha —
+ * colunas novas com fórmula já nascem protegidas.
+ */
+function _mapaEdicao_(aba) {
+  const nCols = aba.getLastColumn();
+  const cab = aba.getRange(1, 1, 1, nCols).getValues()[0].map(v => String(v || '').trim());
+  const bloqueada = new Array(nCols).fill(''), cores = CONFIG.EDICAO_CORES_BLOQUEADAS.map(c => c.toLowerCase());
+  CONFIG.EDICAO_LINHAS_VERIFICACAO.forEach(linha => {
+    if (linha > aba.getLastRow()) return;
+    const formulas = aba.getRange(linha, 1, 1, nCols).getFormulas()[0];
+    const fundos = aba.getRange(linha, 1, 1, nCols).getBackgrounds()[0];
+    for (let c = 0; c < nCols; c++) {
+      if (bloqueada[c]) continue;
+      if (formulas[c]) bloqueada[c] = 'fórmula (linha ' + linha + ')';
+      else if (cores.indexOf(String(fundos[c]).toLowerCase()) >= 0) bloqueada[c] = 'cor ' + fundos[c] + ' (linha ' + linha + ')';
+    }
+  });
+  // liga cada coluna ao campo curto do app (quando mapeado em CAMPOS)
+  const idx = _mapearCampos_(cab);
+  const campoPorCol = {};
+  Object.keys(idx).forEach(k => { campoPorCol[idx[k]] = k; });
+  const lista = [];
+  for (let c = 0; c < nCols; c++) {
+    if (!cab[c]) continue;
+    lista.push({ col: c + 1, nome: cab[c], campo: campoPorCol[c] || '', editavel: !bloqueada[c], motivo: bloqueada[c] });
+  }
+  return { lista: lista, porCampo: (function () { const m = {}; lista.forEach(x => { if (x.campo) m[x.campo] = x; }); return m; })() };
+}
+
+const CAMPOS_NUMERICOS_EDICAO = ['anoEx', 'anoFab', 'anoMod', 'odometro', 'qtdAbast'];
+
+/** Grava alterações de UMA viatura. alteracoes = { campoCurto: novoValor }. */
+function salvarViatura(token, placa, alteracoes) {
+  const sessao = _sessao_(token);
+  if (!sessao) return { expirado: true };
+  if (!sessao.admin) return { ok: false, erro: 'Apenas o administrador pode editar.' };
+  placa = String(placa || '').trim().toUpperCase();
+  if (!placa) return { ok: false, erro: 'Placa não informada.' };
+
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Planilha em uso por outra gravação. Tente de novo.' }; }
+  try {
+    const aba = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_BASE);
+    const mapa = _mapaEdicao_(aba);
+    const colPlaca = mapa.porCampo.placa ? mapa.porCampo.placa.col : 1;
+    const placas = aba.getRange(2, colPlaca, Math.max(1, aba.getLastRow() - 1), 1).getValues().map(l => String(l[0] || '').trim().toUpperCase());
+    const posicao = placas.indexOf(placa);
+    if (posicao < 0) return { ok: false, erro: 'Placa ' + placa + ' não encontrada na ConsultaBD.' };
+    const linha = posicao + 2;
+
+    const gravados = [], recusados = [];
+    Object.keys(alteracoes || {}).forEach(campo => {
+      const info = mapa.porCampo[campo];
+      if (!info) { recusados.push(campo + ' (coluna não mapeada)'); return; }
+      if (!info.editavel) { recusados.push(info.nome + ' (' + info.motivo + ')'); return; }
+      if (campo === 'placa') { recusados.push('Placa (chave da linha — não é alterada por aqui)'); return; }
+      let valor = alteracoes[campo];
+      if (CAMPOS_NUMERICOS_EDICAO.indexOf(campo) >= 0) valor = (valor === '' || valor === null) ? '' : _num_(valor);
+      else valor = valor === null || valor === undefined ? '' : String(valor);
+      aba.getRange(linha, info.col).setValue(valor);
+      gravados.push(info.nome);
+    });
+    SpreadsheetApp.flush();
+    if (gravados.length) { limparCache(); Logger.log('EDIÇÃO por ' + sessao.email + ' — ' + placa + ': ' + gravados.join(', ')); }
+    return { ok: true, gravados: gravados, recusados: recusados };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  } finally { trava.releaseLock(); }
+}
+
+/** Cadastra uma viatura nova: replica as fórmulas da última linha e grava os campos editáveis. */
+function criarViatura(token, dados) {
+  const sessao = _sessao_(token);
+  if (!sessao) return { expirado: true };
+  if (!sessao.admin) return { ok: false, erro: 'Apenas o administrador pode cadastrar.' };
+  const placa = String((dados || {}).placa || '').trim().toUpperCase();
+  if (!placa) return { ok: false, erro: 'Informe a placa.' };
+
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Planilha em uso por outra gravação. Tente de novo.' }; }
+  try {
+    const aba = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_BASE);
+    const mapa = _mapaEdicao_(aba);
+    const nCols = aba.getLastColumn();
+    const colPlaca = mapa.porCampo.placa ? mapa.porCampo.placa.col : 1;
+    const ultima = aba.getLastRow();
+    const placas = aba.getRange(2, colPlaca, Math.max(1, ultima - 1), 1).getValues().map(l => String(l[0] || '').trim().toUpperCase());
+    if (placas.indexOf(placa) >= 0) return { ok: false, erro: 'A placa ' + placa + ' já existe na ConsultaBD.' };
+
+    const nova = ultima + 1;
+    // replica as fórmulas da última linha de dados (referências relativas se ajustam sozinhas)
+    const formulas = aba.getRange(ultima, 1, 1, nCols).getFormulasR1C1()[0];
+    // valores editáveis
+    const valores = new Array(nCols).fill('');
+    const gravados = [], recusados = [];
+    Object.keys(dados || {}).forEach(campo => {
+      const info = mapa.porCampo[campo];
+      if (!info) { if (dados[campo] !== '') recusados.push(campo); return; }
+      if (!info.editavel && campo !== 'placa') { if (dados[campo] !== '') recusados.push(info.nome + ' (' + info.motivo + ')'); return; }
+      let valor = dados[campo];
+      if (CAMPOS_NUMERICOS_EDICAO.indexOf(campo) >= 0) valor = (valor === '' || valor === null) ? '' : _num_(valor);
+      else valor = valor === null || valor === undefined ? '' : String(valor);
+      valores[info.col - 1] = campo === 'placa' ? placa : valor;
+      if (valor !== '' || campo === 'placa') gravados.push(info.nome);
+    });
+    valores[colPlaca - 1] = placa;
+    aba.getRange(nova, 1, 1, nCols).setValues([valores]);
+    for (let c = 0; c < nCols; c++) if (formulas[c]) aba.getRange(nova, c + 1).setFormulaR1C1(formulas[c]);
+    SpreadsheetApp.flush();
+    limparCache();
+    Logger.log('CADASTRO por ' + sessao.email + ' — ' + placa + ' (linha ' + nova + '): ' + gravados.join(', '));
+    return { ok: true, linha: nova, gravados: gravados, recusados: recusados };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  } finally { trava.releaseLock(); }
+}
+
+/** Rode no editor: mostra coluna a coluna o que ficou editável e por que as demais bloquearam. */
+function diagnosticarEdicao() {
+  const aba = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_BASE);
+  const mapa = _mapaEdicao_(aba);
+  const editaveis = mapa.lista.filter(x => x.editavel), bloqueadas = mapa.lista.filter(x => !x.editavel);
+  Logger.log('EDITÁVEIS (' + editaveis.length + '): ' + editaveis.map(x => x.nome + (x.campo ? '' : ' [sem campo no app]')).join(' | '));
+  Logger.log('BLOQUEADAS (' + bloqueadas.length + '):');
+  bloqueadas.forEach(x => Logger.log('  ' + x.nome + ' → ' + x.motivo));
 }
 
 /* ------------------------------------------------------------ */

@@ -471,4 +471,14 @@ table.tabela td.acoes { text-align: right; }
 .topo-abas { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 .topo-abas::-webkit-scrollbar { display: none; }
 @media (max-width: 1250px) { .topo-aba .txt { display: none; } .topo-aba { font-size: 16px; padding: 6px 9px; } }
+
+/* ============================ FORMULÁRIO DE EDIÇÃO ============================ */
+.form-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px 14px; }
+.form-campo label { display: block; font-size: 11px; font-weight: 700; color: var(--tinta-suave); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 3px; }
+.form-campo input, .form-campo select, .form-campo textarea { width: 100%; padding: 8px 10px; border: 1.5px solid var(--borda-forte); border-radius: var(--raio-p); font-size: 13.5px; font-family: inherit; background: #fff; }
+.form-campo input:focus, .form-campo select:focus, .form-campo textarea:focus { outline: 2px solid var(--azul-claro); border-color: var(--azul-claro); }
+.form-campo.mudou input, .form-campo.mudou select, .form-campo.mudou textarea { border-color: var(--ambar); background: #FFFBF3; }
+.form-campo.largo { grid-column: 1 / -1; }
+.form-acoes { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
+.form-aviso { font-size: 12.5px; color: var(--tinta-suave); }
 </style>

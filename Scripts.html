@@ -14,7 +14,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.1.1';
+const VERSAO_PAINEL = '2.2.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -606,6 +606,7 @@ function abrirFicha(placa) {
     <div class="titulo"><h2>${esc(v.modelo)}</h2>
       <div class="sub"><span>${esc(v.unidade || 'sem unidade')}</span> • <span>${esc(v.tipo)}</span> • <span>${esc(v.uso)}</span>
         ${badgeStatus(v.status)} ${conceitoHtml(v.conceito)}</div></div>
+    ${ESTADO.admin && ESTADO.dados.edicao ? `<button class="topo-btn" onclick="abrirFormViatura('${escAttr(v.placa)}')" title="Editar campos desta viatura">✏️ Editar</button>` : ''}
     <button class="gaveta-fechar" onclick="fecharFicha()" title="Fechar (Esc)">×</button>`);
 
   const fotos = ['FD', 'LE', 'TR', 'LD'].map(ang => {
@@ -745,6 +746,7 @@ document.addEventListener('DOMContentLoaded', () => {
   ouvir('btn-ver-matricula', 'click', () => { const m = el('login-matricula'), b = el('btn-ver-matricula'); if (!m) return; m.type = m.type === 'password' ? 'text' : 'password'; if (b) b.textContent = m.type === 'password' ? 'ver' : 'ocultar'; });
   document.querySelectorAll('#periodo-uso, #periodo-manut').forEach(() => {});
   ouvir('btn-csv', 'click', exportarCsv);
+  ouvir('btn-nova-viatura', 'click', () => abrirFormViatura(null));
   ouvir('btn-colunas', 'click', e => { e.stopPropagation(); cls('menu-colunas', 'oculto', !el('menu-colunas').classList.contains('oculto')); });
   document.addEventListener('click', e => { if (!e.target.closest('.seletor-colunas')) cls('menu-colunas', 'oculto', true); });
   ouvir('btn-filtros', 'click', () => {
@@ -1445,6 +1447,129 @@ function cartaoTabelaTitulos(titulo, lista, tipo) {
       : `<tr><td style="white-space:nowrap">${esc(t.comp)}</td><td style="font-family:var(--fonte-dados)">${esc(t.titulo)}</td><td style="font-family:var(--fonte-dados)">${esc(t.nf)}</td><td>${esc(t.emissao)}</td><td>${esc(t.venc)}</td>${money(t.bruto)}${money(t.pecas)}${money(t.mo)}${money(t.pecasAcid)}${money(t.moAcid)}${money(t.glosaIMR)}${money(t.liquido)}${money(t.juros)}<td>${np(t)}</td><td>${sei(t)}</td><td>${docsHtml(t)}</td></tr>`
     ).join('') || `<tr><td colspan="${cab.length}"><div class="vazio">Nenhum título no período</div></td></tr>`}</tbody></table></div>`;
   return card;
+}
+
+
+/* ============================================================
+   EDIÇÃO / CADASTRO DE VIATURA (administrador)
+   ============================================================ */
+const GRUPOS_EDICAO = [
+  ['Identificação', ['placa', 'placaMerc', 'placaRes', 'modelo', 'tipo', 'categoria', 'especie', 'cor', 'comb', 'anoFab', 'anoMod', 'chassi', 'motor', 'renavam', 'municipio', 'nacionalidade', 'blind', 'carac', 'fipe']],
+  ['Patrimônio e SIPAC', ['unidade', 'uso', 'status', 'tombamento', 'unidTomb', 'crv', 'codCrv', 'crvFisico', 'cnpj', 'prop', 'freq']],
+  ['Documentos e fotos (links)', ['linkTomb', 'linkCrlv', 'fotoFD', 'fotoLE', 'fotoTR', 'fotoLD']],
+  ['Gestão', ['sugDesf', 'desf', 'statusInv', 'obsInv', 'obsCessao']]
+];
+const CAMPOS_SUGESTAO = ['unidade', 'uso', 'status', 'tipo', 'categoria', 'especie', 'cor', 'comb', 'blind', 'carac', 'prop', 'freq', 'sugDesf', 'unidTomb', 'crvFisico', 'nacionalidade', 'statusInv'];
+const CAMPOS_LONGOS = ['obsInv', 'obsCessao', 'desf', 'linkTomb', 'linkCrlv', 'fotoFD', 'fotoLE', 'fotoTR', 'fotoLD', 'modelo'];
+
+function _valorAtualCampo_(v, campo) {
+  if (!v) return '';
+  if (campo.indexOf('foto') === 0) return (v.fotos && v.fotos[campo.substring(4)]) || '';
+  const x = v[campo];
+  return x === null || x === undefined ? '' : String(x);
+}
+
+function abrirFormViatura(placa) {
+  const edicao = ESTADO.dados.edicao || [];
+  if (!ESTADO.admin || !edicao.length) { toast('Edição disponível apenas para o administrador.'); return; }
+  const porCampo = {}; edicao.forEach(e => { if (e.campo) porCampo[e.campo] = e; });
+  const v = placa ? ESTADO.veiculos.find(x => x.placa === placa) : null;
+  if (placa && !v) return;
+  const novo = !placa;
+
+  // sugestões por campo (valores já usados na frota)
+  const sugestoes = {};
+  CAMPOS_SUGESTAO.forEach(c => {
+    const m = new Map();
+    ESTADO.veiculos.forEach(x => { const val = _valorAtualCampo_(x, c); if (val) m.set(val, (m.get(val) || 0) + 1); });
+    sugestoes[c] = Array.from(m.keys()).sort((a, b) => m.get(b) - m.get(a)).slice(0, 40);
+  });
+
+  const usados = new Set();
+  const campoHtml = campo => {
+    const info = porCampo[campo];
+    if (!info || !info.editavel) return '';
+    usados.add(campo);
+    const atual = novo ? '' : _valorAtualCampo_(v, campo);
+    const chave = escAttr(campo);
+    if (campo === 'placa' && !novo)
+      return `<div class="form-campo"><label>${esc(info.nome)}</label><input value="${escAttr(atual)}" disabled title="A placa identifica a linha e não é alterada por aqui"></div>`;
+    const numero = ['anoFab', 'anoMod', 'anoEx', 'odometro', 'qtdAbast'].indexOf(campo) >= 0;
+    const lista = sugestoes[campo] ? `list="sug-${chave}"` : '';
+    const longo = CAMPOS_LONGOS.indexOf(campo) >= 0;
+    return `<div class="form-campo ${longo ? 'largo' : ''}" data-campo="${chave}" data-original="${escAttr(atual)}">
+      <label>${esc(info.nome)}${campo === 'placa' ? ' *' : ''}</label>
+      ${longo && campo.indexOf('obs') === 0 ? `<textarea rows="2" data-e>${esc(atual)}</textarea>` : `<input ${numero ? 'type="number" inputmode="numeric"' : 'type="text"'} value="${escAttr(atual)}" ${lista} data-e ${campo === 'placa' ? 'style="text-transform:uppercase" required' : ''}>`}
+      ${sugestoes[campo] ? `<datalist id="sug-${chave}">${sugestoes[campo].map(o => `<option value="${escAttr(o)}">`).join('')}</datalist>` : ''}
+    </div>`;
+  };
+
+  let corpo = '';
+  GRUPOS_EDICAO.forEach(([titulo, campos]) => {
+    const html = campos.map(campoHtml).filter(Boolean).join('');
+    if (html) corpo += secao(titulo, `<div class="form-grade">${html}</div>`);
+  });
+  const soltos = edicao.filter(e => e.campo && e.editavel && !usados.has(e.campo) && e.campo !== 'placa').map(e => campoHtml(e.campo)).filter(Boolean).join('');
+  if (soltos) corpo += secao('Outros campos editáveis', `<div class="form-grade">${soltos}</div>`);
+  const bloqueadas = edicao.filter(e => !e.editavel).length;
+
+  htm('gaveta-cab', `
+    <div class="titulo"><h2>${novo ? 'Cadastrar nova viatura' : 'Editar ' + esc(v.placa) + ' — ' + esc(v.modeloCurto)}</h2>
+      <div class="sub">${novo ? 'A linha nova replica as fórmulas da ConsultaBD automaticamente' : esc(v.unidade || '')}</div></div>
+    <button class="gaveta-fechar" onclick="${novo ? 'fecharFicha()' : `abrirFicha('${escAttr(v.placa)}')`}" title="Voltar sem salvar">×</button>`);
+  htm('gaveta-corpo', corpo + `
+    <div class="form-acoes">
+      <button class="btn amarelo" id="btn-salvar-viatura">${novo ? 'Cadastrar viatura' : 'Salvar alterações'}</button>
+      <button class="btn claro" onclick="${novo ? 'fecharFicha()' : `abrirFicha('${escAttr(placa || '')}')`}">Cancelar</button>
+      <span class="form-aviso">${bloqueadas} colunas com fórmula ou preenchidas por script ficam de fora — são atualizadas pela própria planilha.</span>
+    </div>`);
+  cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
+  document.body.style.overflow = 'hidden';
+  const corpoEl = el('gaveta-corpo'); if (corpoEl) corpoEl.scrollTop = 0;
+  document.querySelectorAll('#gaveta-corpo [data-e]').forEach(i => i.addEventListener('input', () => {
+    const fc = i.closest('.form-campo'); fc.classList.toggle('mudou', i.value !== fc.dataset.original);
+  }));
+  ouvir('btn-salvar-viatura', 'click', () => enviarFormViatura(novo ? null : placa));
+}
+
+function enviarFormViatura(placa) {
+  const novo = !placa;
+  const alteracoes = {};
+  document.querySelectorAll('#gaveta-corpo .form-campo[data-campo]').forEach(fc => {
+    const i = fc.querySelector('[data-e]'); if (!i) return;
+    let valor = i.value;
+    if (fc.dataset.campo === 'placa') valor = valor.trim().toUpperCase();
+    if (novo ? valor !== '' : valor !== fc.dataset.original) alteracoes[fc.dataset.campo] = valor;
+  });
+  if (novo && !alteracoes.placa) { toast('Informe a placa.'); return; }
+  if (!novo && !Object.keys(alteracoes).length) { toast('Nada foi alterado.'); return; }
+  const btn = el('btn-salvar-viatura'); if (btn) { btn.disabled = true; btn.textContent = 'Gravando na ConsultaBD…'; }
+  const depois = r => {
+    if (sessaoExpirou(r)) return;
+    if (!r || !r.ok) { if (btn) { btn.disabled = false; btn.textContent = novo ? 'Cadastrar viatura' : 'Salvar alterações'; } toast((r && r.erro) || 'Falha ao gravar.'); return; }
+    let msg = (novo ? 'Viatura cadastrada' : r.gravados.length + ' campo(s) gravado(s)');
+    if (r.recusados && r.recusados.length) msg += ' • recusados: ' + r.recusados.join('; ');
+    toast(msg);
+    const alvo = novo ? alteracoes.placa : placa;
+    fecharFicha();
+    recarregarAposEdicao(alvo);
+  };
+  const falha = e => { if (btn) { btn.disabled = false; btn.textContent = novo ? 'Cadastrar viatura' : 'Salvar alterações'; } toast('Erro: ' + (e && e.message ? e.message : e)); };
+  if (novo) google.script.run.withSuccessHandler(depois).withFailureHandler(falha).criarViatura(ESTADO.token, alteracoes);
+  else google.script.run.withSuccessHandler(depois).withFailureHandler(falha).salvarViatura(ESTADO.token, placa, alteracoes);
+}
+
+function recarregarAposEdicao(placa) {
+  toast('Recarregando dados da planilha…');
+  google.script.run
+    .withSuccessHandler(dados => {
+      if (sessaoExpirou(dados)) return;
+      if (!dados || dados.erro) { toast('Gravado, mas a releitura falhou — use o botão ⟳.'); return; }
+      iniciar(dados);
+      if (placa && ESTADO.veiculos.some(x => x.placa === placa)) abrirFicha(placa);
+    })
+    .withFailureHandler(() => toast('Gravado, mas a releitura falhou — use o botão ⟳.'))
+    .carregarDados(ESTADO.token, true);
 }
 
 </script>
