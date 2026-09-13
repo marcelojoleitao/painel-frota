@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.12.6';
+const CODIGO_VERSAO = '2.13.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -71,7 +71,9 @@ const CONFIG = {
   DEST_COLS: 40,          // AbastBD e ManutBD gravam A:AN
 
   // Demais destinos de importação (herdados do importador da planilha)
-  ID_MANUT_DB:    '1WpI_krrzyB65lfN6lYZHr9aD1-x0cSUg_g61xGgvNrk',   // DetalhamentoDB, AceitesDB
+  // DetalhamentoDB, AceitesDB e OrçamentosDB passaram para a planilha-mãe.
+  // Este ID fica só para a migração inicial (migrarDadosManutencao).
+  ID_MANUT_ANTIGA: '1WpI_krrzyB65lfN6lYZHr9aD1-x0cSUg_g61xGgvNrk',
   ABA_DETALHE:    'DetalhamentoDB',
   ABA_ORCAMENTOS: 'OrçamentosDB',
   ABA_ACIDENTES:  'Acidentes',   // na planilha-mãe: col B = placa, col C vazia = processo em aberto
@@ -1569,7 +1571,7 @@ function importarDetalhamento(token, arquivo, titulo, competencia) {
   const trava = LockService.getScriptLock();
   try { trava.waitLock(60000); } catch (e) { return { ok: false, erro: 'Outra importação em andamento.' }; }
   try {
-    const aba = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB).getSheetByName(CONFIG.ABA_DETALHE);
+    const aba = _ssManut_().getSheetByName(CONFIG.ABA_DETALHE);
     if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_DETALHE + '" não encontrada.' };
     const grid = _lerTabelaArquivo_(arquivo);
     if (!grid || grid.length <= 2) return { ok: false, erro: 'Não encontrei linhas de dados no arquivo.' };
@@ -1601,7 +1603,7 @@ function importarAceites(token, arquivo, tipo) {
   const trava = LockService.getScriptLock();
   try { trava.waitLock(60000); } catch (e) { return { ok: false, erro: 'Outra importação em andamento.' }; }
   try {
-    const aba = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB).getSheetByName(CONFIG.ABA_ACEITES);
+    const aba = _ssManut_().getSheetByName(CONFIG.ABA_ACEITES);
     if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_ACEITES + '" não encontrada.' };
     const grid = _lerTabelaArquivo_(arquivo);
     if (!grid || grid.length <= 8) return { ok: false, erro: 'Não encontrei linhas de dados (o arquivo tem cabeçalho de 8 linhas).' };
@@ -2657,6 +2659,37 @@ function _tituloCombustivel_(c) {
 function _decBR3_(n) { return (n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 }); }
 
 
+/** As bases de manutenção agora vivem na planilha-mãe. */
+function _ssManut_() { return SpreadsheetApp.openById(CONFIG.ID_BASE); }
+
+/**
+ * MIGRAÇÃO (rodar uma vez no editor): traz DetalhamentoDB, AceitesDB e
+ * OrçamentosDB da planilha de aceites para a planilha-mãe, com formatação
+ * simples. Depois disso o painel não depende mais daquela planilha.
+ */
+function migrarDadosManutencao() {
+  const origem = SpreadsheetApp.openById(CONFIG.ID_MANUT_ANTIGA);
+  const destino = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const abas = [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS];
+  const resumo = [];
+  abas.forEach(nome => {
+    const de = origem.getSheetByName(nome);
+    if (!de) { resumo.push(nome + ': não existe na origem'); return; }
+    const valores = de.getDataRange().getValues();
+    if (!valores.length) { resumo.push(nome + ': vazia'); return; }
+    let para = destino.getSheetByName(nome);
+    if (para) destino.deleteSheet(para);
+    para = destino.insertSheet(nome);
+    para.getRange(1, 1, valores.length, valores[0].length).setValues(valores);
+    para.setFrozenRows(Math.min(3, valores.length));
+    resumo.push(nome + ': ' + (valores.length - 1) + ' linhas');
+  });
+  limparCache();
+  Logger.log('Migração das bases de manutenção → ' + resumo.join(' | '));
+  Logger.log('A planilha antiga pode ser arquivada; o painel lê tudo da planilha-mãe agora.');
+  return resumo.join(' | ');
+}
+
 /* ============================================================
    RELATÓRIO DE ORDENS DE SERVIÇO — ANALÍTICO (peças)
    Porte do "Gerar Relatório de Peças" que ficava no menu da
@@ -2686,7 +2719,7 @@ function gerarRelatorioPecas(token, competencia, placa) {
   const filtroPlaca = String(placa || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
   try {
-    const aba = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB).getSheetByName(CONFIG.ABA_DETALHE);
+    const aba = _ssManut_().getSheetByName(CONFIG.ABA_DETALHE);
     if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_DETALHE + '" não encontrada. Importe o detalhamento primeiro.' };
     const dados = aba.getDataRange().getValues();
     if (dados.length < 3) return { ok: false, erro: 'O DetalhamentoDB está vazio.' };
@@ -2871,7 +2904,7 @@ function gerarRelatorioAceites(token, competencia) {
   const comp = _formatarCompetencia_(competencia || '', true);
   if (!comp) return { ok: false, erro: 'Informe a competência no formato MM/AAAA.' };
   try {
-    const aba = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB).getSheetByName(CONFIG.ABA_ACEITES);
+    const aba = _ssManut_().getSheetByName(CONFIG.ABA_ACEITES);
     if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_ACEITES + '" não encontrada. Importe os aceites primeiro.' };
     const valores = aba.getDataRange().getValues();
     if (valores.length < 2) return { ok: false, erro: 'O AceitesDB está vazio.' };
@@ -2879,7 +2912,7 @@ function gerarRelatorioAceites(token, competencia) {
     const g = (l, k) => mapa.idx[k] >= 0 ? l[mapa.idx[k]] : '';
 
     const acidentes = _placasComAcidenteAberto_();
-    const orcamentos = _orcamentosPorOs_(SpreadsheetApp.openById(CONFIG.ID_MANUT_DB));
+    const orcamentos = _orcamentosPorOs_(_ssManut_());
     const itens = [], porTipo = {}, porUnidade = {}, porOficina = {}, alerta = {};
     let total = 0, totalPecas = 0, totalMo = 0;
     for (let r = mapa.linhaCab + 1; r < valores.length; r++) {
@@ -3032,11 +3065,11 @@ function infoServidor(token) {
   const faltando = esperadas.filter(n => typeof globalThis[n] !== 'function');
   const abas = {}, erros = [];
   try {
-    const ss = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB);
+    const ss = _ssManut_();
     [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS].forEach(n => {
       const a = ss.getSheetByName(n); abas[n] = a ? a.getLastRow() : 0;
     });
-  } catch (e) { erros.push('planilha de aceites/detalhamento (' + CONFIG.ID_MANUT_DB.substring(0, 12) + '…): ' + String(e.message || e)); }
+  } catch (e) { erros.push('bases de manutenção na planilha-mãe: ' + String(e.message || e)); }
   try {
     const b = SpreadsheetApp.openById(CONFIG.ID_BASE);
     [CONFIG.ABA_ANP, CONFIG.ABA_RESUMO_GLOSA, CONFIG.ABA_ACIDENTES].forEach(n => {
@@ -3052,7 +3085,7 @@ function competenciasDisponiveis(token) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
   const saida = { detalhamento: [], aceites: [], erro: '' };
   try {
-    const ss = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB);
+    const ss = _ssManut_();
     const det = ss.getSheetByName(CONFIG.ABA_DETALHE);
     if (det && det.getLastRow() > 2) {
       const c = {};
@@ -3078,7 +3111,7 @@ function competenciasDisponiveis(token) {
 
 /** Diagnóstico das bases dos relatórios de OS — rode no editor. */
 function diagnosticarRelatorios() {
-  const ss = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB);
+  const ss = _ssManut_();
   ['ABA_DETALHE', 'ABA_ACEITES', 'ABA_ORCAMENTOS'].forEach(k => {
     const nome = CONFIG[k];
     const aba = ss.getSheetByName(nome);
