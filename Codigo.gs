@@ -69,10 +69,15 @@ const CONFIG = {
 
   // Demais destinos de importação (herdados do importador da planilha)
   ID_MANUT_DB:    '1WpI_krrzyB65lfN6lYZHr9aD1-x0cSUg_g61xGgvNrk',   // DetalhamentoDB, AceitesDB
-  ID_ANP:         '1VRF3ulO6Z0c0WwyPCwN5dLGWjPiSuTEmEQ7eqXwEaNc',   // Histórico ANP
   ABA_DETALHE:    'DetalhamentoDB',
   ABA_ACEITES:    'AceitesDB',
-  ABA_ANP:        'Histórico ANP',
+
+  // Glosa de preços: tudo passa a viver na planilha-mãe (abas criadas pela migração)
+  ABA_ANP:          'HistoricoANP',
+  ABA_RESUMO_GLOSA: 'ResumoGlosa',
+  ID_GLOSA_ANTIGA:  '1VRF3ulO6Z0c0WwyPCwN5dLGWjPiSuTEmEQ7eqXwEaNc',   // só para a migração inicial
+  // Brasão no cabeçalho dos relatórios: ID de uma imagem no Drive (vazio = emblema desenhado)
+  LOGO_DRIVE_ID:    '',
   URL_GLOSA_ANP:  'https://www.gov.br/anp/pt-br/assuntos/precos-e-defesa-da-concorrencia/precos/precos-revenda-e-de-distribuicao-combustiveis/shlp/mensal/mensal-estados-desde-jan2013.xlsx',
   CHAVE_NF:       'nacional',   // 'nacional' ou 'municipal'
 
@@ -958,9 +963,15 @@ function _lerTitulos_() {
     const ss = SpreadsheetApp.openById(CONFIG.ID_TITULOS);
     saida.abast = _lerTabelaBruta_(ss.getSheetByName(CONFIG.ABA_TIT_ABAST), CONFIG.COLS_TIT_ABAST);
     saida.manut = _lerTabelaBruta_(ss.getSheetByName(CONFIG.ABA_TIT_MANUT), CONFIG.COLS_TIT_MANUT);
-    // "Resumo Glosa": Competência | Valor da Glosa (glosa de preços abusivos desde 03/2021)
-    const rg = _abaPorCabecalho_(ss, '', ['Competência', 'Valor da Glosa']);
-    if (rg) saida.glosaHist = _linhasComoObjetos_(rg).map(o => ({ comp: _txt_(o['Competência']), valor: _num_(o['Valor da Glosa']) || 0 })).filter(x => /\d{2}\/\d{4}/.test(x.comp));
+    // Histórico da glosa: agora na planilha-mãe (aba ResumoGlosa)
+    try {
+      const abaResumo = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_RESUMO_GLOSA);
+      if (abaResumo && abaResumo.getLastRow() > 1) {
+        saida.glosaHist = abaResumo.getRange(2, 1, abaResumo.getLastRow() - 1, 2).getValues()
+          .map(l => ({ comp: _competenciaDaCelula_(l[0]) || _txt_(l[0]), valor: _num_(l[1]) || 0 }))
+          .filter(x => /\d{2}\/\d{4}/.test(x.comp));
+      }
+    } catch (e) { Logger.log('ResumoGlosa: ' + e); }
   } catch (e) { saida.erro = String(e.message || e); Logger.log('Títulos: ' + e); }
   return saida;
 }
@@ -1506,8 +1517,8 @@ function importarGlosaAnp(token, competencia, origem, arquivo) {
   try { trava.waitLock(120000); } catch (e) { return { ok: false, erro: 'Outra importação em andamento.' }; }
   let temporario = null;
   try {
-    const aba = SpreadsheetApp.openById(CONFIG.ID_ANP).getSheetByName(CONFIG.ABA_ANP);
-    if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_ANP + '" não encontrada.' };
+    const aba = p.ss.getSheetByName(CONFIG.ABA_ANP);
+    if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_ANP + '" não existe na planilha-mãe. Rode migrarDadosGlosa() uma vez no editor.' };
     const jaTem = _contarCompetenciaAnp_(aba, mm, yyyy);
     if (jaTem > 0) return { ok: false, erro: 'A competência ' + comp + ' já tem ' + jaTem + ' linha(s) no Histórico ANP. Remova antes de reimportar.' };
 
@@ -1974,6 +1985,298 @@ function _rotMesExtenso_(m) {
   const nomes = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
   return nomes[parseInt(m.substring(5, 7), 10) - 1] + ' de ' + m.substring(0, 4);
 }
+
+
+/* ============================================================
+   GLOSA DE PREÇOS (ANP) — dados e relatório
+   Substitui a planilha "Frota 16ª SPRF - Glosa Abastecimento":
+   o histórico da ANP passa a viver na planilha-mãe e o cruzamento
+   é feito aqui, sem IMPORTRANGE nem PROCV para esticar.
+   ============================================================ */
+
+/** Combustível da Ticket → produto na série da ANP + letra do identificador. */
+const MAPA_COMBUSTIVEL_ANP = [
+  { re: /GASOLINA\s+ADITIVADA/i,      anp: 'GASOLINA ADITIVADA', letra: 'G' },
+  { re: /GASOLINA/i,                  anp: 'GASOLINA COMUM',     letra: 'G' },
+  { re: /DIESEL\s*S-?\s*10/i,         anp: 'OLEO DIESEL S10',    letra: 'D' },
+  { re: /DIESEL/i,                    anp: 'OLEO DIESEL',        letra: 'D' },
+  { re: /ETANOL|ALCOOL/i,             anp: 'ETANOL HIDRATADO',   letra: 'E' },
+  { re: /GNV|GAS\s*NATURAL/i,         anp: 'GNV',                letra: 'N' },
+  { re: /GLP/i,                       anp: 'GLP',                letra: 'L' }
+];
+function _produtoAnp_(combustivel) {
+  const c = String(combustivel || '');
+  for (let i = 0; i < MAPA_COMBUSTIVEL_ANP.length; i++) if (MAPA_COMBUSTIVEL_ANP[i].re.test(c)) return MAPA_COMBUSTIVEL_ANP[i];
+  return null;
+}
+
+/**
+ * MIGRAÇÃO (rodar uma vez no editor): traz "Histórico ANP" e "Resumo Glosa"
+ * da planilha antiga para a planilha-mãe. Depois disso aquela planilha pode
+ * ser arquivada — nada mais depende dela.
+ */
+function migrarDadosGlosa() {
+  const destino = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const origem = SpreadsheetApp.openById(CONFIG.ID_GLOSA_ANTIGA);
+
+  // ---- Histórico ANP
+  const abaOrigemAnp = origem.getSheetByName('Histórico ANP');
+  if (!abaOrigemAnp) throw new Error('Aba "Histórico ANP" não encontrada na planilha antiga.');
+  const valoresAnp = abaOrigemAnp.getDataRange().getValues();
+  let cabAnp = -1;
+  for (let i = 0; i < Math.min(5, valoresAnp.length); i++) {
+    if (valoresAnp[i].some(c => String(c).trim().toUpperCase() === 'PRODUTO')) { cabAnp = i; break; }
+  }
+  if (cabAnp < 0) throw new Error('Não encontrei o cabeçalho do Histórico ANP.');
+  const linhasAnp = valoresAnp.slice(cabAnp).filter(l => String(l[0]).trim() !== '');
+  let abaAnp = destino.getSheetByName(CONFIG.ABA_ANP);
+  if (abaAnp) destino.deleteSheet(abaAnp);
+  abaAnp = destino.insertSheet(CONFIG.ABA_ANP);
+  abaAnp.getRange(1, 1, linhasAnp.length, linhasAnp[0].length).setValues(linhasAnp);
+  abaAnp.setFrozenRows(1);
+  abaAnp.getRange(2, 1, Math.max(1, linhasAnp.length - 1), 1).setNumberFormat('MM/yyyy');
+
+  // ---- Resumo Glosa
+  const abaOrigemResumo = origem.getSheetByName('Resumo Glosa');
+  let nResumo = 0;
+  if (abaOrigemResumo) {
+    const v = abaOrigemResumo.getDataRange().getValues();
+    let cab = -1;
+    for (let i = 0; i < Math.min(5, v.length); i++) {
+      if (v[i].some(c => /COMPET/i.test(String(c)))) { cab = i; break; }
+    }
+    const linhas = (cab < 0 ? v : v.slice(cab)).filter(l => String(l[0]).trim() !== '');
+    let abaResumo = destino.getSheetByName(CONFIG.ABA_RESUMO_GLOSA);
+    if (abaResumo) destino.deleteSheet(abaResumo);
+    abaResumo = destino.insertSheet(CONFIG.ABA_RESUMO_GLOSA);
+    abaResumo.getRange(1, 1, linhas.length, 2).setValues(linhas.map(l => [l[0], l[1]]));
+    abaResumo.setFrozenRows(1);
+    nResumo = linhas.length - 1;
+  }
+  limparCache();
+  Logger.log('Migração concluída: ' + (linhasAnp.length - 1) + ' linhas no ' + CONFIG.ABA_ANP +
+             ' e ' + nResumo + ' competências no ' + CONFIG.ABA_RESUMO_GLOSA + '. A planilha antiga pode ser arquivada.');
+  return 'Migrado.';
+}
+
+/** Tetos da ANP no formato { 'MM/AAAA|UF|PRODUTO': preçoMáximo }. */
+function _tetosAnp_(ss) {
+  const aba = ss.getSheetByName(CONFIG.ABA_ANP);
+  if (!aba) return null;
+  const valores = aba.getDataRange().getValues();
+  if (valores.length < 2) return {};
+  const cab = valores[0].map(c => _normCab_(c));
+  const iMes = cab.indexOf('MES'), iProd = cab.indexOf('PRODUTO'), iUf = cab.indexOf('UF');
+  let iMax = cab.indexOf('PRECO MAXIMO REVENDA');
+  if (iMax < 0) iMax = cab.indexOf('VALOR');
+  if (iMes < 0 || iProd < 0 || iUf < 0 || iMax < 0) throw new Error('Cabeçalho do ' + CONFIG.ABA_ANP + ' não reconhecido (esperado MÊS, PRODUTO, UF e PREÇO MÁXIMO REVENDA).');
+  const mapa = {};
+  for (let r = 1; r < valores.length; r++) {
+    const l = valores[r];
+    const comp = _competenciaDaCelula_(l[iMes]);
+    const uf = String(l[iUf] || '').trim().toUpperCase();
+    const produto = _normCab_(l[iProd]);
+    const teto = _num_(l[iMax]);
+    if (!comp || !uf || !produto || !teto) continue;
+    mapa[comp + '|' + uf + '|' + produto] = Math.round(teto * 100) / 100;
+  }
+  return mapa;
+}
+function _competenciaDaCelula_(v) {
+  if (v instanceof Date && !isNaN(v)) return ('0' + (v.getMonth() + 1)).slice(-2) + '/' + v.getFullYear();
+  const m = String(v || '').match(/(\d{1,2})[\/\-](\d{4})/);
+  return m ? ('0' + m[1]).slice(-2) + '/' + m[2] : '';
+}
+
+/** Calcula a glosa de uma competência. combustiveis = lista opcional de nomes da Ticket. */
+function _calcularGlosa_(ss, competencia, combustiveis) {
+  const tetos = _tetosAnp_(ss);
+  if (tetos === null) throw new Error('Aba "' + CONFIG.ABA_ANP + '" não existe. Rode migrarDadosGlosa() uma vez.');
+  const tab = _abaTransacoes_(ss, CONFIG.ABA_ABAST, ['PLACA', 'LITROS', 'VALOR EMISSAO']);
+  if (!tab) throw new Error('AbastBD não encontrada.');
+  const { valores, cab } = tab;
+  const c = n => cab.indexOf(n);
+  const iCod = c('CODIGO TRANSACAO'), iData = c('DATA TRANSACAO'), iPlaca = c('PLACA'), iLit = c('LITROS'),
+        iVlL = c('VL/LITRO'), iComb = c('TIPO COMBUSTIVEL'), iUf = c('UF'), iEst = c('NOME ESTABELECIMENTO'),
+        iCid = c('CIDADE'), iServ = c('SERVICO');
+  const filtro = (combustiveis && combustiveis.length) ? combustiveis.map(x => String(x).toUpperCase()) : null;
+
+  const grupos = {}, semTeto = {};
+  let total = 0, avaliados = 0, comGlosa = 0;
+  const mesAlvo = competencia;
+  for (let r = tab.inicio; r < valores.length; r++) {
+    const l = valores[r];
+    const dia = _diaISO_(l[iData]); if (!dia) continue;
+    const comp = dia.substring(5, 7) + '/' + dia.substring(0, 4);
+    if (comp !== mesAlvo) continue;
+    if (iServ >= 0 && String(l[iServ] || '').trim() && !/abastec/i.test(String(l[iServ]))) continue;
+    const combustivel = String(l[iComb] || '').trim().toUpperCase();
+    if (!combustivel) continue;
+    if (filtro && filtro.indexOf(combustivel) < 0) continue;
+    const produto = _produtoAnp_(combustivel);
+    if (!produto) continue;
+    const uf = String(l[iUf] || '').trim().toUpperCase();
+    const litros = _num_(l[iLit]) || 0;
+    const preco = _num_(l[iVlL]) || 0;
+    if (!uf || litros <= 0 || preco <= 0) continue;
+    avaliados++;
+    const chave = comp + '|' + uf + '|' + _normCab_(produto.anp);
+    const teto = tetos[chave];
+    if (teto === undefined) {
+      const k = produto.anp + ' / ' + uf;
+      semTeto[k] = (semTeto[k] || 0) + 1;
+      continue;
+    }
+    if (preco <= teto) continue;
+    // arredonda cada produto antes de subtrair — é assim que a planilha calcula
+    const glosa = Math.round(preco * litros * 100) / 100 - Math.round(teto * litros * 100) / 100;
+    if (glosa <= 0) continue;
+    comGlosa++; total += glosa;
+    const g = grupos[combustivel] || (grupos[combustivel] = { combustivel: combustivel, anp: produto.anp, itens: [], subtotal: 0 });
+    g.itens.push({ combustivel: combustivel, uf: uf, placa: String(l[iPlaca] || '').trim().toUpperCase(),
+      transacao: String(l[iCod] || '').trim(), data: _brDia_(dia), preco: preco, teto: teto, litros: litros,
+      glosa: Math.round(glosa * 100) / 100, posto: String(l[iEst] || '').trim(), cidade: String(l[iCid] || '').trim() });
+    g.subtotal = Math.round((g.subtotal + glosa) * 100) / 100;
+  }
+  const lista = Object.keys(grupos).sort().map(k => grupos[k]);
+  lista.forEach(g => g.itens.sort((a, b) => b.glosa - a.glosa));
+  return { competencia: competencia, grupos: lista, total: Math.round(total * 100) / 100,
+           avaliados: avaliados, comGlosa: comGlosa, semTeto: semTeto };
+}
+
+/** Combustíveis disponíveis na competência (para o painel montar as opções). */
+function combustiveisDaCompetencia(token, competencia) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const tab = _abaTransacoes_(p.ss, CONFIG.ABA_ABAST, ['PLACA', 'LITROS', 'VALOR EMISSAO']);
+    if (!tab) return { ok: false, erro: 'AbastBD não encontrada.' };
+    const iData = tab.cab.indexOf('DATA TRANSACAO'), iComb = tab.cab.indexOf('TIPO COMBUSTIVEL');
+    const contagem = {};
+    for (let r = tab.inicio; r < tab.valores.length; r++) {
+      const dia = _diaISO_(tab.valores[r][iData]); if (!dia) continue;
+      if (dia.substring(5, 7) + '/' + dia.substring(0, 4) !== competencia) continue;
+      const comb = String(tab.valores[r][iComb] || '').trim().toUpperCase();
+      if (comb) contagem[comb] = (contagem[comb] || 0) + 1;
+    }
+    return { ok: true, combustiveis: Object.keys(contagem).sort().map(k => ({ nome: k, qtd: contagem[k], anp: (_produtoAnp_(k) || {}).anp || '' })) };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Gera o Relatório de Glosa em PDF e atualiza o ResumoGlosa da competência. */
+function gerarRelatorioGlosa(token, competencia, combustiveis) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (!/^\d{2}\/\d{4}$/.test(String(competencia || ''))) return { ok: false, erro: 'Informe a competência no formato MM/AAAA.' };
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    const dados = _calcularGlosa_(ss, competencia, combustiveis);
+    const html = _htmlRelatorioGlosa_(dados, p.sessao);
+    const nome = 'Relatorio_Glosa_Abastecimento_' + competencia.replace('/', '-') + '.pdf';
+    const arq = DriveApp.createFile(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome));
+    try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+    _gravarResumoGlosa_(ss, competencia, dados.total);
+    _logAcao_(p.ss, p.sessao.email, 'Relatório de glosa', '', competencia, 'total ' + _moedaBR_(dados.total) + ' | ' + dados.comGlosa + ' de ' + dados.avaliados + ' abastecimentos');
+    return { ok: true, nome: nome, link: arq.getUrl(), total: dados.total, comGlosa: dados.comGlosa,
+             avaliados: dados.avaliados, grupos: dados.grupos.map(g => ({ combustivel: g.combustivel, subtotal: g.subtotal, itens: g.itens.length })),
+             semTeto: Object.keys(dados.semTeto).map(k => k + ' (' + dados.semTeto[k] + ')') };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+function _gravarResumoGlosa_(ss, competencia, total) {
+  let aba = ss.getSheetByName(CONFIG.ABA_RESUMO_GLOSA);
+  if (!aba) { aba = ss.insertSheet(CONFIG.ABA_RESUMO_GLOSA); aba.appendRow(['Competência', 'Valor da Glosa']); aba.setFrozenRows(1); }
+  const n = aba.getLastRow();
+  const comps = n > 1 ? aba.getRange(2, 1, n - 1, 1).getValues().map(l => _competenciaDaCelula_(l[0]) || String(l[0]).trim()) : [];
+  const pos = comps.indexOf(competencia);
+  if (pos >= 0) aba.getRange(pos + 2, 2).setValue(total);
+  else aba.appendRow([competencia, total]);
+  SpreadsheetApp.flush();
+}
+
+/** Brasão: imagem do Drive (CONFIG.LOGO_DRIVE_ID) ou emblema desenhado. */
+function _brasaoHtml_() {
+  if (CONFIG.LOGO_DRIVE_ID) {
+    try {
+      const blob = DriveApp.getFileById(CONFIG.LOGO_DRIVE_ID).getBlob();
+      return '<img src="data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes()) + '" style="height:58px">';
+    } catch (e) { Logger.log('Brasão não carregado: ' + e); }
+  }
+  return '<div style="width:56px; height:56px; border-radius:10px; background:#F2B705; color:#0B2C5C; font-weight:bold; font-size:17pt; text-align:center; line-height:56px; letter-spacing:.04em">PRF</div>';
+}
+
+function _htmlRelatorioGlosa_(d, sessao) {
+  const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, "dd/MM/yyyy 'às' HH:mm");
+  const bloco = g => {
+    const linhas = g.itens.map(i => '<tr><td>' + _esc_(i.combustivel) + '</td><td class="c">' + _esc_(i.uf) + '</td>' +
+      '<td class="c mono">' + _esc_(i.placa) + '</td><td class="c mono">' + _esc_(i.transacao) + '</td>' +
+      '<td class="c">' + _esc_(i.data) + '</td>' +
+      '<td class="num">' + _decBR3_(i.preco) + '</td><td class="num">' + _decBR3_(i.teto) + '</td>' +
+      '<td class="num">' + _decBR_(i.litros) + '</td><td class="num forte">' + _decBR_(i.glosa) + '</td></tr>').join('');
+    return '<table><thead><tr>' +
+      '<th>Combustível</th><th class="c">UF</th><th class="c">Placa</th><th class="c">Transação</th><th class="c">Data</th>' +
+      '<th class="num">Preço Pago<br>por Litro (A)</th><th class="num">Preço Máximo<br>por Litro ANP (B)</th>' +
+      '<th class="num">Quantidade<br>em Litros (L)</th><th class="num">Glosa<br>(A×L) − (B×L)</th></tr></thead>' +
+      '<tbody>' + linhas + '</tbody>' +
+      '<tfoot><tr><td colspan="8">Subtotal Glosa ' + _esc_(_tituloCombustivel_(g.combustivel)) + '</td>' +
+      '<td class="num forte">' + _decBR_(g.subtotal) + '</td></tr></tfoot></table>';
+  };
+
+  return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><style>' +
+    '@page { size: A4 landscape; margin: 12mm 10mm; }' +
+    'body { font-family: Arial, Helvetica, sans-serif; color: #14181F; font-size: 9.5pt; margin: 0; }' +
+    '.cab { display: table; width: 100%; border-bottom: 4px solid #F2B705; padding-bottom: 8px; margin-bottom: 10px; }' +
+    '.cab > div { display: table-cell; vertical-align: middle; }' +
+    '.cab .marca { width: 70px; }' +
+    '.cab h1 { margin: 0; font-size: 16pt; color: #0B2C5C; }' +
+    '.cab .org { font-size: 10pt; color: #5A6576; }' +
+    '.cab .comp { text-align: right; font-size: 11pt; font-weight: bold; color: #0B2C5C; }' +
+    '.metodo { background: #F6F8FC; border-left: 3px solid #0B2C5C; padding: 8px 10px; font-size: 8.5pt; text-align: justify; margin-bottom: 12px; }' +
+    '.metodo b { color: #0B2C5C; }' +
+    'h2 { color: #0B2C5C; font-size: 12pt; margin: 14px 0 5px; }' +
+    'table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }' +
+    'th { background: #0B2C5C; color: #fff; padding: 5px 6px; font-size: 8pt; text-align: left; }' +
+    'td { padding: 3px 6px; border-bottom: 1px solid #E3E8F0; font-size: 8.5pt; }' +
+    'tr:nth-child(even) td { background: #F6F8FC; }' +
+    'tfoot td { background: #E8EEFA !important; font-weight: bold; border-top: 2px solid #0B2C5C; }' +
+    '.num { text-align: right; font-variant-numeric: tabular-nums; } .c { text-align: center; }' +
+    '.mono { font-family: "Courier New", monospace; } .forte { font-weight: bold; }' +
+    '.total { background: #0B2C5C; color: #fff; padding: 10px 14px; font-size: 12pt; font-weight: bold; display: table; width: 100%; }' +
+    '.total .r { display: table-cell; text-align: right; }' +
+    '.rodape { margin-top: 14px; border-top: 1px solid #E3E8F0; padding-top: 5px; font-size: 7.5pt; color: #5A6576; }' +
+    '.vazio { padding: 20px; text-align: center; color: #5A6576; background: #F6F8FC; }' +
+    '</style></head><body>' +
+
+    '<div class="cab"><div class="marca">' + _brasaoHtml_() + '</div>' +
+    '<div><h1>Relatório Glosa de Abastecimento</h1>' +
+    '<div class="org">16ª Superintendência da Polícia Rodoviária Federal — Ceará</div></div>' +
+    '<div class="comp">Mês de Referência<br>' + _esc_(d.competencia) + '</div></div>' +
+
+    '<div class="metodo">' +
+    'Comparativo de preços de abastecimentos realizados pela Frota da SPRF/CE através da Plataforma TicketCar × Preços Máximos de Revenda para combustíveis conforme série histórica do Relatório de Defesa da Concorrência da <b>Agência Nacional do Petróleo, Gás Natural e Biocombustíveis — ANP</b>, disponibilizada no sítio eletrônico: https://www.gov.br/anp/pt-br/assuntos/precos-e-defesa-da-concorrencia/precos/precos-revenda-e-de-distribuicao-combustiveis/serie-historica-do-levantamento-de-precos<br><br>' +
+    '<b>Método:</b> o relatório compara o preço por litro pago no ato do abastecimento com o preço máximo de revenda por litro do relatório da ANP, no mesmo mês e na mesma unidade da federação, e calcula o valor do abastecimento pago que excedeu, para que seja aplicada glosa ao pagamento da fatura do mês de referência, utilizando-se arredondamento para duas casas decimais.' +
+    '</div>' +
+
+    (d.grupos.length
+      ? d.grupos.map(g => '<h2>' + _esc_(_tituloCombustivel_(g.combustivel)) + ' <span style="font-weight:normal; font-size:9pt; color:#5A6576">(' + g.itens.length + ' abastecimento(s) acima do teto)</span></h2>' + bloco(g)).join('')
+      : '<div class="vazio">Nenhum abastecimento excedeu o preço máximo de revenda da ANP nesta competência.</div>') +
+
+    '<div class="total">Total Glosa Abastecimento<span class="r">' + _moedaBR_(d.total) + '</span></div>' +
+
+    '<div class="rodape">' + d.comGlosa + ' de ' + d.avaliados + ' abastecimentos da competência excederam o teto da ANP. ' +
+    (Object.keys(d.semTeto).length ? 'Sem teto publicado na série da ANP: ' + _esc_(Object.keys(d.semTeto).map(k => k + ' — ' + d.semTeto[k] + ' registro(s)').join('; ')) + '. ' : '') +
+    'Gerado pelo Painel da Frota — 16ª SPRF/CE em ' + agora + ' por ' + _esc_(sessao.email) + '.</div>' +
+    '</body></html>';
+}
+
+function _tituloCombustivel_(c) {
+  const t = String(c || '').toUpperCase();
+  if (/GASOLINA\s+ADITIVADA/.test(t)) return 'Gasolina Aditivada';
+  if (/GASOLINA/.test(t)) return 'Gasolina Comum';
+  if (/DIESEL\s*S-?\s*10/.test(t)) return 'Óleo Diesel S-10';
+  if (/DIESEL/.test(t)) return 'Óleo Diesel';
+  if (/ETANOL|ALCOOL/.test(t)) return 'Etanol Hidratado';
+  return c.charAt(0) + c.slice(1).toLowerCase();
+}
+function _decBR3_(n) { return (n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 }); }
 
 /* ============================================================
    FILA DE AÇÕES DO DETRAN

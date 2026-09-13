@@ -27,7 +27,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.8.2';
+const VERSAO_PAINEL = '2.9.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2275,6 +2275,20 @@ function renderRelatorios(c) {
         <div class="foto-data" id="rel-status"></div>
         <div id="rel-result"></div>
       </div>
+      <div class="acao-cartao">
+        <h4>Relatório de Glosa de Abastecimento</h4>
+        <div class="desc">Compara o preço pago por litro com o preço máximo de revenda da ANP (mesmo mês, mesma UF) e apura o excedente para glosa na fatura. Separado por combustível, com subtotais e total — no mesmo formato do documento que você protocola. O total apurado é gravado no histórico de glosa.</div>
+        <div class="form-campo" style="margin-bottom:8px"><label>Competência</label><input type="month" id="glosa-rel-comp" value="${padrao}"></div>
+        <div class="form-campo" style="margin-bottom:10px">
+          <label>Combustíveis</label>
+          <div id="glosa-combs" class="acao-opcoes" style="max-height:150px; overflow:auto">
+            <span class="foto-data">Escolha a competência para listar os combustíveis…</span>
+          </div>
+        </div>
+        <button class="btn amarelo" id="btn-rel-glosa">Gerar PDF</button>
+        <div class="foto-data" id="glosa-status"></div>
+        <div id="glosa-result"></div>
+      </div>
     </div>`;
   ouvir('btn-rel-abast', 'click', () => {
     const de = val('rel-de'), ate = val('rel-ate');
@@ -2300,6 +2314,59 @@ function renderRelatorios(c) {
       .withFailureHandler(e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; toast('Erro: ' + (e && e.message ? e.message : e)); })
       .gerarRelatorioAbastecimento(ESTADO.token, de, ate);
   });
+  ouvir('glosa-rel-comp', 'change', carregarCombustiveisGlosa);
+  ouvir('btn-rel-glosa', 'click', gerarGlosa);
+  carregarCombustiveisGlosa();
+}
+
+
+/* ---------------- Relatório de glosa ---------------- */
+function competenciaBR(valorMonth) {
+  return valorMonth ? valorMonth.substring(5, 7) + '/' + valorMonth.substring(0, 4) : '';
+}
+
+function carregarCombustiveisGlosa() {
+  const caixa = el('glosa-combs'); if (!caixa) return;
+  const comp = competenciaBR(val('glosa-rel-comp'));
+  if (!comp) { caixa.innerHTML = '<span class="foto-data">Escolha a competência.</span>'; return; }
+  caixa.innerHTML = '<span class="foto-data">Lendo os abastecimentos da competência…</span>';
+  google.script.run
+    .withSuccessHandler(r => {
+      if (sessaoExpirou(r)) return;
+      if (!r || !r.ok) { caixa.innerHTML = '<span class="foto-data">' + esc((r && r.erro) || 'Falha ao ler.') + '</span>'; return; }
+      if (!r.combustiveis.length) { caixa.innerHTML = '<span class="foto-data">Nenhum abastecimento em ' + esc(comp) + '.</span>'; return; }
+      caixa.innerHTML = r.combustiveis.map(c => `<label title="${c.anp ? 'ANP: ' + escAttr(c.anp) : 'sem produto correspondente na ANP'}">
+        <input type="checkbox" value="${escAttr(c.nome)}" ${c.anp ? 'checked' : 'disabled'}> ${esc(c.nome)}
+        <small style="color:var(--tinta-suave)">${c.qtd} abast.${c.anp ? '' : ' • sem equivalente na ANP'}</small></label>`).join('');
+    })
+    .withFailureHandler(e => { caixa.innerHTML = '<span class="foto-data">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</span>'; })
+    .combustiveisDaCompetencia(ESTADO.token, comp);
+}
+
+function gerarGlosa() {
+  const comp = competenciaBR(val('glosa-rel-comp'));
+  if (!comp) { toast('Informe a competência.'); return; }
+  const escolhidos = Array.from(document.querySelectorAll('#glosa-combs input:checked')).map(i => i.value);
+  if (!escolhidos.length) { toast('Escolha ao menos um combustível.'); return; }
+  const btn = el('btn-rel-glosa'), status = el('glosa-status'), resultado = el('glosa-result');
+  btn.disabled = true; btn.textContent = 'Apurando…';
+  if (status) status.textContent = 'Cruzando AbastBD com o histórico da ANP…';
+  if (resultado) resultado.innerHTML = '';
+  google.script.run
+    .withSuccessHandler(r => {
+      btn.disabled = false; btn.textContent = 'Gerar PDF';
+      if (sessaoExpirou(r)) return;
+      if (!r || !r.ok) { if (status) status.textContent = ''; toast((r && r.erro) || 'Falha ao gerar.'); return; }
+      if (status) status.innerHTML = `<a class="pdf-link" href="${escAttr(r.link)}" target="_blank" rel="noopener">${icoPdf()} ${esc(r.nome)}</a>`;
+      if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
+        <div class="dado"><div class="k">Total da glosa</div><div class="v ${r.total ? 'alerta-txt' : 'ok-txt'}">${fmtMoeda(r.total)}</div></div>
+        <div class="dado"><div class="k">Acima do teto</div><div class="v">${fmtInt(r.comGlosa)} de ${fmtInt(r.avaliados)}</div></div>
+        ${r.grupos.map(g => `<div class="dado"><div class="k">${esc(g.combustivel)}</div><div class="v">${fmtMoeda(g.subtotal)} <small style="font-weight:500; color:var(--tinta-suave)">${g.itens} item(ns)</small></div></div>`).join('')}
+      </div>${r.semTeto && r.semTeto.length ? `<div class="cartao-dica">Sem teto publicado na ANP: ${esc(r.semTeto.join('; '))}</div>` : ''}`;
+      window.open(r.link, '_blank');
+    })
+    .withFailureHandler(e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; toast('Erro: ' + (e && e.message ? e.message : e)); })
+    .gerarRelatorioGlosa(ESTADO.token, comp, escolhidos);
 }
 
 </script>
