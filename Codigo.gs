@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.13.1';
+const CODIGO_VERSAO = '2.13.2';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -2666,46 +2666,109 @@ function _decBR3_(n) { return (n || 0).toLocaleString('pt-BR', { minimumFraction
 /** As bases de manutenção agora vivem na planilha-mãe. */
 function _ssManut_() { return SpreadsheetApp.openById(CONFIG.ID_BASE); }
 
+/** Abas da planilha de origem que são espelhos de outra planilha (IMPORTRANGE). */
+function _espelhosImportrange_(ss) {
+  const mapa = {};
+  ss.getSheets().forEach(aba => {
+    try {
+      if (aba.getLastRow() < 1) return;
+      const f = aba.getRange(1, 1, Math.min(3, aba.getLastRow()), 1).getFormulas()
+        .map(l => l[0]).find(x => x && /IMPORTRANGE/i.test(x));
+      if (!f) return;
+      const m = f.match(/IMPORTRANGE\s*\(\s*"([^"]+)"\s*[;,]\s*"([^"]+)"/i);
+      if (!m) { mapa[aba.getName()] = { id: '', faixa: '', aba: '' }; return; }
+      const id = (m[1].match(/[-\w]{25,}/) || [m[1]])[0];
+      const faixa = m[2];
+      mapa[aba.getName()] = { id: id, faixa: faixa, aba: faixa.split('!')[0].replace(/'/g, '').trim() };
+    } catch (e) {}
+  });
+  return mapa;
+}
+
+/** Analisa a migração SEM alterar nada: o que vem, o que é fórmula, o que aponta para fora. */
+function analisarMigracaoManutencao() {
+  const origem = SpreadsheetApp.openById(CONFIG.ID_MANUT_ANTIGA);
+  const destino = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const espelhos = _espelhosImportrange_(origem);
+  const nomesDestino = destino.getSheets().map(a => a.getName());
+  Logger.log('Abas espelho (IMPORTRANGE) na planilha de aceites: ' +
+    (Object.keys(espelhos).length ? Object.keys(espelhos).map(k => k + ' → ' + (espelhos[k].id === CONFIG.ID_BASE ? 'planilha-mãe/' + espelhos[k].aba : espelhos[k].id.substring(0, 12) + '…/' + espelhos[k].aba)).join(' | ') : 'nenhuma'));
+
+  [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS].forEach(nome => {
+    const de = origem.getSheetByName(nome);
+    if (!de) { Logger.log(nome + ': não existe'); return; }
+    const nLin = de.getLastRow(), nCol = de.getLastColumn();
+    const formulas = de.getRange(1, 1, nLin, nCol).getFormulas();
+    const total = formulas.reduce((t, l) => t + l.filter(f => f).length, 0);
+    const refs = {};
+    formulas.forEach(l => l.forEach(f => {
+      if (!f) return;
+      (f.match(/'[^']+'!|[A-Za-zÀ-ÿ0-9_.çÇ]+!/g) || []).forEach(r => { refs[r.replace(/['!]/g, '').trim()] = true; });
+    }));
+    const externas = Object.keys(refs).filter(r => [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS].indexOf(r) < 0);
+    Logger.log(nome + ': ' + (nLin - 1) + ' linhas, ' + nCol + ' colunas, ' + total + ' células com fórmula.');
+    Logger.log('   abas citadas pelas fórmulas: ' + (externas.length ? externas.map(r => {
+      const esp = espelhos[r];
+      if (esp && esp.id === CONFIG.ID_BASE) return r + ' (espelho da planilha-mãe → será reapontado para "' + esp.aba + '")';
+      if (esp) return r + ' (espelho de OUTRA planilha ' + esp.id.substring(0, 12) + '… → precisa vir junto)';
+      if (nomesDestino.indexOf(r) >= 0) return r + ' (já existe na planilha-mãe)';
+      return r + ' (NÃO existe na planilha-mãe — precisa vir junto)';
+    }).join(' | ') : 'nenhuma além das próprias bases'));
+  });
+  Logger.log('Nada foi alterado. Rode migrarDadosManutencao() quando quiser executar.');
+}
+
 /**
  * MIGRAÇÃO (rodar uma vez no editor): traz DetalhamentoDB, AceitesDB e
  * OrçamentosDB da planilha de aceites para a planilha-mãe.
  *
- * Preserva as FÓRMULAS (as colunas calculadas continuam calculando) e avisa
- * se alguma fórmula apontar para uma aba que ficou na planilha antiga.
- * Também copia larguras de coluna e formatos de número.
+ * Preserva fórmulas, formatos e larguras. Quando uma fórmula aponta para uma
+ * aba que na origem é espelho (IMPORTRANGE) da própria planilha-mãe, a
+ * referência é reescrita para a aba nativa correspondente.
+ * Rode antes analisarMigracaoManutencao() para ver o que vai acontecer.
  */
 function migrarDadosManutencao() {
   const origem = SpreadsheetApp.openById(CONFIG.ID_MANUT_ANTIGA);
   const destino = SpreadsheetApp.openById(CONFIG.ID_BASE);
-  const abas = [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS];
+  const bases = [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS];
+  const espelhos = _espelhosImportrange_(origem);
   const nomesDestino = destino.getSheets().map(a => a.getName());
-  const resumo = [], avisos = [];
 
-  abas.forEach(nome => {
+  // de qual nome de aba para qual, nas fórmulas
+  const reescrever = {};
+  Object.keys(espelhos).forEach(nome => {
+    const e = espelhos[nome];
+    if (e.id === CONFIG.ID_BASE && e.aba && nomesDestino.indexOf(e.aba) >= 0 && e.aba !== nome) reescrever[nome] = e.aba;
+  });
+
+  const resumo = [], pendencias = [];
+  bases.forEach(nome => {
     const de = origem.getSheetByName(nome);
     if (!de) { resumo.push(nome + ': não existe na origem'); return; }
     const nLin = de.getLastRow(), nCol = de.getLastColumn();
     if (!nLin) { resumo.push(nome + ': vazia'); return; }
 
     const faixa = de.getRange(1, 1, nLin, nCol);
-    const valores = faixa.getValues();
-    const formulas = faixa.getFormulas();
-    const formatos = faixa.getNumberFormats();
-
-    // conteúdo final: fórmula onde existir, valor onde não existir
-    const conteudo = valores.map((linha, i) => linha.map((v, j) => formulas[i][j] ? formulas[i][j] : v));
-
-    // fórmulas que citam abas de fora deste conjunto
-    const citadas = {};
-    formulas.forEach(linha => linha.forEach(f => {
-      if (!f) return;
-      (f.match(/(?:^|[^A-Za-z0-9_])'?([A-Za-zÀ-ÿ0-9 _.çÇ-]{2,40})'?!/g) || []).forEach(m => {
-        const aba = m.replace(/[^A-Za-zÀ-ÿ0-9 _.çÇ-]/g, '').trim();
-        if (aba) citadas[aba] = true;
+    const valores = faixa.getValues(), formulas = faixa.getFormulas(), formatos = faixa.getNumberFormats();
+    let reescritas = 0;
+    const conteudo = valores.map((linha, i) => linha.map((v, j) => {
+      let f = formulas[i][j];
+      if (!f) return v;
+      Object.keys(reescrever).forEach(velho => {
+        const re = new RegExp("('?)" + velho.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "\\1!", 'g');
+        if (re.test(f)) { f = f.replace(re, "'" + reescrever[velho] + "'!"); reescritas++; }
       });
+      return f;
     }));
-    Object.keys(citadas).forEach(aba => {
-      if (abas.indexOf(aba) < 0 && nomesDestino.indexOf(aba) < 0) avisos.push(nome + ' usa fórmulas que citam a aba "' + aba + '", que não está na planilha-mãe');
+
+    // o que ainda aponta para fora
+    const refs = {};
+    conteudo.forEach(l => l.forEach(c => {
+      if (typeof c !== 'string' || c.charAt(0) !== '=') return;
+      (c.match(/'[^']+'!|[A-Za-zÀ-ÿ0-9_.çÇ]+!/g) || []).forEach(r => { refs[r.replace(/['!]/g, '').trim()] = true; });
+    }));
+    Object.keys(refs).forEach(r => {
+      if (bases.indexOf(r) < 0 && nomesDestino.indexOf(r) < 0) pendencias.push(nome + ' → aba "' + r + '"');
     });
 
     let para = destino.getSheetByName(nome);
@@ -2718,24 +2781,17 @@ function migrarDadosManutencao() {
     for (let c = 1; c <= nCol; c++) { try { para.setColumnWidth(c, de.getColumnWidth(c)); } catch (e) {} }
 
     const comFormula = formulas.reduce((t, l) => t + l.filter(f => f).length, 0);
-    resumo.push(nome + ': ' + (nLin - 1) + ' linhas, ' + comFormula + ' células com fórmula preservadas');
+    resumo.push(nome + ': ' + (nLin - 1) + ' linhas, ' + comFormula + ' fórmulas preservadas' + (reescritas ? ', ' + reescritas + ' referências reapontadas' : ''));
   });
 
   limparCache();
   Logger.log('MIGRAÇÃO → ' + resumo.join(' | '));
-  if (avisos.length) {
-    Logger.log('ATENÇÃO: ' + avisos.join(' | ') + '. Essas fórmulas vão dar erro até a aba citada ser trazida também — me avise quais são.');
-  } else {
-    Logger.log('Nenhuma fórmula depende de aba externa: a planilha antiga pode ser arquivada.');
-  }
+  if (Object.keys(reescrever).length) Logger.log('Referências reapontadas: ' + Object.keys(reescrever).map(k => k + ' → ' + reescrever[k]).join(', '));
+  if (pendencias.length) Logger.log('ATENÇÃO — ainda apontam para abas que não existem na planilha-mãe: ' + pendencias.join(' | ') + '. Me avise para trazermos essas abas.');
+  else Logger.log('Nenhuma pendência: todas as fórmulas resolvem dentro da planilha-mãe.');
   return resumo.join(' | ');
 }
 
-/**
- * Replica, nas linhas recém-importadas, as fórmulas que existem nas colunas
- * calculadas (as que o arquivo importado não preenche). Sem isso, uma
- * importação nova deixaria essas colunas em branco.
- */
 /** Igual à réplica acima, mas para colunas calculadas ANTES da área escrita (ex.: A:E do detalhamento). */
 function _replicarColunasIniciais_(aba, primeiraLinhaNova, qtdLinhas, ateColuna) {
   try {
