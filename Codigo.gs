@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.13.3';
+const CODIGO_VERSAO = '2.13.5';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1389,6 +1389,25 @@ function exportarBase(token, tipo) {
 
 /* ------------------------------------------------------------ */
 /*  Auxiliares herdados do importador da planilha                */
+
+const MESES_PT = {jan:1,fev:2,mar:3,abr:4,mai:5,jun:6,jul:7,ago:8,set:9,out:10,nov:11,dez:12};
+
+function _limparCelulaHtml_(cellHtml) {
+  let s = cellHtml.replace(/<[^>]+>/g, ' ');
+  s = s.replace(/&nbsp;/gi, ' ')
+       .replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+       .replace(/&quot;/gi, '"').replace(/&#39;/gi, "'")
+       .replace(/&aacute;/gi, 'á').replace(/&eacute;/gi, 'é').replace(/&iacute;/gi, 'í')
+       .replace(/&oacute;/gi, 'ó').replace(/&uacute;/gi, 'ú').replace(/&atilde;/gi, 'ã')
+       .replace(/&otilde;/gi, 'õ').replace(/&ccedil;/gi, 'ç').replace(/&acirc;/gi, 'â')
+       .replace(/&ecirc;/gi, 'ê').replace(/&ocirc;/gi, 'ô');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+function _normalizarAno_(a) {
+  a = String(a);
+  return a.length === 2 ? 2000 + parseInt(a, 10) : parseInt(a, 10);
+}
 /* ------------------------------------------------------------ */
 
 function _parseNumeroBR_(v) {
@@ -1406,7 +1425,7 @@ function _parseDataBR_(v) {
   if (!s) return '';
   const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
   if (!m) return s;
-  const d = new Date(normalizarAno_(m[3]), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+  const d = new Date(_normalizarAno_(m[3]), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
   return isNaN(d.getTime()) ? s : d;
 }
 
@@ -1426,11 +1445,11 @@ function _parseCompetenciaCelula_(v) {
   let s = _removerAcentos_(String(v).trim().toLowerCase()).replace(/\s+/g, '');
   if (!s) return null;
   let m = s.match(/^([a-z]{3,})[\/\-.]?(\d{2,4})$/);            // mai/26
-  if (m) { const mes = MESES_PT[m[1].substring(0, 3)]; return mes ? { mm: mes, yyyy: normalizarAno_(m[2]) } : null; }
+  if (m) { const mes = MESES_PT[m[1].substring(0, 3)]; return mes ? { mm: mes, yyyy: _normalizarAno_(m[2]) } : null; }
   m = s.match(/^\d{1,2}[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);     // dd/mm/aaaa
-  if (m) { const mes = parseInt(m[1], 10); return (mes >= 1 && mes <= 12) ? { mm: mes, yyyy: normalizarAno_(m[2]) } : null; }
+  if (m) { const mes = parseInt(m[1], 10); return (mes >= 1 && mes <= 12) ? { mm: mes, yyyy: _normalizarAno_(m[2]) } : null; }
   m = s.match(/^(\d{1,2})[\/\-.](\d{2,4})$/);                   // mm/aaaa
-  if (m) { const mes = parseInt(m[1], 10); return (mes >= 1 && mes <= 12) ? { mm: mes, yyyy: normalizarAno_(m[2]) } : null; }
+  if (m) { const mes = parseInt(m[1], 10); return (mes >= 1 && mes <= 12) ? { mm: mes, yyyy: _normalizarAno_(m[2]) } : null; }
   return null;
 }
 
@@ -1483,7 +1502,7 @@ function _parseHtmlTable_(html) {
       aplicarCarry();
       const colspan = parseInt((cell.match(/colspan\s*=\s*"?(\d+)/i) || [])[1] || '1', 10);
       const rowspan = parseInt((cell.match(/rowspan\s*=\s*"?(\d+)/i) || [])[1] || '1', 10);
-      const val = limparCelulaHtml_(cell);
+      const val = _limparCelulaHtml_(cell);
       for (let k = 0; k < colspan; k++) {
         rowOut[col] = val;
         if (rowspan > 1) carry[col] = { value: val, remaining: rowspan - 1 };
@@ -1797,7 +1816,7 @@ function _parseDataBR_(v) {
   if (!s) return '';
   const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
   if (!m) return s;
-  const d = new Date(normalizarAno_(m[3]), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+  const d = new Date(_normalizarAno_(m[3]), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
   return isNaN(d.getTime()) ? s : d;
 }
 
@@ -1817,11 +1836,11 @@ function _parseCompetenciaCelula_(v) {
   let s = _removerAcentos_(String(v).trim().toLowerCase()).replace(/\s+/g, '');
   if (!s) return null;
   let m = s.match(/^([a-z]{3,})[\/\-.]?(\d{2,4})$/);            // mai/26
-  if (m) { const mes = MESES_PT[m[1].substring(0, 3)]; return mes ? { mm: mes, yyyy: normalizarAno_(m[2]) } : null; }
+  if (m) { const mes = MESES_PT[m[1].substring(0, 3)]; return mes ? { mm: mes, yyyy: _normalizarAno_(m[2]) } : null; }
   m = s.match(/^\d{1,2}[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);     // dd/mm/aaaa
-  if (m) { const mes = parseInt(m[1], 10); return (mes >= 1 && mes <= 12) ? { mm: mes, yyyy: normalizarAno_(m[2]) } : null; }
+  if (m) { const mes = parseInt(m[1], 10); return (mes >= 1 && mes <= 12) ? { mm: mes, yyyy: _normalizarAno_(m[2]) } : null; }
   m = s.match(/^(\d{1,2})[\/\-.](\d{2,4})$/);                   // mm/aaaa
-  if (m) { const mes = parseInt(m[1], 10); return (mes >= 1 && mes <= 12) ? { mm: mes, yyyy: normalizarAno_(m[2]) } : null; }
+  if (m) { const mes = parseInt(m[1], 10); return (mes >= 1 && mes <= 12) ? { mm: mes, yyyy: _normalizarAno_(m[2]) } : null; }
   return null;
 }
 
@@ -1874,7 +1893,7 @@ function _parseHtmlTable_(html) {
       aplicarCarry();
       const colspan = parseInt((cell.match(/colspan\s*=\s*"?(\d+)/i) || [])[1] || '1', 10);
       const rowspan = parseInt((cell.match(/rowspan\s*=\s*"?(\d+)/i) || [])[1] || '1', 10);
-      const val = limparCelulaHtml_(cell);
+      const val = _limparCelulaHtml_(cell);
       for (let k = 0; k < colspan; k++) {
         rowOut[col] = val;
         if (rowspan > 1) carry[col] = { value: val, remaining: rowspan - 1 };
