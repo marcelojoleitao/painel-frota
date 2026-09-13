@@ -62,7 +62,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.12.3';
+const VERSAO_PAINEL = '2.12.4';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2317,7 +2317,8 @@ function renderRelatorios(c) {
   c.innerHTML = `
     <div class="cartao largo" style="margin-bottom:14px">
       <div class="cartao-cab"><h3>Relatórios</h3><small>PDF pronto para anexar ao processo</small></div>
-      <div class="cartao-dica" style="margin:0">Os relatórios são montados na hora, em paisagem, com a identidade da PRF — não criam abas na planilha.</div>
+      <div class="cartao-dica" style="margin:0 0 8px">Os relatórios são montados na hora, em paisagem, com a identidade da PRF — não criam abas na planilha.</div>
+      <div id="estado-servidor" class="cartao-dica" style="margin:0">Verificando o servidor…</div>
     </div>
     <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">
       <div class="acao-cartao">
@@ -2385,6 +2386,7 @@ function renderRelatorios(c) {
       .withFailureHandler(e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; toast('Erro: ' + (e && e.message ? e.message : e)); })
       .gerarRelatorioAbastecimento(ESTADO.token, de, ate);
   });
+  verificarServidor();
   ouvir('btn-rel-pecas', 'click', gerarPecas);
   ouvir('btn-rel-aceites', 'click', gerarAceites);
   ouvir('glosa-rel-comp', 'change', carregarCombustiveisGlosa);
@@ -2496,6 +2498,27 @@ function gerarAceites() {
     },
     e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; });
   if (run) run.gerarRelatorioAceites(ESTADO.token, comp);
+}
+
+
+/* ---------------- Estado do servidor e das bases ---------------- */
+function verificarServidor() {
+  const caixa = el('estado-servidor'); if (!caixa) return;
+  const run = servidor('infoServidor',
+    r => {
+      if (!r || !r.ok) { caixa.textContent = 'Não consegui verificar o servidor.'; return; }
+      const desatualizado = r.versao !== VERSAO_PAINEL || (r.faltando && r.faltando.length);
+      const abas = Object.keys(r.abas || {}).filter(k => k !== 'erro')
+        .map(k => `${esc(k)}: ${r.abas[k] ? fmtInt(r.abas[k]) + ' linhas' : '<b style="color:var(--vermelho)">ausente</b>'}`).join(' · ');
+      caixa.innerHTML = (desatualizado
+        ? `<b style="color:var(--vermelho)">Servidor desatualizado (Codigo.gs v${esc(r.versao)}, interface v${esc(VERSAO_PAINEL)}).</b>
+           ${r.faltando.length ? 'Funções ausentes: <b>' + esc(r.faltando.join(', ')) + '</b>. ' : ''}
+           Cole o Codigo.gs no editor e faça Implantar → Gerenciar implantações → Nova versão.<br>`
+        : `Servidor v${esc(r.versao)} em dia. `) + (abas ? 'Bases: ' + abas : '');
+    },
+    () => { caixa.innerHTML = '<b style="color:var(--vermelho)">O servidor não respondeu à verificação.</b> Cole o Codigo.gs mais recente e faça Nova versão.'; });
+  if (run) run.infoServidor(ESTADO.token);
+  else caixa.innerHTML = '<b style="color:var(--vermelho)">Servidor antigo:</b> a verificação nem existe nele. Cole o Codigo.gs e faça Nova versão.';
 }
 
 </script>

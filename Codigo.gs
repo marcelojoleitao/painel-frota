@@ -15,6 +15,9 @@
  * ============================================================
  */
 
+/** Versão deste arquivo — o painel compara com a versão da interface. */
+const CODIGO_VERSAO = '2.12.4';
+
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
   ABA_BASE:       'ConsultaBD',
@@ -3016,6 +3019,60 @@ function _htmlRelatorioAceites_(d, sessao) {
     '<div class="rodape">Gerado pelo Painel da Frota — 16ª SPRF/CE em ' + agora + ' por ' + _esc_(sessao.email) +
     '. Fontes: AceitesDB (importação dos aceites) e aba Acidentes da planilha de gestão.</div>' +
     '</body></html>';
+}
+
+
+/** O que este servidor tem instalado — usado pelo painel para avisar quando o Codigo.gs está atrasado. */
+function infoServidor(token) {
+  const sessao = _sessao_(token);
+  if (!sessao) return { expirado: true };
+  const esperadas = ['gerarRelatorioAbastecimento', 'gerarRelatorioGlosa', 'gerarRelatorioPecas', 'gerarRelatorioAceites',
+                     'importarBase', 'importarTituloAbast', 'importarDetalhamento', 'importarAceites', 'importarGlosaAnp',
+                     'enfileirarAcoes', 'obterFila', 'salvarViatura', 'criarViatura'];
+  const faltando = esperadas.filter(n => typeof this[n] !== 'function');
+  const abas = {};
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB);
+    [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS].forEach(n => {
+      const a = ss.getSheetByName(n); abas[n] = a ? a.getLastRow() : 0;
+    });
+  } catch (e) { abas.erro = String(e.message || e); }
+  try {
+    const b = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    [CONFIG.ABA_ANP, CONFIG.ABA_RESUMO_GLOSA, CONFIG.ABA_ACIDENTES].forEach(n => {
+      const a = b.getSheetByName(n); abas[n] = a ? a.getLastRow() : 0;
+    });
+  } catch (e) {}
+  return { ok: true, versao: CODIGO_VERSAO, faltando: faltando, abas: abas };
+}
+
+/** Competências disponíveis em cada base — o painel usa para oferecer só o que existe. */
+function competenciasDisponiveis(token) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const saida = { detalhamento: [], aceites: [], erro: '' };
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB);
+    const det = ss.getSheetByName(CONFIG.ABA_DETALHE);
+    if (det && det.getLastRow() > 2) {
+      const c = {};
+      det.getRange(1, 30, det.getLastRow(), 1).getValues().forEach(l => { const k = _compSegura_(l[0]); if (k) c[k] = (c[k] || 0) + 1; });
+      saida.detalhamento = Object.keys(c).sort().reverse().map(k => ({ comp: k, qtd: c[k] }));
+    }
+    const ace = ss.getSheetByName(CONFIG.ABA_ACEITES);
+    if (ace && ace.getLastRow() > 2) {
+      const valores = ace.getDataRange().getValues();
+      const mapa = _mapaAceitesDb_(valores);
+      const c = {};
+      for (let r = mapa.linhaCab + 1; r < valores.length; r++) {
+        const l = valores[r];
+        const k = _compSegura_(mapa.idx.competencia >= 0 ? l[mapa.idx.competencia] : '') ||
+                  _compSegura_(mapa.idx.conclusao >= 0 ? l[mapa.idx.conclusao] : '');
+        if (k) c[k] = (c[k] || 0) + 1;
+      }
+      saida.aceites = Object.keys(c).sort().reverse().map(k => ({ comp: k, qtd: c[k] }));
+    }
+  } catch (e) { saida.erro = String(e.message || e); }
+  return { ok: true, competencias: saida };
 }
 
 /** Diagnóstico das bases dos relatórios de OS — rode no editor. */
