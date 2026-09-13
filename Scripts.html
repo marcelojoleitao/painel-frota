@@ -10,6 +10,20 @@ function el(id) { const e = document.getElementById(id); if (!e) console.warn('E
 function htm(id, h) { const e = el(id); if (e) e.innerHTML = h; }
 function txt(id, t) { const e = el(id); if (e) e.textContent = t; }
 
+/** Chama uma função do servidor avisando quando ela ainda não foi implantada. */
+function servidor(nome, aoOk, aoErro) {
+  const run = google.script.run
+    .withSuccessHandler(r => { if (!sessaoExpirou(r)) aoOk(r); })
+    .withFailureHandler(e => { if (aoErro) aoErro(e); else toast('Erro: ' + (e && e.message ? e.message : e)); });
+  if (typeof run[nome] !== 'function') {
+    const aviso = 'A função "' + nome + '" ainda não está no servidor. Cole o Codigo.gs mais recente no editor e faça Implantar → Gerenciar implantações → Nova versão.';
+    toast(aviso);
+    if (aoErro) aoErro(new Error(aviso));
+    return null;
+  }
+  return run;
+}
+
 /* Erro de JavaScript vira aviso visível — sem isso a tela fica muda e parece "não atualizou". */
 window.addEventListener('error', function (ev) {
   const msg = (ev.message || 'erro') + (ev.filename ? ' — linha ' + ev.lineno : '');
@@ -27,7 +41,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.9.0';
+const VERSAO_PAINEL = '2.9.1';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2330,17 +2344,16 @@ function carregarCombustiveisGlosa() {
   const comp = competenciaBR(val('glosa-rel-comp'));
   if (!comp) { caixa.innerHTML = '<span class="foto-data">Escolha a competência.</span>'; return; }
   caixa.innerHTML = '<span class="foto-data">Lendo os abastecimentos da competência…</span>';
-  google.script.run
-    .withSuccessHandler(r => {
-      if (sessaoExpirou(r)) return;
+  const run = servidor('combustiveisDaCompetencia',
+    r => {
       if (!r || !r.ok) { caixa.innerHTML = '<span class="foto-data">' + esc((r && r.erro) || 'Falha ao ler.') + '</span>'; return; }
       if (!r.combustiveis.length) { caixa.innerHTML = '<span class="foto-data">Nenhum abastecimento em ' + esc(comp) + '.</span>'; return; }
       caixa.innerHTML = r.combustiveis.map(c => `<label title="${c.anp ? 'ANP: ' + escAttr(c.anp) : 'sem produto correspondente na ANP'}">
         <input type="checkbox" value="${escAttr(c.nome)}" ${c.anp ? 'checked' : 'disabled'}> ${esc(c.nome)}
         <small style="color:var(--tinta-suave)">${c.qtd} abast.${c.anp ? '' : ' • sem equivalente na ANP'}</small></label>`).join('');
-    })
-    .withFailureHandler(e => { caixa.innerHTML = '<span class="foto-data">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</span>'; })
-    .combustiveisDaCompetencia(ESTADO.token, comp);
+    },
+    e => { caixa.innerHTML = '<span class="foto-data">' + esc(String(e && e.message ? e.message : e)) + '</span>'; });
+  if (run) run.combustiveisDaCompetencia(ESTADO.token, comp);
 }
 
 function gerarGlosa() {
@@ -2352,10 +2365,9 @@ function gerarGlosa() {
   btn.disabled = true; btn.textContent = 'Apurando…';
   if (status) status.textContent = 'Cruzando AbastBD com o histórico da ANP…';
   if (resultado) resultado.innerHTML = '';
-  google.script.run
-    .withSuccessHandler(r => {
+  const run = servidor('gerarRelatorioGlosa',
+    r => {
       btn.disabled = false; btn.textContent = 'Gerar PDF';
-      if (sessaoExpirou(r)) return;
       if (!r || !r.ok) { if (status) status.textContent = ''; toast((r && r.erro) || 'Falha ao gerar.'); return; }
       if (status) status.innerHTML = `<a class="pdf-link" href="${escAttr(r.link)}" target="_blank" rel="noopener">${icoPdf()} ${esc(r.nome)}</a>`;
       if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
@@ -2364,9 +2376,9 @@ function gerarGlosa() {
         ${r.grupos.map(g => `<div class="dado"><div class="k">${esc(g.combustivel)}</div><div class="v">${fmtMoeda(g.subtotal)} <small style="font-weight:500; color:var(--tinta-suave)">${g.itens} item(ns)</small></div></div>`).join('')}
       </div>${r.semTeto && r.semTeto.length ? `<div class="cartao-dica">Sem teto publicado na ANP: ${esc(r.semTeto.join('; '))}</div>` : ''}`;
       window.open(r.link, '_blank');
-    })
-    .withFailureHandler(e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; toast('Erro: ' + (e && e.message ? e.message : e)); })
-    .gerarRelatorioGlosa(ESTADO.token, comp, escolhidos);
+    },
+    e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; });
+  if (run) run.gerarRelatorioGlosa(ESTADO.token, comp, escolhidos);
 }
 
 </script>
