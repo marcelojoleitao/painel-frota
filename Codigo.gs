@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.13.0';
+const CODIGO_VERSAO = '2.13.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1589,6 +1589,8 @@ function importarDetalhamento(token, arquivo, titulo, competencia) {
     aba.getRange(inicio, 6, linhas.length, 23).setValues(linhas);
     if (tit) aba.getRange(inicio, 29, linhas.length, 1).setValues(linhas.map(() => [tit]));
     if (comp) aba.getRange(inicio, 30, linhas.length, 1).setValues(linhas.map(() => [comp]));
+    // colunas A:E são calculadas por fórmula na planilha — replica da linha anterior
+    _replicarColunasIniciais_(aba, inicio, linhas.length, 5);
     SpreadsheetApp.flush();
     _logAcao_(p.ss, p.sessao.email, 'Importar detalhamento', '', linhas.length + ' linhas', 'título ' + tit + ' | comp. ' + comp);
     return { ok: true, inseridos: linhas.length, titulo: tit, competencia: comp };
@@ -1626,6 +1628,8 @@ function importarAceites(token, arquivo, tipo) {
       const inicio = _proximaLinhaAppend_(aba, 1, 2);
       aba.getRange(inicio, 1, linhas.length, 7).setValues(linhas);
       aba.getRange(inicio, 8, linhas.length, 1).setValues(linhas.map(() => [tipo]));
+      const replicadas = _replicarFormulas_(aba, inicio, linhas.length, 8);   // I em diante são calculadas
+      if (replicadas) Logger.log('AceitesDB: ' + replicadas + ' coluna(s) de fórmula replicada(s) nas linhas novas.');
     }
     SpreadsheetApp.flush(); limparCache();
     _logAcao_(p.ss, p.sessao.email, 'Importar aceites (' + tipo + ')', '', linhas.length + ' inseridos', 'lidos: ' + lidos + ' | duplicados: ' + duplicados);
@@ -2664,30 +2668,102 @@ function _ssManut_() { return SpreadsheetApp.openById(CONFIG.ID_BASE); }
 
 /**
  * MIGRAÇÃO (rodar uma vez no editor): traz DetalhamentoDB, AceitesDB e
- * OrçamentosDB da planilha de aceites para a planilha-mãe, com formatação
- * simples. Depois disso o painel não depende mais daquela planilha.
+ * OrçamentosDB da planilha de aceites para a planilha-mãe.
+ *
+ * Preserva as FÓRMULAS (as colunas calculadas continuam calculando) e avisa
+ * se alguma fórmula apontar para uma aba que ficou na planilha antiga.
+ * Também copia larguras de coluna e formatos de número.
  */
 function migrarDadosManutencao() {
   const origem = SpreadsheetApp.openById(CONFIG.ID_MANUT_ANTIGA);
   const destino = SpreadsheetApp.openById(CONFIG.ID_BASE);
   const abas = [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS];
-  const resumo = [];
+  const nomesDestino = destino.getSheets().map(a => a.getName());
+  const resumo = [], avisos = [];
+
   abas.forEach(nome => {
     const de = origem.getSheetByName(nome);
     if (!de) { resumo.push(nome + ': não existe na origem'); return; }
-    const valores = de.getDataRange().getValues();
-    if (!valores.length) { resumo.push(nome + ': vazia'); return; }
+    const nLin = de.getLastRow(), nCol = de.getLastColumn();
+    if (!nLin) { resumo.push(nome + ': vazia'); return; }
+
+    const faixa = de.getRange(1, 1, nLin, nCol);
+    const valores = faixa.getValues();
+    const formulas = faixa.getFormulas();
+    const formatos = faixa.getNumberFormats();
+
+    // conteúdo final: fórmula onde existir, valor onde não existir
+    const conteudo = valores.map((linha, i) => linha.map((v, j) => formulas[i][j] ? formulas[i][j] : v));
+
+    // fórmulas que citam abas de fora deste conjunto
+    const citadas = {};
+    formulas.forEach(linha => linha.forEach(f => {
+      if (!f) return;
+      (f.match(/(?:^|[^A-Za-z0-9_])'?([A-Za-zÀ-ÿ0-9 _.çÇ-]{2,40})'?!/g) || []).forEach(m => {
+        const aba = m.replace(/[^A-Za-zÀ-ÿ0-9 _.çÇ-]/g, '').trim();
+        if (aba) citadas[aba] = true;
+      });
+    }));
+    Object.keys(citadas).forEach(aba => {
+      if (abas.indexOf(aba) < 0 && nomesDestino.indexOf(aba) < 0) avisos.push(nome + ' usa fórmulas que citam a aba "' + aba + '", que não está na planilha-mãe');
+    });
+
     let para = destino.getSheetByName(nome);
     if (para) destino.deleteSheet(para);
     para = destino.insertSheet(nome);
-    para.getRange(1, 1, valores.length, valores[0].length).setValues(valores);
-    para.setFrozenRows(Math.min(3, valores.length));
-    resumo.push(nome + ': ' + (valores.length - 1) + ' linhas');
+    const alvo = para.getRange(1, 1, nLin, nCol);
+    alvo.setValues(conteudo);
+    alvo.setNumberFormats(formatos);
+    para.setFrozenRows(Math.min(3, nLin));
+    for (let c = 1; c <= nCol; c++) { try { para.setColumnWidth(c, de.getColumnWidth(c)); } catch (e) {} }
+
+    const comFormula = formulas.reduce((t, l) => t + l.filter(f => f).length, 0);
+    resumo.push(nome + ': ' + (nLin - 1) + ' linhas, ' + comFormula + ' células com fórmula preservadas');
   });
+
   limparCache();
-  Logger.log('Migração das bases de manutenção → ' + resumo.join(' | '));
-  Logger.log('A planilha antiga pode ser arquivada; o painel lê tudo da planilha-mãe agora.');
+  Logger.log('MIGRAÇÃO → ' + resumo.join(' | '));
+  if (avisos.length) {
+    Logger.log('ATENÇÃO: ' + avisos.join(' | ') + '. Essas fórmulas vão dar erro até a aba citada ser trazida também — me avise quais são.');
+  } else {
+    Logger.log('Nenhuma fórmula depende de aba externa: a planilha antiga pode ser arquivada.');
+  }
   return resumo.join(' | ');
+}
+
+/**
+ * Replica, nas linhas recém-importadas, as fórmulas que existem nas colunas
+ * calculadas (as que o arquivo importado não preenche). Sem isso, uma
+ * importação nova deixaria essas colunas em branco.
+ */
+/** Igual à réplica acima, mas para colunas calculadas ANTES da área escrita (ex.: A:E do detalhamento). */
+function _replicarColunasIniciais_(aba, primeiraLinhaNova, qtdLinhas, ateColuna) {
+  try {
+    const modeloLinha = primeiraLinhaNova - 1;
+    if (modeloLinha < 2 || qtdLinhas < 1) return 0;
+    const modelo = aba.getRange(modeloLinha, 1, 1, ateColuna).getFormulasR1C1()[0];
+    if (!modelo.some(f => f)) return 0;
+    const bloco = [];
+    for (let i = 0; i < qtdLinhas; i++) bloco.push(modelo.slice());
+    aba.getRange(primeiraLinhaNova, 1, qtdLinhas, ateColuna).setFormulasR1C1(bloco);
+    return modelo.filter(f => f).length;
+  } catch (e) { Logger.log('Réplica de colunas iniciais: ' + e); return 0; }
+}
+
+function _replicarFormulas_(aba, primeiraLinhaNova, qtdLinhas, colunasEscritas) {
+  try {
+    const nCol = aba.getLastColumn();
+    if (nCol <= colunasEscritas || qtdLinhas < 1) return 0;
+    const modeloLinha = primeiraLinhaNova - 1;
+    if (modeloLinha < 2) return 0;
+    const largura = nCol - colunasEscritas;
+    const modelo = aba.getRange(modeloLinha, colunasEscritas + 1, 1, largura).getFormulasR1C1()[0];
+    if (!modelo.some(f => f)) return 0;
+    const bloco = [];
+    for (let i = 0; i < qtdLinhas; i++) bloco.push(modelo.slice());
+    aba.getRange(primeiraLinhaNova, colunasEscritas + 1, qtdLinhas, largura).setFormulasR1C1(bloco);
+    return modelo.filter(f => f).length;
+  } catch (e) { Logger.log('Réplica de fórmulas: ' + e); return 0; }
 }
 
 /* ============================================================
