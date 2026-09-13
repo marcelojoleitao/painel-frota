@@ -56,9 +56,14 @@ const CONFIG = {
   EDICAO_LINHAS_VERIFICACAO: [2, 3],
   EDICAO_OBRIGATORIOS: ['placa', 'modelo', 'tipo', 'categoria', 'especie', 'cor', 'comb', 'anoFab', 'anoMod', 'chassi', 'renavam', 'blind', 'carac'],
 
-  // Fotos das viaturas: pasta do Drive onde os envios pelo painel são salvos.
-  // Cole o ID da pasta (da URL drive.google.com/drive/folders/<ID>). Vazio = envio desligado.
-  PASTA_FOTOS: '',
+  // Fotos das viaturas (mesma pasta do consultas_detran.py)
+  PASTA_FOTOS: '1RXE1xx0GPYZhtZAuWArmU9z7RVueOcUT',
+  // CRLVs baixados/anexados (mesma pasta do consultas_detran.py)
+  PASTA_CRLV: '1RAs2cZEE4MzQJHKRiYKZFLefYrQcSAcC',
+  // Registro das ações executadas pelo painel (aba criada automaticamente na planilha base)
+  ABA_LOG: 'LogAcoes',
+  // DETRAN-CE — Central de Serviços
+  DETRAN_BASE: 'https://sistemas.detran.ce.gov.br/central',
 
   TITULO: 'Painel da Frota — 16ª SPRF/CE',
   FUSO: 'America/Fortaleza'
@@ -486,6 +491,401 @@ function _datasFotos_(veiculos) {
 function _idDrive_(url) {
   const m = String(url || '').match(/[?&]id=([\w-]{10,})|\/d\/([\w-]{10,})/);
   return m ? (m[1] || m[2]) : '';
+}
+
+
+/* ============================================================
+   CENTRAL DE AÇÕES — DETRAN-CE (porte do consultas_detran.py)
+   Fluxos HTTP idênticos aos do Python: login por veículo com
+   CSRF + cookies, CRLV-e, licenciamento/boleto e multas.
+   ============================================================ */
+
+const DETRAN_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:149.0) Gecko/20100101 Firefox/149.0';
+
+/** Cliente HTTP com pote de cookies (UrlFetchApp não guarda cookies sozinho). */
+function _detranCliente_() {
+  const pote = {};
+  const guardarCookies = resp => {
+    const h = resp.getAllHeaders();
+    let sc = h['Set-Cookie'] || h['set-cookie'];
+    if (!sc) return;
+    if (!Array.isArray(sc)) sc = [sc];
+    sc.forEach(c => { const m = String(c).match(/^([^=]+)=([^;]*)/); if (m) pote[m[1]] = m[2]; });
+  };
+  const cookieHeader = () => Object.keys(pote).map(k => k + '=' + pote[k]).join('; ');
+  const pedir = (metodo, url, extras, payload) => {
+    const op = {
+      method: metodo, muteHttpExceptions: true, followRedirects: true,
+      headers: Object.assign({
+        'User-Agent': DETRAN_UA,
+        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
+        'Cookie': cookieHeader()
+      }, extras || {})
+    };
+    if (payload !== undefined) op.payload = payload;
+    let resp, erro;
+    for (let t = 1; t <= 3; t++) {
+      try {
+        resp = UrlFetchApp.fetch(url, op);
+        if (resp.getResponseCode() < 500) break;
+        erro = 'HTTP ' + resp.getResponseCode();
+      } catch (e) { erro = String(e); resp = null; }
+      if (t < 3) Utilities.sleep(4000);
+    }
+    if (!resp) throw new Error('DETRAN inacessível: ' + erro);
+    guardarCookies(resp);
+    return resp;
+  };
+  return { get: (u, h) => pedir('get', u, h), post: (u, h, p) => pedir('post', u, h, p) };
+}
+
+function _detranCsrf_(html) { const m = String(html).match(/<meta[^>]+name=["']csrf-token["'][^>]+content=["']([^"']+)["']/i) || String(html).match(/content=["']([^"']+)["'][^>]+name=["']csrf-token["']/i); return m ? m[1] : ''; }
+function _detranAuth_(html) { const m = String(html).match(/name=["']authenticity_token["'][^>]*value=["']([^"']+)["']/i) || String(html).match(/value=["']([^"']+)["'][^>]*name=["']authenticity_token["']/i); return m ? m[1] : ''; }
+function _semTags_(html) { return String(html).replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim(); }
+function _normTxt_(s) { return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+
+/** Login por veículo (placa + renavam). Devolve {cli, csrf} ou lança erro com a mensagem do DETRAN. */
+function _detranLogin_(placa, renavam) {
+  const B = CONFIG.DETRAN_BASE;
+  const cli = _detranCliente_();
+  const r1 = cli.get(B, { 'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8' });
+  const csrf = _detranCsrf_(r1.getContentText());
+  if (!csrf) throw new Error('CSRF do DETRAN não encontrado (site fora do ar ou mudou).');
+  const cab = { 'X-CSRF-Token': csrf, 'X-Requested-With': 'XMLHttpRequest', 'Referer': B };
+  const r2 = cli.get(B + '/veiculos/detalhamento_servico?codigo=0', cab);
+  const auth = _detranAuth_(r2.getContentText());
+  if (!auth) throw new Error('authenticity_token não encontrado.');
+  const r3 = cli.post(B + '/veiculos/login',
+    Object.assign({ 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'Accept': 'application/json, text/javascript, */*; q=0.01' }, cab),
+    { 'authenticity_token': auth, 'veiculo[tipo_formulario]': '1', 'veiculo[placa]': placa, 'veiculo[renavam_chassi]': renavam, 'veiculo[chassi]': '' });
+  let j;
+  try { j = JSON.parse(r3.getContentText()); } catch (e) { throw new Error('Login DETRAN sem JSON (HTTP ' + r3.getResponseCode() + ').'); }
+  if (j.status !== 'succ') {
+    const e = j.errors || {};
+    throw new Error('Login DETRAN falhou: ' + (e.error_message || JSON.stringify(e || j)).substring(0, 200));
+  }
+  return { cli: cli, csrf: csrf, cab: cab };
+}
+
+/* ---------------- CRLV ---------------- */
+function _detranBaixarCrlvPdf_(sess, crv, cod) {
+  const B = CONFIG.DETRAN_BASE;
+  const cab = Object.assign({}, sess.cab, { 'Referer': B + '/veiculos/principal', 'Accept': 'text/html, */*; q=0.01' });
+  sess.cli.get(B + '/veiculos/consultar_crlve', cab);
+  const r5 = sess.cli.post(B + '/veiculos/consultar_crlve',
+    Object.assign({}, cab, { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }),
+    { 'numero_crv': crv, 'codigo_seguranca': cod });
+  if (r5.getContentText().indexOf('baixar_crlve') < 0) {
+    throw new Error('Download não liberado (CRV/código?): ' + _semTags_(r5.getContentText()).substring(0, 250));
+  }
+  const r6 = sess.cli.post(B + '/veiculos/baixar_crlve',
+    Object.assign({}, cab, { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/pdf,application/octet-stream,*/*' }),
+    { '_method': 'post', 'authenticity_token': sess.csrf });
+  const ct = String((r6.getAllHeaders()['Content-Type'] || '')).toLowerCase();
+  const bytes = r6.getContent();
+  if (ct.indexOf('pdf') < 0 || bytes.length < 500) throw new Error('Resposta do DETRAN não é um PDF válido.');
+  return bytes;
+}
+
+/** Salva o PDF na pasta de CRLVs com o nome PLACA.pdf (apaga homônimo antes, como no Python). */
+function _salvarCrlvDrive_(placa, bytes) {
+  const pasta = DriveApp.getFolderById(CONFIG.PASTA_CRLV);
+  const nome = placa + '.pdf';
+  const iguais = pasta.getFilesByName(nome);
+  while (iguais.hasNext()) { try { iguais.next().setTrashed(true); } catch (e) {} }
+  const arq = pasta.createFile(Utilities.newBlob(bytes, 'application/pdf', nome));
+  try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+  return { id: arq.getId(), link: 'https://drive.google.com/file/d/' + arq.getId() + '/view?usp=sharing' };
+}
+
+/** Texto de um PDF via conversão do Drive (OCR) — cria um Doc temporário e o remove. */
+function _pdfTexto_(bytes) {
+  const blob = Utilities.newBlob(bytes, 'application/pdf', 'tmp_auditoria.pdf');
+  const doc = Drive.Files.create({ name: 'tmp_auditoria_painel', mimeType: 'application/vnd.google-apps.document' }, blob, { ocrLanguage: 'pt' });
+  try {
+    const resp = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + doc.id + '/export?mimeType=text/plain',
+      { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+    if (resp.getResponseCode() !== 200) throw new Error('Export do texto falhou (HTTP ' + resp.getResponseCode() + ').');
+    return resp.getContentText();
+  } finally {
+    try { Drive.Files.remove(doc.id); } catch (e) {}
+  }
+}
+
+function _extrairExercicio_(texto, placa) {
+  const s = String(texto).replace(/\s+/g, ' ');
+  if (placa) {
+    const i = s.indexOf(placa);
+    if (i >= 0) { const m = s.substring(i, i + 250).match(/\b(20\d{2})\b/); if (m) return parseInt(m[1], 10); }
+  }
+  let m = s.match(/EXERC[IÍ]CIO[\s\S]{0,80}?\b(20\d{2})\b/i); if (m) return parseInt(m[1], 10);
+  m = s.match(/\b(20\d{2})\b/); if (m) return parseInt(m[1], 10);
+  return 0;
+}
+function _extrairPlacaPdf_(texto) {
+  const s = String(texto).toUpperCase().replace(/\s+/g, ' ');
+  let m = s.match(/PLACA\W{0,15}([A-Z]{3}[- ]?\d[A-Z0-9]\d{2})/);
+  if (!m) m = s.match(/\b([A-Z]{3}[- ]?\d[A-Z0-9]\d{2})\b/);
+  return m ? m[1].replace(/[^A-Z0-9]/g, '') : '';
+}
+
+/** Baixa bytes de um arquivo do Drive a partir do link salvo na planilha. */
+function _baixarDoDrive_(link) {
+  const m = String(link || '').match(/[?&]id=([\w-]{10,})|\/d\/([\w-]{10,})/);
+  const id = m ? (m[1] || m[2]) : '';
+  if (!id) throw new Error('Link do Drive inválido.');
+  const resp = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + id + '?alt=media&supportsAllDrives=true',
+    { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+  if (resp.getResponseCode() !== 200) throw new Error('Não consegui abrir o arquivo do link (HTTP ' + resp.getResponseCode() + ').');
+  return resp.getContent();
+}
+
+/* ---------------- Acesso à linha da viatura ---------------- */
+function _linhaDaPlaca_(aba, placa) {
+  const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0].map(v => String(v || '').trim());
+  const idx = _mapearCampos_(cab);
+  const colPlaca = (idx.placa !== undefined ? idx.placa : 0) + 1;
+  const placas = aba.getRange(2, colPlaca, Math.max(1, aba.getLastRow() - 1), 1).getValues().map(l => String(l[0] || '').trim().toUpperCase());
+  const pos = placas.indexOf(placa);
+  return { linha: pos < 0 ? -1 : pos + 2, idx: idx };
+}
+
+/* ---------------- Registro (LogAcoes) ---------------- */
+function _abaLog_(ss) {
+  let aba = ss.getSheetByName(CONFIG.ABA_LOG);
+  if (!aba) {
+    aba = ss.insertSheet(CONFIG.ABA_LOG);
+    aba.appendRow(['Data/Hora', 'Usuário', 'Ação', 'Placa', 'Resultado', 'Detalhe']);
+    aba.setFrozenRows(1);
+  }
+  return aba;
+}
+function _logAcao_(ss, email, acao, placa, resultado, detalhe) {
+  try {
+    _abaLog_(ss).appendRow([Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm:ss'), email, acao, placa, resultado, String(detalhe || '').substring(0, 900)]);
+  } catch (e) { Logger.log('Log não gravado: ' + e); }
+}
+
+function obterLogAcoes(token, quantidade) {
+  const sessao = _sessao_(token);
+  if (!sessao) return { expirado: true };
+  if (!sessao.admin) return { ok: false, erro: 'Somente administrador.' };
+  const aba = _abaLog_(SpreadsheetApp.openById(CONFIG.ID_BASE));
+  const n = Math.min(quantidade || 100, 500);
+  const total = aba.getLastRow();
+  if (total < 2) return { ok: true, linhas: [] };
+  const ini = Math.max(2, total - n + 1);
+  const linhas = aba.getRange(ini, 1, total - ini + 1, 6).getValues()
+    .map(l => ({ quando: _dataTxt_(l[0]), quem: String(l[1]), acao: String(l[2]), placa: String(l[3]), resultado: String(l[4]), detalhe: String(l[5]) }))
+    .reverse();
+  return { ok: true, linhas: linhas };
+}
+
+/* ---------------- AÇÕES (uma placa por chamada; o lote é orquestrado no navegador) ---------------- */
+function _prepararAcao_(token) {
+  const sessao = _sessao_(token);
+  if (!sessao) return { erroPadrao: { expirado: true } };
+  if (!sessao.admin) return { erroPadrao: { ok: false, erro: 'Somente o administrador executa ações.' } };
+  return { sessao: sessao, ss: SpreadsheetApp.openById(CONFIG.ID_BASE) };
+}
+
+/** BAIXAR CRLV: login DETRAN → PDF → Drive → link na coluna BO + auditoria do exercício. */
+function acaoBaixarCrlv(token, placa) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  placa = String(placa || '').trim().toUpperCase();
+  const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
+  const alvo = _linhaDaPlaca_(aba, placa);
+  if (alvo.linha < 0) return { ok: false, erro: 'Placa não encontrada.' };
+  const ler = campo => alvo.idx[campo] !== undefined ? String(aba.getRange(alvo.linha, alvo.idx[campo] + 1).getValue() || '').trim() : '';
+  const renavam = ler('renavam').replace(/\D/g, '').padStart(11, '0');
+  const crv = ler('crv').replace(/\D/g, ''), cod = ler('codCrv').replace(/\D/g, '');
+  try {
+    if (!renavam || renavam === '00000000000') throw new Error('Sem renavam na planilha.');
+    if (!crv || !cod) throw new Error('Sem CRV/código de segurança na planilha (colunas BA/BB).');
+    const sess = _detranLogin_(placa, renavam);
+    const bytes = _detranBaixarCrlvPdf_(sess, crv, cod);
+    const salvo = _salvarCrlvDrive_(placa, bytes);
+    if (alvo.idx.linkCrlv !== undefined) aba.getRange(alvo.linha, alvo.idx.linkCrlv + 1).setValue(salvo.link);
+    let detalhe = 'PDF salvo no Drive';
+    try {
+      const ex = _extrairExercicio_(_pdfTexto_(bytes), placa);
+      if (ex && alvo.idx.anoEx !== undefined) { aba.getRange(alvo.linha, alvo.idx.anoEx + 1).setValue(ex); detalhe += ' • exercício ' + ex + ' gravado'; }
+    } catch (e) { detalhe += ' • exercício não lido (' + String(e.message || e).substring(0, 80) + ')'; }
+    SpreadsheetApp.flush(); limparCache();
+    _logAcao_(p.ss, p.sessao.email, 'Baixar CRLV', placa, 'OK', detalhe);
+    return { ok: true, status: 'CRLV BAIXADO', detalhe: detalhe, link: salvo.link };
+  } catch (e) {
+    const msg = String(e.message || e);
+    _logAcao_(p.ss, p.sessao.email, 'Baixar CRLV', placa, 'ERRO', msg);
+    return { ok: false, erro: msg };
+  }
+}
+
+/** CONSULTAR MULTAS: grava na coluna O "Data da Última Consulta: ..." + resultado. */
+function acaoConsultarMultas(token, placa) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  placa = String(placa || '').trim().toUpperCase();
+  const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
+  const alvo = _linhaDaPlaca_(aba, placa);
+  if (alvo.linha < 0) return { ok: false, erro: 'Placa não encontrada.' };
+  const renavam = (alvo.idx.renavam !== undefined ? String(aba.getRange(alvo.linha, alvo.idx.renavam + 1).getValue() || '') : '').replace(/\D/g, '').padStart(11, '0');
+  try {
+    if (!renavam || renavam === '00000000000') throw new Error('Sem renavam na planilha.');
+    const sess = _detranLogin_(placa, renavam);
+    const B = CONFIG.DETRAN_BASE;
+    const cab = Object.assign({}, sess.cab, { 'Referer': B + '/veiculos/principal', 'Accept': 'text/html, */*; q=0.01' });
+    const r4 = sess.cli.get(B + '/veiculos/principal', cab);
+    const html = r4.getContentText();
+    let resultado;
+    const blocos = html.match(/<div[^>]*class="[^"]*links-veiculo[^"]*"[\s\S]*?<\/div>/gi) || [];
+    const blocoMulta = blocos.find(b => /multa/i.test(b));
+    if (blocoMulta && /alert-success/.test(blocoMulta) && /n[ãa]o possui multas/i.test(_normTxt_(blocoMulta))) resultado = 'SEM MULTAS';
+    else if (blocoMulta && /alert-danger/.test(blocoMulta)) {
+      const r5 = sess.cli.get(B + '/veiculos/multas', cab);
+      resultado = _parsearTabelaMultas_(r5.getContentText());
+    } else resultado = 'Situação não identificada.';
+    const conteudo = 'Data da Última Consulta: ' + Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy') + '\n' + resultado;
+    if (alvo.idx.multasTxt !== undefined) aba.getRange(alvo.linha, alvo.idx.multasTxt + 1).setValue(conteudo);
+    SpreadsheetApp.flush(); limparCache();
+    const n = (resultado.match(/AIT:/g) || []).length;
+    const status = resultado === 'SEM MULTAS' ? 'SEM MULTAS' : n ? n + ' MULTA(S)' : 'VERIFICAR';
+    _logAcao_(p.ss, p.sessao.email, 'Consultar multas', placa, status, resultado.replace(/\n/g, ' · ').substring(0, 300));
+    return { ok: true, status: status, detalhe: resultado.replace(/\n/g, ' · ').substring(0, 300) };
+  } catch (e) {
+    const msg = String(e.message || e);
+    _logAcao_(p.ss, p.sessao.email, 'Consultar multas', placa, 'ERRO', msg);
+    return { ok: false, erro: msg };
+  }
+}
+
+function _parsearTabelaMultas_(html) {
+  const mt = String(html).match(/<table[^>]*id=["']emissao-multas["'][\s\S]*?<\/table>/i);
+  if (!mt) return 'Tabela de multas não encontrada.';
+  const linhas = [];
+  (mt[0].match(/<tr[\s\S]*?<\/tr>/gi) || []).forEach(tr => {
+    const tds = (tr.match(/<td[\s\S]*?<\/td>/gi) || []).map(td => _semTags_(td));
+    if (tds.length < 8 || /total/i.test(tds[0])) return;
+    const ait = tds[1]; if (!ait) return;
+    linhas.push('AIT:' + ait + ' | ' + tds[3] + ' | Infração:' + tds[4] + ' | Venc:' + tds[5] +
+      ' | Valor:R$' + tds[6].replace(/R\$/g, '').trim() + ' | A pagar:R$' + tds[7].replace(/R\$/g, '').trim());
+  });
+  return linhas.length ? linhas.join('\n') : 'Multas indicadas, tabela vazia.';
+}
+
+/** GERAR BOLETO DE LICENCIAMENTO: JÁ LICENCIADO | PENDÊNCIA | BOLETO GERADO (PDF no Drive). */
+function acaoGerarBoleto(token, placa) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  placa = String(placa || '').trim().toUpperCase();
+  const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
+  const alvo = _linhaDaPlaca_(aba, placa);
+  if (alvo.linha < 0) return { ok: false, erro: 'Placa não encontrada.' };
+  const renavam = (alvo.idx.renavam !== undefined ? String(aba.getRange(alvo.linha, alvo.idx.renavam + 1).getValue() || '') : '').replace(/\D/g, '').padStart(11, '0');
+  try {
+    if (!renavam || renavam === '00000000000') throw new Error('Sem renavam na planilha.');
+    const sess = _detranLogin_(placa, renavam);
+    const B = CONFIG.DETRAN_BASE;
+    const cab = Object.assign({}, sess.cab, { 'Referer': B + '/veiculos/principal', 'Accept': 'text/html, */*; q=0.01' });
+    const r4 = sess.cli.get(B + '/veiculos/licenciamento', cab);
+    const html = r4.getContentText();
+    if (_normTxt_(_semTags_(html)).indexOf('veiculo ja licenciado') >= 0) {
+      _logAcao_(p.ss, p.sessao.email, 'Gerar boleto', placa, 'JÁ LICENCIADO', '');
+      return { ok: true, status: 'JÁ LICENCIADO', detalhe: 'DETRAN informa licenciamento em dia.' };
+    }
+    if (!/id=["']btn-emitir-licenciamento["']/.test(html)) {
+      _logAcao_(p.ss, p.sessao.email, 'Gerar boleto', placa, 'PENDÊNCIA', 'sem botão de emissão');
+      return { ok: true, status: 'PENDÊNCIA', detalhe: 'DETRAN não liberou a emissão (impedimento/pendência).' };
+    }
+    const auth = _detranAuth_(html);
+    if (!auth) throw new Error('authenticity_token do licenciamento não encontrado.');
+    const r5 = sess.cli.post(B + '/veiculos/gerar_boleto',
+      Object.assign({}, cab, { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'Accept': 'application/pdf,application/octet-stream,*/*' }),
+      { 'authenticity_token': auth });
+    const ct = String((r5.getAllHeaders()['Content-Type'] || '')).toLowerCase();
+    const bytes = r5.getContent();
+    if (ct.indexOf('pdf') < 0 && bytes.length < 1000) throw new Error('gerar_boleto não retornou PDF.');
+    const ano = new Date().getFullYear();
+    const pasta = DriveApp.getFolderById(CONFIG.PASTA_CRLV);
+    const nome = placa + ' - ' + ano + '.pdf';
+    const iguais = pasta.getFilesByName(nome);
+    while (iguais.hasNext()) { try { iguais.next().setTrashed(true); } catch (e) {} }
+    const arq = pasta.createFile(Utilities.newBlob(bytes, 'application/pdf', nome));
+    try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+    const link = 'https://drive.google.com/file/d/' + arq.getId() + '/view?usp=sharing';
+    _logAcao_(p.ss, p.sessao.email, 'Gerar boleto', placa, 'BOLETO GERADO', link);
+    return { ok: true, status: 'BOLETO GERADO', detalhe: 'PDF salvo na pasta de CRLVs.', link: link };
+  } catch (e) {
+    const msg = String(e.message || e);
+    _logAcao_(p.ss, p.sessao.email, 'Gerar boleto', placa, 'ERRO', msg);
+    return { ok: false, erro: msg };
+  }
+}
+
+/** AUDITAR CRLV: lê o PDF do link salvo, confere a placa e ajusta o Ano Exercício. */
+function acaoAuditarCrlv(token, placa) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  placa = String(placa || '').trim().toUpperCase();
+  const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
+  const alvo = _linhaDaPlaca_(aba, placa);
+  if (alvo.linha < 0) return { ok: false, erro: 'Placa não encontrada.' };
+  const link = alvo.idx.linkCrlv !== undefined ? String(aba.getRange(alvo.linha, alvo.idx.linkCrlv + 1).getValue() || '').trim() : '';
+  try {
+    if (!link) return { ok: true, status: 'SEM CRLV', detalhe: 'Sem link na coluna BO — nada a auditar.' };
+    const bytes = _baixarDoDrive_(link);
+    const texto = _pdfTexto_(bytes);
+    const placaPdf = _extrairPlacaPdf_(texto);
+    if (placaPdf && placaPdf !== placa) {
+      _logAcao_(p.ss, p.sessao.email, 'Auditar CRLV', placa, 'CRLV TROCADO', 'PDF é de ' + placaPdf);
+      return { ok: true, status: 'CRLV TROCADO', detalhe: 'O PDF do link é da placa ' + placaPdf + ' — confira e anexe o correto.' };
+    }
+    const ex = _extrairExercicio_(texto, placa);
+    if (!ex) {
+      _logAcao_(p.ss, p.sessao.email, 'Auditar CRLV', placa, 'NÃO VERIFICÁVEL', 'texto sem exercício');
+      return { ok: true, status: 'NÃO VERIFICÁVEL', detalhe: 'Link abre, mas não li o exercício (PDF escaneado?).' };
+    }
+    const atual = alvo.idx.anoEx !== undefined ? parseInt(String(aba.getRange(alvo.linha, alvo.idx.anoEx + 1).getValue() || '').replace(/\D/g, ''), 10) || 0 : 0;
+    if (ex !== atual && alvo.idx.anoEx !== undefined) {
+      aba.getRange(alvo.linha, alvo.idx.anoEx + 1).setValue(ex);
+      SpreadsheetApp.flush(); limparCache();
+      _logAcao_(p.ss, p.sessao.email, 'Auditar CRLV', placa, 'EXERCÍCIO AJUSTADO', atual + ' → ' + ex);
+      return { ok: true, status: 'EXERCÍCIO AJUSTADO', detalhe: 'Ano Exercício: ' + (atual || '—') + ' → ' + ex + '.' };
+    }
+    _logAcao_(p.ss, p.sessao.email, 'Auditar CRLV', placa, 'OK', 'placa confere, exercício ' + ex);
+    return { ok: true, status: 'OK', detalhe: 'Placa confere; exercício ' + ex + ' já correto.' };
+  } catch (e) {
+    const msg = String(e.message || e);
+    _logAcao_(p.ss, p.sessao.email, 'Auditar CRLV', placa, 'ERRO', msg);
+    return { ok: false, erro: msg };
+  }
+}
+
+/** ANEXAR CRLV manual: recebe o PDF do navegador, salva como PLACA.pdf e grava o link. */
+function anexarCrlv(token, placa, base64) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  placa = String(placa || '').trim().toUpperCase();
+  if (!base64 || base64.length < 100) return { ok: false, erro: 'Arquivo vazio.' };
+  const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
+  const alvo = _linhaDaPlaca_(aba, placa);
+  if (alvo.linha < 0) return { ok: false, erro: 'Placa não encontrada.' };
+  try {
+    const bytes = Utilities.base64Decode(base64);
+    const salvo = _salvarCrlvDrive_(placa, bytes);
+    if (alvo.idx.linkCrlv !== undefined) aba.getRange(alvo.linha, alvo.idx.linkCrlv + 1).setValue(salvo.link);
+    let detalhe = 'PDF anexado manualmente';
+    try {
+      const texto = _pdfTexto_(bytes);
+      const placaPdf = _extrairPlacaPdf_(texto);
+      if (placaPdf && placaPdf !== placa) detalhe += ' • ATENÇÃO: o PDF parece ser da placa ' + placaPdf;
+      const ex = _extrairExercicio_(texto, placa);
+      if (ex && alvo.idx.anoEx !== undefined) { aba.getRange(alvo.linha, alvo.idx.anoEx + 1).setValue(ex); detalhe += ' • exercício ' + ex + ' gravado'; }
+    } catch (e) { detalhe += ' • leitura do PDF indisponível'; }
+    SpreadsheetApp.flush(); limparCache();
+    _logAcao_(p.ss, p.sessao.email, 'Anexar CRLV', placa, 'OK', detalhe);
+    return { ok: true, status: 'CRLV ANEXADO', detalhe: detalhe, link: salvo.link };
+  } catch (e) {
+    const msg = String(e.message || e);
+    _logAcao_(p.ss, p.sessao.email, 'Anexar CRLV', placa, 'ERRO', msg);
+    return { ok: false, erro: msg };
+  }
 }
 
 /** Rode UMA vez no editor para o Apps Script pedir a permissão de leitura do Drive. */

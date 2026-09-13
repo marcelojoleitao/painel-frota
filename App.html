@@ -40,6 +40,7 @@
     <button class="topo-aba" data-aba="os">🧾 <span class="txt">Ordens de serviço</span></button>
     <button class="topo-aba" data-aba="pagamentos">💳 <span class="txt">Pagamentos</span></button>
     <button class="topo-aba" data-aba="patrimonio">📑 <span class="txt">Documentação</span></button>
+    <button class="topo-aba so-admin oculto" data-aba="acoes">⚡ <span class="txt">Ações</span></button>
   </nav>
 
   <div class="topo-direita">
@@ -150,6 +151,16 @@
       <div class="periodo-barra" id="periodo-pag"></div>
       <div class="kpis" id="kpis-pag"></div>
       <div class="grade" id="graficos-pag"></div>
+    </section>
+
+    <!-- CENTRAL DE AÇÕES (admin) -->
+    <section id="aba-acoes" class="oculto">
+      <div class="subabas" id="subabas-acoes">
+        <button class="subaba ativa" data-sub="executar">Executar ações</button>
+        <button class="subaba" data-sub="completude">Completude de dados</button>
+        <button class="subaba" data-sub="registro">Registro</button>
+      </div>
+      <div id="acoes-conteudo"></div>
     </section>
 
     <!-- DOCUMENTAÇÃO / PATRIMÔNIO -->
