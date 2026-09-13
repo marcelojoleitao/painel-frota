@@ -57,7 +57,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.11.0';
+const VERSAO_PAINEL = '2.11.1';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2330,10 +2330,7 @@ function renderRelatorios(c) {
       <div class="acao-cartao">
         <h4>Relatório de Ordens de Serviço — Analítico</h4>
         <div class="desc">Detalhamento das peças e serviços por veículo e família, com subtotais e total geral, a partir do DetalhamentoDB. Ao gerar, o painel confere as placas contra a aba Acidentes e avisa se alguma tiver processo em aberto.</div>
-        <div class="form-grade" style="grid-template-columns:1fr 1fr; margin-bottom:10px">
-          <div class="form-campo"><label>Competência</label><input type="month" id="pecas-comp" value="${padrao}"></div>
-          <div class="form-campo"><label>Placa (opcional)</label><input type="text" id="pecas-placa" placeholder="todas" style="text-transform:uppercase"></div>
-        </div>
+        <div class="form-campo" style="margin-bottom:10px"><label>Competência</label><input type="month" id="pecas-comp" value="${padrao}"></div>
         <button class="btn amarelo" id="btn-rel-pecas">Gerar PDF</button>
         <div class="foto-data" id="pecas-status"></div>
         <div id="pecas-result"></div>
@@ -2434,7 +2431,6 @@ function gerarGlosa() {
 function gerarPecas() {
   const comp = competenciaBR(val('pecas-comp'));
   if (!comp) { toast('Informe a competência.'); return; }
-  const placa = val('pecas-placa').trim().toUpperCase();
   const btn = el('btn-rel-pecas'), status = el('pecas-status'), resultado = el('pecas-result');
   btn.disabled = true; btn.textContent = 'Montando…';
   if (status) status.textContent = 'Lendo o detalhamento de itens…';
@@ -2456,7 +2452,7 @@ function gerarPecas() {
       if (r.acidentes && r.acidentes.length) toast('Atenção: ' + r.acidentes.length + ' placa(s) com processo de acidente em aberto neste relatório.', true);
     },
     e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; });
-  if (run) run.gerarRelatorioPecas(ESTADO.token, comp, placa);
+  if (run) run.gerarRelatorioPecas(ESTADO.token, comp, '');
 }
 
 </script>
