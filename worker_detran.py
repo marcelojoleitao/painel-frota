@@ -79,9 +79,31 @@ def clientes():
     return _clientes["gc"], _clientes["ss"], _clientes["drive"]
 
 
+CAB_FILA = ["ID", "Criado em", "Usuário", "Ação", "Placa", "Renavam", "CRV", "Código",
+            "Status", "Resultado", "Detalhe", "Atualizado em"]
+CAB_LOG = ["Data/Hora", "Usuário", "Ação", "Placa", "Resultado", "Detalhe"]
+
+
 def aba(nome):
+    """Abre a aba; cria (com cabeçalho) se ainda não existir — a FilaAcoes só
+    nasce quando o painel enfileira o primeiro item."""
     _, ss, _ = clientes()
-    return ss.worksheet(nome)
+    try:
+        return ss.worksheet(nome)
+    except gspread.WorksheetNotFound:
+        if nome == ABA_FILA:
+            ws = ss.add_worksheet(title=ABA_FILA, rows=1000, cols=12)
+            ws.append_row(CAB_FILA, value_input_option="USER_ENTERED")
+            ws.freeze(rows=1)
+            print(f"   (aba {ABA_FILA} criada)")
+            return ws
+        if nome == ABA_LOG:
+            ws = ss.add_worksheet(title=ABA_LOG, rows=1000, cols=6)
+            ws.append_row(CAB_LOG, value_input_option="USER_ENTERED")
+            ws.freeze(rows=1)
+            print(f"   (aba {ABA_LOG} criada)")
+            return ws
+        raise
 
 
 def _retry_api(fn, *a, **kw):
@@ -448,6 +470,15 @@ def main():
     except Exception as e:
         print(f"Não consegui abrir a planilha: {e}")
         sys.exit(1)
+
+    # confere de saída se o DETRAN responde desta máquina
+    try:
+        t0 = time.time()
+        r = requests.get(BASE_URL, timeout=20, headers={"User-Agent": USER_AGENT})
+        print(f"DETRAN respondeu HTTP {r.status_code} em {time.time()-t0:.1f}s — conexão ok.")
+    except Exception as e:
+        print(f"ATENÇÃO: não consegui acessar o DETRAN desta máquina ({type(e).__name__}: {e}).")
+        print("O trabalhador vai rodar mesmo assim, mas as ações vão falhar até a rede permitir.")
 
     if args.uma_vez:
         processar_fila()
