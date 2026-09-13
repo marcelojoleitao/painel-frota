@@ -1918,6 +1918,7 @@ function _htmlRelatorioAbast_(d, ini, fim, sessao) {
 
   return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><style>' +
     '@page { size: A4 landscape; margin: 12mm 10mm; }' +
+    '* { box-sizing: border-box; }' +
     'body { font-family: Arial, Helvetica, sans-serif; color: #14181F; font-size: 9.5pt; margin: 0; }' +
     '.capa { background: #0B2C5C; color: #fff; padding: 16px 20px; border-bottom: 5px solid #F2B705; margin-bottom: 14px; }' +
     '.capa h1 { margin: 0 0 2px; font-size: 19pt; } .capa .sub { font-size: 11pt; opacity: .85; } .capa .per { margin-top: 8px; font-size: 12pt; font-weight: bold; color: #F2B705; }' +
@@ -2239,6 +2240,7 @@ function _htmlRelatorioGlosa_(d, sessao) {
 
   return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><style>' +
     '@page { size: A4 landscape; margin: 12mm 10mm; }' +
+    '* { box-sizing: border-box; }' +
     'body { font-family: Arial, Helvetica, sans-serif; color: #14181F; font-size: 9.5pt; margin: 0; }' +
     '.cab { display: table; width: 100%; border-bottom: 4px solid #F2B705; padding-bottom: 8px; margin-bottom: 10px; }' +
     '.cab > div { display: table-cell; vertical-align: middle; }' +
@@ -2256,8 +2258,9 @@ function _htmlRelatorioGlosa_(d, sessao) {
     'tfoot td { background: #E8EEFA !important; font-weight: bold; border-top: 2px solid #0B2C5C; }' +
     '.num { text-align: right; font-variant-numeric: tabular-nums; } .c { text-align: center; }' +
     '.mono { font-family: "Courier New", monospace; } .forte { font-weight: bold; }' +
-    '.total { background: #0B2C5C; color: #fff; padding: 10px 14px; font-size: 12pt; font-weight: bold; display: table; width: 100%; }' +
-    '.total .r { display: table-cell; text-align: right; }' +
+    'table.total { width: 100%; border-collapse: collapse; margin-top: 4px; table-layout: fixed; }' +
+    'table.total td { background: #0B2C5C; color: #fff; padding: 9px 14px; font-size: 12pt; font-weight: bold; border: 0; }' +
+    'table.total td.r { text-align: right; white-space: nowrap; }' +
     '.rodape { margin-top: 14px; border-top: 1px solid #E3E8F0; padding-top: 5px; font-size: 7.5pt; color: #5A6576; }' +
     '.vazio { padding: 20px; text-align: center; color: #5A6576; background: #F6F8FC; }' +
     '</style></head><body>' +
@@ -2276,7 +2279,7 @@ function _htmlRelatorioGlosa_(d, sessao) {
       ? d.grupos.map(g => '<h2>' + _esc_(_tituloCombustivel_(g.combustivel)) + ' <span style="font-weight:normal; font-size:9pt; color:#5A6576">(' + g.itens.length + ' abastecimento(s) acima do teto)</span></h2>' + bloco(g)).join('')
       : '<div class="vazio">Nenhum abastecimento excedeu o preço máximo de revenda da ANP nesta competência.</div>') +
 
-    '<div class="total">Total Glosa Abastecimento<span class="r">' + _moedaBR_(d.total) + '</span></div>' +
+    '<table class="total"><tr><td>Total Glosa Abastecimento</td><td class="r">' + _moedaBR_(d.total) + '</td></tr></table>' +
 
     '<div class="rodape">' + d.comGlosa + ' de ' + d.avaliados + ' abastecimentos da competência excederam o teto da ANP. ' +
     (Object.keys(d.semTeto).length ? 'Sem teto publicado na série da ANP: ' + _esc_(Object.keys(d.semTeto).map(k => k + ' — ' + d.semTeto[k] + ' registro(s)').join('; ')) + '. ' : '') +
