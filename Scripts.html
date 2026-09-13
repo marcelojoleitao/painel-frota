@@ -11,6 +11,22 @@ function htm(id, h) { const e = el(id); if (e) e.innerHTML = h; }
 function txt(id, t) { const e = el(id); if (e) e.textContent = t; }
 
 /** Chama uma função do servidor avisando quando ela ainda não foi implantada. */
+/** Abre o PDF: link do Drive ou download direto quando veio o arquivo. */
+function entregarPdf(r) {
+  if (r.link) { window.open(r.link, '_blank'); return `<a class="pdf-link" href="${escAttr(r.link)}" target="_blank" rel="noopener">${icoPdf()} ${esc(r.nome)}</a>`; }
+  if (r.base64) {
+    const bytes = atob(r.base64);
+    const arr = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([arr], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = r.nome; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    return `${icoPdf()} ${esc(r.nome)} <small style="color:var(--tinta-suave)">baixado${r.aviso ? ' — ' + esc(r.aviso) : ''}</small>`;
+  }
+  return '';
+}
+
 function servidor(nome, aoOk, aoErro) {
   const run = google.script.run
     .withSuccessHandler(r => { if (!sessaoExpirou(r)) aoOk(r); })
@@ -41,7 +57,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.9.3';
+const VERSAO_PAINEL = '2.9.4';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -770,7 +786,22 @@ function icoOs() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentC
 function icoFoto() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7l1.5-3h5L16 7"/><circle cx="12" cy="13" r="3.5"/></svg>'; }
 function copiar(t) { (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast(t + ' copiado'), () => toast('Não foi possível copiar')); }
 let toastTimer = null;
-function toast(msg) { const t = el('toast'); if (!t) return; t.textContent = msg; t.classList.add('visivel'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('visivel'), 2400); }
+/** Aviso no rodapé. Mensagens longas (erros) ficam mais tempo, podem ser copiadas
+    com um clique e só somem quando o usuário quiser. */
+function toast(msg, demorado) {
+  const t = el('toast'); if (!t) return;
+  const texto = String(msg || '');
+  const erro = demorado || texto.length > 90 || /erro|falha|não foi possível|permiss/i.test(texto);
+  t.textContent = texto + (erro ? '  (clique para copiar)' : '');
+  t.classList.toggle('erro', !!erro);
+  t.classList.add('visivel');
+  t.onclick = () => {
+    if (erro) { copiar(texto); }
+    t.classList.remove('visivel');
+  };
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('visivel'), erro ? 15000 : 2400);
+}
 
 
 /* ============================================================
@@ -2323,14 +2354,13 @@ function renderRelatorios(c) {
         btn.disabled = false; btn.textContent = 'Gerar PDF';
         if (sessaoExpirou(r)) return;
         if (!r || !r.ok) { if (status) status.textContent = ''; toast((r && r.erro) || 'Falha ao gerar.'); return; }
-        if (status) status.innerHTML = `<a class="pdf-link" href="${escAttr(r.link)}" target="_blank" rel="noopener">${icoPdf()} ${esc(r.nome)}</a>`;
+        if (status) status.innerHTML = entregarPdf(r);
         if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
           <div class="dado"><div class="k">Abastecimentos</div><div class="v">${fmtInt(r.resumo.registros)}</div></div>
           <div class="dado"><div class="k">Valor</div><div class="v">${fmtMoeda(r.resumo.valor)}</div></div>
           <div class="dado"><div class="k">Viaturas</div><div class="v">${fmtInt(r.resumo.viaturas)}</div></div>
           <div class="dado"><div class="k">Alertas</div><div class="v ${r.resumo.alertas ? 'alerta-txt' : 'ok-txt'}">${fmtInt(r.resumo.alertas)}</div></div>
         </div>`;
-        window.open(r.link, '_blank');
       })
       .withFailureHandler(e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; toast('Erro: ' + (e && e.message ? e.message : e)); })
       .gerarRelatorioAbastecimento(ESTADO.token, de, ate);
@@ -2376,13 +2406,12 @@ function gerarGlosa() {
     r => {
       btn.disabled = false; btn.textContent = 'Gerar PDF';
       if (!r || !r.ok) { if (status) status.textContent = ''; toast((r && r.erro) || 'Falha ao gerar.'); return; }
-      if (status) status.innerHTML = `<a class="pdf-link" href="${escAttr(r.link)}" target="_blank" rel="noopener">${icoPdf()} ${esc(r.nome)}</a>`;
+      if (status) status.innerHTML = entregarPdf(r);
       if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
         <div class="dado"><div class="k">Total da glosa</div><div class="v ${r.total ? 'alerta-txt' : 'ok-txt'}">${fmtMoeda(r.total)}</div></div>
         <div class="dado"><div class="k">Acima do teto</div><div class="v">${fmtInt(r.comGlosa)} de ${fmtInt(r.avaliados)}</div></div>
         ${r.grupos.map(g => `<div class="dado"><div class="k">${esc(g.combustivel)}</div><div class="v">${fmtMoeda(g.subtotal)} <small style="font-weight:500; color:var(--tinta-suave)">${g.itens} item(ns)</small></div></div>`).join('')}
       </div>${r.semTeto && r.semTeto.length ? `<div class="cartao-dica">Sem teto publicado na ANP: ${esc(r.semTeto.join('; '))}</div>` : ''}`;
-      window.open(r.link, '_blank');
     },
     e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; });
   if (run) run.gerarRelatorioGlosa(ESTADO.token, comp, escolhidos);

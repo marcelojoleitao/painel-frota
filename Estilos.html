@@ -532,4 +532,15 @@ table.tabela td.acoes { text-align: right; }
 
 .secao-titulo { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: var(--tinta-suave); margin: 20px 0 8px; padding-bottom: 5px; border-bottom: 2px solid var(--borda); }
 .secao-titulo:first-of-type { margin-top: 0; }
+
+/* Aviso de erro: mais legível, com espaço para mensagens longas */
+.toast.erro { background: var(--vermelho); max-width: min(560px, 92vw); white-space: normal; text-align: left; line-height: 1.35; cursor: pointer; }
+
+/* Lista de combustíveis do relatório de glosa */
+.acao-opcoes label { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; line-height: 1.3; }
+.acao-opcoes label:hover { background: #F3F6FB; }
+.acao-opcoes label input[type="checkbox"], .acao-opcoes label input[type="radio"] { flex: 0 0 auto; width: 15px; height: 15px; margin: 0; accent-color: var(--azul); }
+.acao-opcoes label small { margin-left: auto; white-space: nowrap; font-size: 11.5px; }
+.acao-opcoes label input:disabled + * , .acao-opcoes label input:disabled ~ small { opacity: .5; }
+.acao-opcoes label:has(input:disabled) { opacity: .6; cursor: not-allowed; }
 </style>

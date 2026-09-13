@@ -78,6 +78,8 @@ const CONFIG = {
   ID_GLOSA_ANTIGA:  '1VRF3ulO6Z0c0WwyPCwN5dLGWjPiSuTEmEQ7eqXwEaNc',   // só para a migração inicial
   // Brasão no cabeçalho dos relatórios: ID de uma imagem no Drive (vazio = emblema desenhado)
   LOGO_DRIVE_ID:    '',
+  // Pasta onde os relatórios em PDF são salvos (vazio = raiz do Drive)
+  PASTA_RELATORIOS: '',
   URL_GLOSA_ANP:  'https://www.gov.br/anp/pt-br/assuntos/precos-e-defesa-da-concorrencia/precos/precos-revenda-e-de-distribuicao-combustiveis/shlp/mensal/mensal-estados-desde-jan2013.xlsx',
   CHAVE_NF:       'nacional',   // 'nacional' ou 'municipal'
 
@@ -1785,11 +1787,9 @@ function gerarRelatorioAbastecimento(token, de, ate) {
 
     const html = _htmlRelatorioAbast_(dados, ini, fim, p.sessao);
     const nome = 'Relatorio_Abastecimento_' + ini.replace('-', '') + (ini === fim ? '' : '_a_' + fim.replace('-', '')) + '.pdf';
-    const pdf = Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome);
-    const arq = DriveApp.createFile(pdf);
-    try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
-    _logAcao_(p.ss, p.sessao.email, 'Relatório de abastecimento', '', _rotMes_(ini) + ' a ' + _rotMes_(fim), arq.getUrl());
-    return { ok: true, nome: nome, link: arq.getUrl(), resumo: { registros: dados.registros, valor: dados.valor, litros: dados.litros, km: dados.km, viaturas: Object.keys(dados.porPlaca).length, alertas: dados.totalAlertas } };
+    const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);
+    _logAcao_(p.ss, p.sessao.email, 'Relatório de abastecimento', '', _rotMes_(ini) + ' a ' + _rotMes_(fim), pdf.link || 'download direto');
+    return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '', resumo: { registros: dados.registros, valor: dados.valor, litros: dados.litros, km: dados.km, viaturas: Object.keys(dados.porPlaca).length, alertas: dados.totalAlertas } };
   } catch (e) {
     return { ok: false, erro: String(e.message || e) };
   }
@@ -2171,11 +2171,10 @@ function gerarRelatorioGlosa(token, competencia, combustiveis) {
     const dados = _calcularGlosa_(ss, competencia, combustiveis);
     const html = _htmlRelatorioGlosa_(dados, p.sessao);
     const nome = 'Relatorio_Glosa_Abastecimento_' + competencia.replace('/', '-') + '.pdf';
-    const arq = DriveApp.createFile(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome));
-    try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+    const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);
     _gravarResumoGlosa_(ss, competencia, dados.total);
     _logAcao_(p.ss, p.sessao.email, 'Relatório de glosa', '', competencia, 'total ' + _moedaBR_(dados.total) + ' | ' + dados.comGlosa + ' de ' + dados.avaliados + ' abastecimentos');
-    return { ok: true, nome: nome, link: arq.getUrl(), total: dados.total, comGlosa: dados.comGlosa,
+    return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '', total: dados.total, comGlosa: dados.comGlosa,
              avaliados: dados.avaliados, grupos: dados.grupos.map(g => ({ combustivel: g.combustivel, subtotal: g.subtotal, itens: g.itens.length })),
              semTeto: Object.keys(dados.semTeto).map(k => k + ' (' + dados.semTeto[k] + ')') };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
@@ -2201,6 +2200,24 @@ function _brasaoHtml_() {
     } catch (e) { Logger.log('Brasão não carregado: ' + e); }
   }
   return '<div style="width:56px; height:56px; border-radius:10px; background:#F2B705; color:#0B2C5C; font-weight:bold; font-size:17pt; text-align:center; line-height:56px; letter-spacing:.04em">PRF</div>';
+}
+
+/**
+ * Entrega um PDF: tenta salvar no Drive e devolver o link; se o projeto não
+ * tiver permissão de escrita no Drive, devolve o próprio arquivo para o
+ * navegador baixar. Assim o relatório sai de qualquer jeito.
+ */
+function _entregarPdf_(blob, nome) {
+  try {
+    const arq = CONFIG.PASTA_RELATORIOS
+      ? DriveApp.getFolderById(CONFIG.PASTA_RELATORIOS).createFile(blob)
+      : DriveApp.createFile(blob);
+    try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+    return { nome: nome, link: arq.getUrl() };
+  } catch (e) {
+    Logger.log('Drive indisponível (' + e + ') — devolvendo o PDF para download direto.');
+    return { nome: nome, base64: Utilities.base64Encode(blob.getBytes()), aviso: 'salvo apenas neste download (sem permissão de gravar no Drive)' };
+  }
 }
 
 function _htmlRelatorioGlosa_(d, sessao) {
