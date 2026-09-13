@@ -41,7 +41,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.9.1';
+const VERSAO_PAINEL = '2.9.2';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -839,6 +839,13 @@ function iniciarSessao() {
   const t = lerGuardado(CHAVE_TOKEN);
   if (t) { ESTADO.token = t; mostrarTela('carregando'); carregar(false); }
   else mostrarTela('login');
+}
+
+/** Encerra a sessão guardada neste navegador e volta ao login. */
+function esquecerSessao() {
+  apagar(CHAVE_TOKEN); ESTADO.token = null; ESTADO.dados = null; ESTADO.uso = null; ESTADO.admin = false;
+  mostrarTela('login');
+  toast('Sessão encerrada neste navegador.');
 }
 
 function mostrarTela(qual) {
