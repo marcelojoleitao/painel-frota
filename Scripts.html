@@ -14,7 +14,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.2.1';
+const VERSAO_PAINEL = '2.2.2';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -937,7 +937,8 @@ function cartaoColunas(titulo, meses, serieA, serieB, fmtA, fmtB, rotA, rotB) {
   card.innerHTML = `<div class="cartao-cab"><h3>${titulo}</h3><small>${meses.length} meses • pico ${fmtA(maximo)}</small></div>
     <div class="colunas-rol"><div class="colunas" ${larguraMin ? `style="min-width:${larguraMin}px"` : ''}>${meses.map((m, i) => {
       const a = serieA[m] || 0, b = serieB ? (serieB[m] || 0) : 0;
-      return `<div class="coluna">
+      const borda = i < 3 ? ' borda-ini' : i > meses.length - 4 ? ' borda-fim' : '';
+      return `<div class="coluna${borda}">
       <span class="val"><span class="la">${esc(rotA)}:</span> ${fmtA(a)}${serieB ? `<br><span class="lb">${esc(rotB)}:</span> ${fmtB(b)}` : ''}</span>
       <div style="display:flex; gap:1px; align-items:flex-end; width:100%; height:100%">
         <div class="preench" style="height:${Math.round(a / maximo * 100)}%" title="${escAttr(rotA + ' ' + rotMes(m) + ': ')}${escAttr(fmtA(a))}"></div>
