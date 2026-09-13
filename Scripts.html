@@ -1455,5 +1455,35 @@ function renderPagamentos() {
   const vencAberto = semNP.filter(t => { const v = t.venc.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); return v && diasAte(v[3] + '-' + ('0' + v[2]).slice(-2) + '-' + ('0' + v[1]).slice(-2)) < 0; });
   const nMeses = mesesEntre(ini, fim).length;
 
-console.log("BISSECCAO: 1455 linhas de 1964");
+  htm('kpis-pag', [
+    kpi('Faturado (bruto)', fmtMoeda(soma(sel, 'bruto')), fmtMoeda(soma(sel, 'bruto') / Math.max(1, nMeses)) + ' por mês • ' + sel.length + ' títulos', '', null, true),
+    kpi('Abastecimento', fmtMoeda(soma(ab, 'bruto')), 'líquido ' + fmtMoeda(soma(ab, 'liquido')), 'ciano', null, true),
+    kpi('Manutenção', fmtMoeda(soma(ma, 'bruto')), 'peças ' + fmtMoeda(soma(ma, 'pecas') + soma(ma, 'pecasAcid')) + ' • mão de obra ' + fmtMoeda(soma(ma, 'mo') + soma(ma, 'moAcid')), 'ambar', null, true),
+    kpi('Desconto contratual', fmtMoeda(soma(sel, 'desconto')), '4,67% sobre abastecimento', 'verde', null, true),
+    kpi('Glosas', fmtMoeda(soma(sel, 'glosa')), 'IMR ' + fmtMoeda(soma(sel, 'glosaIMR')) + ' • preços abusivos ' + fmtMoeda(soma(sel, 'glosaPrecos')), soma(sel, 'glosa') ? 'verde' : '', null, true),
+    kpi('Juros cobrados', fmtMoeda(soma(sel, 'juros')), soma(sel, 'juros') ? sel.filter(t => t.juros).length + ' títulos com juros' : 'nenhum', soma(sel, 'juros') ? 'vermelho' : 'verde', null, true),
+    kpi('Sem nota de pagamento', semNP.length, vencAberto.length ? vencAberto.length + ' já vencidos' : 'a liquidar', vencAberto.length ? 'vermelho' : semNP.length ? 'ambar' : 'verde', null, true),
+    kpi('Acidentes (manutenção)', fmtMoeda(soma(ma, 'pecasAcid') + soma(ma, 'moAcid')), ma.filter(t => t.pecasAcid || t.moAcid).length + ' títulos com acidente', 'roxo', null, true)
+  ].join(''));
+
+  g.innerHTML = '';
+  const mm = mesesEntre(ini, fim);
+  const serie = (l, k) => { const o = {}; l.forEach(t => { o[t.mes] = (o[t.mes] || 0) + (t[k] || 0); }); return o; };
+  g.appendChild(cartaoColunas('Faturamento bruto por competência', mm, serie(ab, 'bruto'), serie(ma, 'bruto'), fmtMoeda, fmtMoeda, 'Abastecimento', 'Manutenção'));
+  g.appendChild(cartaoColunas('Manutenção — peças × mão de obra', mm, serie(ma.map(t => ({ mes: t.mes, x: t.pecas + t.pecasAcid })), 'x'), serie(ma.map(t => ({ mes: t.mes, x: t.mo + t.moAcid })), 'x'), fmtMoeda, fmtMoeda, 'Peças', 'Mão de obra'));
+  g.appendChild(cartaoColunas('Glosas por competência', mm, serie(sel, 'glosaIMR'), serie(sel, 'glosaPrecos'), fmtMoeda, fmtMoeda, 'Glosa IMR', 'Glosa preços abusivos'));
+  if (T.glosaHist && T.glosaHist.length) {
+    const gh = {}; let mh = [];
+    T.glosaHist.forEach(x => { const m = x.comp.match(/(\d{1,2})\/(\d{4})/); if (!m) return; const k = m[2] + '-' + ('0' + m[1]).slice(-2); gh[k] = x.valor; mh.push(k); });
+    mh.sort();
+    const mhSel = mh.filter(m => m >= ini && m <= fim);      // respeita o período escolhido acima
+    if (mhSel.length) g.appendChild(cartaoColunas('Glosa de preços abusivos — aba Resumo Glosa (' + rotMes(mhSel[0]) + ' a ' + rotMes(mhSel[mhSel.length - 1]) + ')', mhSel, gh, null, fmtMoeda, null, 'Glosa preços abusivos (R$)', ''));
+  }
+  g.appendChild(cartaoAgregado('Por ano (bruto)', sel, t => t.mes.substring(0, 4), t => t.bruto, fmtMoeda, null));
+  g.appendChild(cartaoDeducoes(sel));
+  g.appendChild(cartaoTabelaTitulos('Títulos de abastecimento', ab, 'Abastecimento'));
+  g.appendChild(cartaoTabelaTitulos('Títulos de manutenção', ma, 'Manutenção'));
+}
+
+console.log("BISSECCAO: 1485 linhas de 1964");
 </script>
