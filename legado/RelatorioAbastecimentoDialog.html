@@ -1,0 +1,135 @@
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: Arial, sans-serif; padding: 14px; color: #111827; }
+      h2 { margin: 0 0 14px 0; font-size: 18px; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .full { grid-column: 1 / -1; }
+      label { display: block; font-size: 12px; margin-bottom: 4px; font-weight: 700; }
+      input[type="date"], input[type="text"] {
+        width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px;
+      }
+      .checks { display: grid; gap: 6px; margin-top: 4px; }
+      .actions { margin-top: 16px; display: flex; gap: 10px; justify-content: flex-end; }
+      button {
+        border: 0; border-radius: 8px; padding: 10px 14px; cursor: pointer; font-weight: 700;
+      }
+      .primary { background: #0b1220; color: white; }
+      .secondary { background: #e5e7eb; color: #111827; }
+      .muted { font-size: 12px; color: #6b7280; margin-top: 8px; }
+      .status { margin-top: 10px; font-size: 12px; color: #374151; white-space: pre-wrap; }
+      .result { margin-top: 14px; padding: 12px; border: 1px solid #cbd5e1; border-radius: 10px; display: none; background: #f8fafc; }
+      .result a { word-break: break-all; }
+      .linkbox { width: 100%; box-sizing: border-box; margin-top: 8px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; }
+      .smallbtn { margin-top: 8px; background: #1d2144; color: #ffd102; }
+    </style>
+  </head>
+  <body>
+    <h2>Relatório de abastecimento</h2>
+
+    <div class="grid">
+      <div>
+        <label>Data inicial</label>
+        <input type="date" id="dataInicial">
+      </div>
+      <div>
+        <label>Data final</label>
+        <input type="date" id="dataFinal">
+      </div>
+
+      <div class="full">
+        <label>Unidade SIPAC</label>
+        <input type="text" id="unidade" placeholder="Opcional. Ex.: NULOG-CE">
+      </div>
+
+      <div class="full">
+        <label>Uso SIPAC</label>
+        <input type="text" id="uso" placeholder="Opcional. Ex.: USO ADMINISTRATIVO">
+      </div>
+
+      <div class="full">
+        <label>Placa</label>
+        <input type="text" id="placa" placeholder="Opcional. Ex.: QWE1A23">
+      </div>
+
+      <div class="full checks">
+        <label><input type="checkbox" id="somenteReservadas"> Somente placas reservadas</label>
+        <label><input type="checkbox" id="somenteComAbastecimentoValido" checked> Ignorar registros sem litros/valor válidos</label>
+      </div>
+    </div>
+
+    <div class="muted">Serão geradas as abas: relatório executivo, analítico por placas, analítico por unidades, alertas e base de gráficos.</div>
+
+    <div class="actions">
+      <button class="secondary" onclick="google.script.host.close()">Cancelar</button>
+      <button class="primary" onclick="gerar()">Gerar relatório</button>
+    </div>
+
+    <div class="status" id="status"></div>
+    <div class="result" id="resultBox">
+      <div><strong>PDF gerado</strong></div>
+      <div id="resultMessage" style="margin-top:8px; white-space:pre-wrap;"></div>
+      <div style="margin-top:8px;"><a id="pdfLink" href="#" target="_blank" rel="noopener noreferrer">Abrir PDF em nova aba</a></div>
+      <input class="linkbox" id="pdfUrl" readonly>
+      <button type="button" class="smallbtn" onclick="copiarLink()">Copiar link</button>
+    </div>
+
+    <script>
+      function gerar() {
+        const status = document.getElementById('status');
+        const box = document.getElementById('resultBox');
+        status.textContent = 'Gerando relatório...';
+        box.style.display = 'none';
+
+        const payload = {
+          dataInicial: document.getElementById('dataInicial').value,
+          dataFinal: document.getElementById('dataFinal').value,
+          unidade: document.getElementById('unidade').value,
+          uso: document.getElementById('uso').value,
+          placa: document.getElementById('placa').value,
+          somenteReservadas: document.getElementById('somenteReservadas').checked,
+          somenteComAbastecimentoValido: document.getElementById('somenteComAbastecimentoValido').checked
+        };
+
+        google.script.run
+          .withSuccessHandler(function(res) {
+            const box = document.getElementById('resultBox');
+            const msg = document.getElementById('resultMessage');
+            const link = document.getElementById('pdfLink');
+            const urlInput = document.getElementById('pdfUrl');
+
+            if (res && res.ok) {
+              status.textContent = 'Relatório concluído.';
+              msg.textContent = res.message || '';
+              if (res.pdfUrl) {
+                link.href = res.pdfUrl;
+                link.style.display = 'inline';
+                urlInput.value = res.pdfUrl;
+              } else {
+                link.removeAttribute('href');
+                link.style.display = 'none';
+                urlInput.value = '';
+              }
+              box.style.display = 'block';
+            } else {
+              box.style.display = 'none';
+              status.textContent = (res && res.message) ? res.message : 'Erro ao gerar relatório.';
+            }
+          })
+          .withFailureHandler(function(err) {
+            status.textContent = err && err.message ? err.message : String(err);
+          })
+          .gerarRelatorioAbastecimento(payload);
+      }
+      function copiarLink() {
+        const input = document.getElementById('pdfUrl');
+        input.select();
+        input.setSelectionRange(0, 99999);
+        document.execCommand('copy');
+      }
+    </script>
+  </body>
+</html>

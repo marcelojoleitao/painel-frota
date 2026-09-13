@@ -27,14 +27,14 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.6.0';
+const VERSAO_PAINEL = '2.7.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
   uso: null, usoCarregando: false,
   periodoUso: '12m', periodoManut: '12m', periodoPag: 'tudo',
   pdfsPorOS: {}, pdfsPorPlaca: {}, filtroStatusOS: '', filtroStatusAceite: '',
-  subAcoes: 'executar', lote: null, fila: null,
+  subAcoes: 'executar', lote: null, fila: null, subDados: 'importar',
   dados: null,
   veiculos: [],
   filtros: {},          // chave -> Set de valores selecionados
@@ -271,10 +271,10 @@ function renderChips() {
    ABAS
    ============================================================ */
 function mudarAba(aba) {
-  if (aba === 'acoes' && !ESTADO.admin) aba = 'painel';
+  if ((aba === 'acoes' || aba === 'dados') && !ESTADO.admin) aba = 'painel';
   ESTADO.aba = aba;
   document.querySelectorAll('#abas .topo-aba').forEach(b => b.classList.toggle('ativa', b.dataset.aba === aba));
-  ['painel', 'viaturas', 'uso', 'manut', 'os', 'pagamentos', 'patrimonio', 'acoes'].forEach(a => cls('aba-' + a, 'oculto', a !== aba));
+  ['painel', 'viaturas', 'uso', 'manut', 'os', 'pagamentos', 'patrimonio', 'acoes', 'dados'].forEach(a => cls('aba-' + a, 'oculto', a !== aba));
   renderAba();
 }
 function renderAba() {
@@ -287,6 +287,7 @@ function renderAba() {
   else if (ESTADO.aba === 'pagamentos') renderPagamentos();
   else if (ESTADO.aba === 'patrimonio') renderPatrimonio(lista);
   else if (ESTADO.aba === 'acoes') renderAcoes(lista);
+  else if (ESTADO.aba === 'dados') renderDados();
   ajustarKpis();
 }
 
@@ -765,6 +766,11 @@ function debounce(fn, ms) { let t; return function () { clearTimeout(t); t = set
 
 function iniciarApp() {
   document.querySelectorAll('#abas .topo-aba').forEach(b => b.addEventListener('click', () => mudarAba(b.dataset.aba)));
+  document.querySelectorAll('#subabas-dados .subaba').forEach(b => b.addEventListener('click', () => {
+    ESTADO.subDados = b.dataset.sub;
+    document.querySelectorAll('#subabas-dados .subaba').forEach(x => x.classList.toggle('ativa', x === b));
+    renderDados();
+  }));
   document.querySelectorAll('#subabas-acoes .subaba').forEach(b => b.addEventListener('click', () => {
     ESTADO.subAcoes = b.dataset.sub;
     document.querySelectorAll('#subabas-acoes .subaba').forEach(x => x.classList.toggle('ativa', x === b));
@@ -2033,6 +2039,155 @@ function limparConcluidas() {
     })
     .withFailureHandler(e => toast('Erro: ' + (e && e.message ? e.message : e)))
     .limparFilaConcluidas(ESTADO.token);
+}
+
+
+/* ============================================================
+   DADOS — importações, exportações e relatórios (administrador)
+   ============================================================ */
+function renderDados() {
+  if (!ESTADO.admin) return;
+  const c = el('dados-conteudo'); if (!c) return;
+  if (ESTADO.subDados === 'exportar') return renderExportar(c);
+  if (ESTADO.subDados === 'relatorios') return renderRelatorios(c);
+  renderImportar(c);
+}
+
+function renderImportar(c) {
+  const u = ESTADO.uso && ESTADO.uso.meta;
+  const cartao = (tipo, titulo, aba, descricao, periodo) => `
+    <div class="acao-cartao">
+      <h4>${titulo}</h4>
+      <div class="desc">${descricao}</div>
+      ${periodo ? `<div class="cartao-dica" style="margin:0 0 10px">Base atual: ${periodo}</div>` : ''}
+      <label class="btn amarelo" style="cursor:pointer; display:inline-flex">Escolher arquivo .xlsx
+        <input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="oculto" data-imp="${tipo}">
+      </label>
+      <div class="foto-data" id="imp-status-${tipo}"></div>
+      <div id="imp-result-${tipo}"></div>
+    </div>`;
+  c.innerHTML = `
+    <div class="cartao largo" style="margin-bottom:14px">
+      <div class="cartao-cab"><h3>Importar do Ticket Log / GoodManager</h3><small>arquivos .xlsx</small></div>
+      <div class="cartao-dica" style="margin:0">Pode importar qualquer período — quinze dias, um mês, dois meses. Cada transação é identificada pelo código da coluna A, então o que já está na base é ignorado e nada duplica. Períodos sobrepostos são seguros.</div>
+    </div>
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+      ${cartao('abast', 'Abastecimento → AbastBD', 'AbastBD', 'Relatório de abastecimento exportado do sistema da Ticket Log.', u ? fmtInt(u.abastLinhas) + ' transações, ' + brDia(u.abastDe) + ' a ' + brDia(u.abastAte) : '')}
+      ${cartao('manut', 'Manutenção → ManutBD', 'ManutBD', 'Relatório de manutenção. As colunas são reconhecidas pelo nome do cabeçalho, mesmo fora de ordem.', u ? fmtInt(u.manutLinhas) + ' transações, ' + brDia(u.manutDe) + ' a ' + brDia(u.manutAte) : '')}
+    </div>`;
+  c.querySelectorAll('input[data-imp]').forEach(inp => inp.addEventListener('change', () => {
+    if (inp.files && inp.files[0]) enviarImportacao(inp.dataset.imp, inp.files[0]);
+    inp.value = '';
+  }));
+}
+
+function enviarImportacao(tipo, arquivo) {
+  const status = el('imp-status-' + tipo), resultado = el('imp-result-' + tipo);
+  const diga = t => { if (status) status.textContent = t; };
+  if (arquivo.size > 25 * 1024 * 1024) { toast('Arquivo acima de 25 MB — divida o período.'); return; }
+  diga('Lendo ' + arquivo.name + ' (' + Math.round(arquivo.size / 1024) + ' KB)…');
+  if (resultado) resultado.innerHTML = '';
+  const leitor = new FileReader();
+  leitor.onerror = () => diga('Falha ao ler o arquivo.');
+  leitor.onload = () => {
+    const base64 = String(leitor.result).substring(String(leitor.result).indexOf(',') + 1);
+    diga('Enviando e conferindo duplicidades… (pode levar um minuto)');
+    google.script.run
+      .withSuccessHandler(r => {
+        if (sessaoExpirou(r)) return;
+        if (!r || !r.ok) { diga(''); toast((r && r.erro) || 'Falha na importação.'); return; }
+        diga('');
+        if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
+          <div class="dado"><div class="k">Lidos no arquivo</div><div class="v">${fmtInt(r.lidos)}</div></div>
+          <div class="dado"><div class="k">Inseridos</div><div class="v ok-txt">${fmtInt(r.inseridos)}</div></div>
+          <div class="dado"><div class="k">Já existiam</div><div class="v">${fmtInt(r.duplicados)}</div></div>
+          ${r.periodo ? `<div class="dado"><div class="k">Período inserido</div><div class="v" style="font-size:13px">${esc(r.periodo)}</div></div>` : ''}
+        </div>`;
+        toast(r.inseridos + ' transação(ões) inserida(s) em ' + r.destino);
+        ESTADO.uso = null;
+      })
+      .withFailureHandler(e => { diga(''); toast('Erro: ' + (e && e.message ? e.message : e)); })
+      .importarBase(ESTADO.token, tipo, { nome: arquivo.name, mimeType: arquivo.type, base64: base64 });
+  };
+  leitor.readAsDataURL(arquivo);
+}
+
+function renderExportar(c) {
+  c.innerHTML = `
+    <div class="cartao largo" style="margin-bottom:14px">
+      <div class="cartao-cab"><h3>Exportar bases</h3><small>arquivo .xlsx no seu Drive</small></div>
+      <div class="cartao-dica" style="margin:0">Gera uma cópia da aba em Excel e devolve o link. Útil para trabalhar os dados fora ou anexar a processos.</div>
+    </div>
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+      ${['abast', 'manut'].map(t => `<div class="acao-cartao"><h4>${t === 'abast' ? 'AbastBD' : 'ManutBD'}</h4>
+        <div class="desc">${t === 'abast' ? 'Todas as transações de abastecimento.' : 'Todas as transações de manutenção.'}</div>
+        <button class="btn amarelo" data-exp="${t}">Gerar .xlsx</button>
+        <div class="foto-data" id="exp-status-${t}"></div></div>`).join('')}
+    </div>`;
+  c.querySelectorAll('button[data-exp]').forEach(b => b.addEventListener('click', () => {
+    const t = b.dataset.exp, status = el('exp-status-' + t);
+    b.disabled = true; b.textContent = 'Gerando…';
+    if (status) status.textContent = 'Montando o arquivo…';
+    google.script.run
+      .withSuccessHandler(r => {
+        b.disabled = false; b.textContent = 'Gerar .xlsx';
+        if (sessaoExpirou(r)) return;
+        if (!r || !r.ok) { if (status) status.textContent = ''; toast((r && r.erro) || 'Falha ao exportar.'); return; }
+        if (status) status.innerHTML = `<a class="pdf-link" href="${escAttr(r.link)}" target="_blank" rel="noopener">${icoPdf()} ${esc(r.nome)}</a> ${fmtInt(r.linhas)} linhas`;
+        window.open(r.link, '_blank');
+      })
+      .withFailureHandler(e => { b.disabled = false; b.textContent = 'Gerar .xlsx'; if (status) status.textContent = ''; toast('Erro: ' + (e && e.message ? e.message : e)); })
+      .exportarBase(ESTADO.token, t);
+  }));
+}
+
+function renderRelatorios(c) {
+  const u = ESTADO.uso && ESTADO.uso.meta;
+  const hoje = new Date();
+  const mesAtual = hoje.getFullYear() + '-' + ('0' + (hoje.getMonth() + 1)).slice(-2);
+  const padrao = u && u.abastAte ? u.abastAte.substring(0, 7) : mesAtual;
+  c.innerHTML = `
+    <div class="cartao largo" style="margin-bottom:14px">
+      <div class="cartao-cab"><h3>Relatórios</h3><small>PDF pronto para anexar ao processo</small></div>
+      <div class="cartao-dica" style="margin:0">Os relatórios são montados na hora, em paisagem, com a identidade da PRF — não criam abas na planilha.</div>
+    </div>
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">
+      <div class="acao-cartao">
+        <h4>Relatório de Abastecimento</h4>
+        <div class="desc">Frota inteira, por competência: totais, evolução mensal, consolidado por unidade, combustível, uso e tipo, rankings de viaturas, postos e cidades, e a seção de alertas (sem cadastro, km zerado ou negativo, consumo fora da faixa, divergência de combustível, preço acima da média, abastecimentos repetidos no mesmo dia).</div>
+        <div class="form-grade" style="grid-template-columns:1fr 1fr; margin-bottom:10px">
+          <div class="form-campo"><label>Competência inicial</label><input type="month" id="rel-de" value="${padrao}"></div>
+          <div class="form-campo"><label>Competência final</label><input type="month" id="rel-ate" value="${padrao}"></div>
+        </div>
+        <button class="btn amarelo" id="btn-rel-abast">Gerar PDF</button>
+        <div class="foto-data" id="rel-status"></div>
+        <div id="rel-result"></div>
+      </div>
+    </div>`;
+  ouvir('btn-rel-abast', 'click', () => {
+    const de = val('rel-de'), ate = val('rel-ate');
+    if (!de || !ate) { toast('Informe as competências.'); return; }
+    const btn = el('btn-rel-abast'), status = el('rel-status'), resultado = el('rel-result');
+    btn.disabled = true; btn.textContent = 'Gerando…';
+    if (status) status.textContent = 'Lendo a AbastBD e montando o documento…';
+    if (resultado) resultado.innerHTML = '';
+    google.script.run
+      .withSuccessHandler(r => {
+        btn.disabled = false; btn.textContent = 'Gerar PDF';
+        if (sessaoExpirou(r)) return;
+        if (!r || !r.ok) { if (status) status.textContent = ''; toast((r && r.erro) || 'Falha ao gerar.'); return; }
+        if (status) status.innerHTML = `<a class="pdf-link" href="${escAttr(r.link)}" target="_blank" rel="noopener">${icoPdf()} ${esc(r.nome)}</a>`;
+        if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
+          <div class="dado"><div class="k">Abastecimentos</div><div class="v">${fmtInt(r.resumo.registros)}</div></div>
+          <div class="dado"><div class="k">Valor</div><div class="v">${fmtMoeda(r.resumo.valor)}</div></div>
+          <div class="dado"><div class="k">Viaturas</div><div class="v">${fmtInt(r.resumo.viaturas)}</div></div>
+          <div class="dado"><div class="k">Alertas</div><div class="v ${r.resumo.alertas ? 'alerta-txt' : 'ok-txt'}">${fmtInt(r.resumo.alertas)}</div></div>
+        </div>`;
+        window.open(r.link, '_blank');
+      })
+      .withFailureHandler(e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; toast('Erro: ' + (e && e.message ? e.message : e)); })
+      .gerarRelatorioAbastecimento(ESTADO.token, de, ate);
+  });
 }
 
 </script>

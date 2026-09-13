@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<style>
+  :root{ --bg:#f4f6f9; --card:#fff; --bd:#dfe3e8; --tx:#1f2733; --mut:#6b7683;
+         --pri:#1a73e8; --pri2:#1557b0; --ok:#188038; --okbg:#e6f4ea; --err:#c5221f; --errbg:#fce8e6; }
+  *{ box-sizing:border-box; }
+  body{ font-family:'Segoe UI',Roboto,Arial,sans-serif; margin:0; padding:14px 14px 130px; background:var(--bg); color:var(--tx); font-size:13px; }
+  h2{ margin:0 0 4px; font-size:16px; }
+  .sub{ color:var(--mut); margin:0 0 14px; font-size:12px; }
+  .card{ background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:12px 14px; margin-bottom:12px; }
+  .card h3{ margin:0 0 2px; font-size:13px; }
+  .card .dest{ color:var(--mut); font-size:11px; margin:0 0 10px; }
+  .grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  label{ display:block; font-size:11px; color:var(--mut); margin:0 0 2px; }
+  input[type=text]{ width:100%; padding:6px 8px; border:1px solid var(--bd); border-radius:6px; font-size:12px; }
+  input[type=file]{ width:100%; font-size:12px; margin-bottom:8px; }
+  .row{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  button{ background:var(--pri); color:#fff; border:0; border-radius:6px; padding:7px 14px; font-size:12px; cursor:pointer; }
+  button:hover{ background:var(--pri2); }
+  button:disabled{ opacity:.55; cursor:default; }
+  button.diag{ background:#fff; color:var(--mut); border:1px solid var(--bd); }
+  button.diag:hover{ background:#f1f3f5; }
+  .diagbox{ display:none; width:100%; height:120px; margin-top:8px; font-family:monospace; font-size:10px; border:1px solid var(--bd); border-radius:6px; padding:6px; white-space:pre; overflow:auto; }
+  .diagbox.show{ display:block; }
+  .status{ font-size:11px; margin-top:8px; white-space:pre-wrap; padding:6px 8px; border-radius:6px; display:none; }
+  .status.ok{ display:block; background:var(--okbg); color:var(--ok); }
+  .status.err{ display:block; background:var(--errbg); color:var(--err); }
+  .status.run{ display:block; background:#eef3fd; color:var(--pri2); }
+  .tag{ display:inline-block; background:#eef1f5; color:var(--mut); border-radius:4px; padding:1px 6px; font-size:10px; margin-left:6px; }
+  /* log da sessão (fixo no rodapé) */
+  #logWrap{ position:fixed; left:0; right:0; bottom:0; background:#fff; border-top:1px solid var(--bd); padding:8px 14px; max-height:120px; overflow:auto; }
+  #logWrap .lh{ display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
+  #logWrap .lh b{ font-size:11px; } #logWrap .lh a{ font-size:11px; color:var(--pri); cursor:pointer; }
+  #log .li{ font-size:11px; padding:2px 0; border-bottom:1px dashed #eef1f5; }
+  #log .li .t{ color:var(--mut); } #log .li.ok .m{ color:var(--ok); } #log .li.err .m{ color:var(--err); }
+  .vazio{ color:var(--mut); font-size:11px; }
+</style>
+</head>
+<body>
+  <h2>Importador de arquivos</h2>
+  <p class="sub">Cada arquivo é importado de forma independente — importe um, vários ou todos, em qualquer ordem. O andamento aparece no log abaixo e em um aviso (toast) na planilha.</p>
+
+  <!-- 1) ABASTECIMENTO -->
+  <div class="card">
+    <h3>1 · Abastecimento <span class="tag">Excel → AbastBD</span></h3>
+    <p class="dest">Planilha da frota · aba AbastBD</p>
+    <input type="file" id="fAbast" accept=".xls,.xlsx,.csv">
+    <div class="row"><button onclick="impExcel('fAbast','importarAbastUpload','sAbast','Abastecimento',this)">Importar</button></div>
+    <div class="status" id="sAbast"></div>
+  </div>
+
+  <!-- 2) MANUTENÇÃO -->
+  <div class="card">
+    <h3>2 · Manutenção <span class="tag">Excel → ManutBD</span></h3>
+    <p class="dest">Planilha da frota · aba ManutBD</p>
+    <input type="file" id="fManut" accept=".xls,.xlsx,.csv">
+    <div class="row"><button onclick="impExcel('fManut','importarManutUpload','sManut','Manutenção',this)">Importar</button></div>
+    <div class="status" id="sManut"></div>
+  </div>
+
+  <!-- 3) TÍTULO ABASTECIMENTO (PDF, grava direto) -->
+  <div class="card">
+    <h3>3 · Título de Abastecimento <span class="tag">PDF → Títulos Abast.</span></h3>
+    <p class="dest">Lê o PDF da NF e grava direto (A:G + chave em R). Os valores gravados aparecem no resultado.</p>
+    <input type="file" id="fTitAbast" accept=".pdf">
+    <div class="row">
+      <button onclick="impPdf('fTitAbast','importarTituloAbastUpload','sTA','Título Abast.',this)">Importar título</button>
+      <button class="diag" onclick="diagPdf('fTitAbast','sTA','dTA',this)">Diagnosticar</button>
+    </div>
+    <textarea id="dTA" class="diagbox" readonly placeholder="(diagnóstico aparece aqui)"></textarea>
+    <div class="status" id="sTA"></div>
+  </div>
+
+  <!-- 4) TÍTULO MANUTENÇÃO (PDF, grava direto) -->
+  <div class="card">
+    <h3>4 · Título de Manutenção <span class="tag">PDF → Títulos Manut.</span></h3>
+    <p class="dest">Lê o PDF e grava direto (A:E, H:K + chave em S). Também preenche Título/Competência do Detalhamento (item 5).</p>
+    <input type="file" id="fTitManut" accept=".pdf">
+    <div class="row">
+      <button onclick="impPdfManut(this)">Importar título</button>
+      <button class="diag" onclick="diagPdf('fTitManut','sTM','dTM',this)">Diagnosticar</button>
+    </div>
+    <textarea id="dTM" class="diagbox" readonly placeholder="(diagnóstico aparece aqui)"></textarea>
+    <div class="status" id="sTM"></div>
+  </div>
+
+  <!-- 5) DETALHAMENTO -->
+  <div class="card">
+    <h3>5 · Detalhamento de Itens <span class="tag">→ DetalhamentoDB (F:AB)</span></h3>
+    <p class="dest">Dados em F:AB · Título em AC · Competência em AD (A:E são fórmulas).</p>
+    <input type="file" id="fDet" accept=".xls,.xlsx,.html,.htm">
+    <div class="grid">
+      <div><label>Nº Título (AC) — opcional</label><input type="text" id="detTitulo"></div>
+      <div><label>Competência MM/AAAA (AD) — opcional</label><input type="text" id="detComp"></div>
+    </div>
+    <div class="row"><button onclick="impDet(this)">Importar</button></div>
+    <div class="status" id="sDet"></div>
+  </div>
+
+  <!-- 6) ACEITE GESTOR -->
+  <div class="card">
+    <h3>6 · Aceite (Gestor) <span class="tag">→ AceitesDB · H = "Gestor"</span></h3>
+    <p class="dest">Dados em A:G · não insere OS já existente.</p>
+    <input type="file" id="fAceG" accept=".xls,.xlsx,.html,.htm">
+    <div class="row"><button onclick="impAceite('fAceG','Gestor','sAceG',this)">Importar</button></div>
+    <div class="status" id="sAceG"></div>
+  </div>
+
+  <!-- 7) ACEITE AUTOMÁTICO -->
+  <div class="card">
+    <h3>7 · Aceite (Automático) <span class="tag">→ AceitesDB · H = "Automático"</span></h3>
+    <p class="dest">Dados em A:G · não insere OS já existente.</p>
+    <input type="file" id="fAceA" accept=".xls,.xlsx,.html,.htm">
+    <div class="row"><button onclick="impAceite('fAceA','Automático','sAceA',this)">Importar</button></div>
+    <div class="status" id="sAceA"></div>
+  </div>
+
+  <!-- 8) GLOSA ANP -->
+  <div class="card">
+    <h3>8 · Glosa ANP <span class="tag">xlsx → Histórico ANP (A:J)</span></h3>
+    <p class="dest">Informe a competência; só as linhas do mês/ano são importadas.</p>
+    <input type="file" id="fGlosa" accept=".xlsx,.xls">
+    <div class="grid">
+      <div><label>Competência MM/AAAA (obrigatória)</label><input type="text" id="glosaComp" placeholder="05/2026"></div>
+    </div>
+    <div class="row"><button onclick="impGlosa(this)">Importar</button></div>
+    <div class="status" id="sGlosa"></div>
+  </div>
+
+  <!-- 9) GLOSA ANP (BAIXAR DA ANP) -->
+  <div class="card">
+    <h3>9 · Glosa ANP (baixar da ANP) <span class="tag">download → Histórico ANP (A:J)</span></h3>
+    <p class="dest">Baixa a série direto do site da ANP e importa só a competência informada. Não precisa de upload.</p>
+    <div class="grid">
+      <div><label>Competência MM/AAAA (obrigatória)</label><input type="text" id="glosaUrlComp" placeholder="05/2026"></div>
+    </div>
+    <div class="row"><button onclick="impGlosaUrl(this)">Baixar e atualizar</button></div>
+    <div class="status" id="sGlosaUrl"></div>
+  </div>
+
+  <!-- LOG DA SESSÃO -->
+  <div id="logWrap">
+    <div class="lh"><b>Log da sessão</b><a onclick="document.getElementById('log').innerHTML='';mostrarVazio();">limpar</a></div>
+    <div id="log"></div>
+    <div class="vazio" id="logVazio">Nenhuma importação ainda nesta sessão.</div>
+  </div>
+
+<script>
+  function lerArquivo(inputId){
+    return new Promise((resolve, reject)=>{
+      const el = document.getElementById(inputId);
+      const f = el && el.files && el.files[0];
+      if(!f){ reject(new Error('Selecione um arquivo.')); return; }
+      const r = new FileReader();
+      r.onload = ()=>{ resolve({ base64:String(r.result).split(',')[1], mimeType:(f.type||'application/octet-stream'), fileName:f.name }); };
+      r.onerror = ()=> reject(new Error('Falha ao ler o arquivo.'));
+      r.readAsDataURL(f);
+    });
+  }
+  function setStatus(id, cls, msg){ const s=document.getElementById(id); s.className='status '+cls; s.textContent=msg; }
+  function v(id){ return (document.getElementById(id).value||'').trim(); }
+  function set(id, val){ document.getElementById(id).value = (val==null?'':val); }
+  function mostrarVazio(){ document.getElementById('logVazio').style.display = document.getElementById('log').children.length ? 'none':'block'; }
+  function logAdd(label, ok, msg){
+    const li=document.createElement('div'); li.className='li '+(ok?'ok':'err');
+    const hora=new Date().toLocaleTimeString('pt-BR');
+    li.innerHTML='<span class="t">'+hora+'</span> · '+(ok?'✓':'✗')+' <b>'+label+'</b> — <span class="m">'+String(msg||'').split('\n')[0]+'</span>';
+    const log=document.getElementById('log'); log.insertBefore(li, log.firstChild); mostrarVazio();
+  }
+
+  // wrapper genérico: chama a função do servidor, atualiza status, toast (servidor) e log
+  function chamar(fn, arg, statusId, btn, label, onOk){
+    btn.disabled = true;
+    setStatus(statusId,'run','Processando ' + label + '... (aguarde, não feche o diálogo)');
+    google.script.run
+      .withSuccessHandler(function(res){
+        btn.disabled=false;
+        const ok = !!(res && res.ok);
+        setStatus(statusId, ok?'ok':'err', (res && res.mensagem) || (ok?'Concluído.':'Erro desconhecido.'));
+        logAdd(label, ok, (res && res.mensagem) || '');
+        if(ok && onOk) onOk(res);
+      })
+      .withFailureHandler(function(e){
+        btn.disabled=false;
+        const m = 'Erro: '+(e && e.message ? e.message : e);
+        setStatus(statusId,'err', m); logAdd(label, false, m);
+      })
+      [fn](arg);
+  }
+
+  function impExcel(inputId, fn, statusId, label, btn){
+    lerArquivo(inputId).then(fo=>chamar(fn, fo, statusId, btn, label))
+      .catch(e=>{ setStatus(statusId,'err', e.message); logAdd(label, false, e.message); });
+  }
+  function impPdf(inputId, fn, statusId, label, btn){
+    lerArquivo(inputId).then(fo=>chamar(fn, fo, statusId, btn, label))
+      .catch(e=>{ setStatus(statusId,'err', e.message); logAdd(label, false, e.message); });
+  }
+  function impPdfManut(btn){
+    lerArquivo('fTitManut').then(fo=>chamar('importarTituloManutUpload', fo, 'sTM', btn, 'Título Manut.', function(res){
+      const d=res.dados||{}; if(d.titulo) set('detTitulo', d.titulo); if(d.competencia) set('detComp', d.competencia);
+    })).catch(e=>{ setStatus('sTM','err', e.message); logAdd('Título Manut.', false, e.message); });
+  }
+  function impDet(btn){
+    lerArquivo('fDet').then(fo=>chamar('importarDetalhamentoUpload', { file:fo, titulo:v('detTitulo'), competencia:v('detComp') }, 'sDet', btn, 'Detalhamento'))
+      .catch(e=>{ setStatus('sDet','err', e.message); logAdd('Detalhamento', false, e.message); });
+  }
+  function impAceite(inputId, tipo, statusId, btn){
+    const label='Aceite '+tipo;
+    lerArquivo(inputId).then(fo=>chamar('importarAceiteUpload', { file:fo, tipo:tipo }, statusId, btn, label))
+      .catch(e=>{ setStatus(statusId,'err', e.message); logAdd(label, false, e.message); });
+  }
+  function impGlosa(btn){
+    const comp=v('glosaComp');
+    if(!comp){ setStatus('sGlosa','err','Informe a competência (MM/AAAA).'); logAdd('Glosa ANP', false, 'Competência não informada.'); return; }
+    lerArquivo('fGlosa').then(fo=>chamar('importarGlosaUpload', { file:fo, competencia:comp }, 'sGlosa', btn, 'Glosa ANP'))
+      .catch(e=>{ setStatus('sGlosa','err', e.message); logAdd('Glosa ANP', false, e.message); });
+  }
+
+  // 9 — Glosa ANP por download (sem upload); chama direto (não lê arquivo local)
+  function impGlosaUrl(btn){
+    const comp=v('glosaUrlComp');
+    if(!comp){ setStatus('sGlosaUrl','err','Informe a competência (MM/AAAA).'); logAdd('Glosa ANP', false, 'Competência não informada.'); return; }
+    chamar('importarGlosaAnpUpdate', { competencia:comp }, 'sGlosaUrl', btn, 'Glosa ANP (download)');
+  }
+
+  // Diagnóstico: mostra texto extraído + valores candidatos (para depurar extração de PDF)
+  function diagPdf(inputId, statusId, boxId, btn){
+    const box=document.getElementById(boxId);
+    lerArquivo(inputId).then(function(fo){
+      btn.disabled=true; setStatus(statusId,'run','Lendo PDF para diagnóstico...');
+      google.script.run
+        .withSuccessHandler(function(res){
+          btn.disabled=false;
+          if(res && res.ok){
+            setStatus(statusId,'ok','Diagnóstico gerado. Copie o conteúdo abaixo se precisar.');
+            box.value = 'CAMPOS:\n'+JSON.stringify(res.campos,null,1)+'\n\nVALORES ENCONTRADOS:\n'+(res.moedas||[]).join('  ')+'\n\nTEXTO:\n'+(res.texto||'');
+            box.className='diagbox show';
+          } else { setStatus(statusId,'err',(res&&res.mensagem)||'Erro.'); }
+        })
+        .withFailureHandler(function(e){ btn.disabled=false; setStatus(statusId,'err','Erro: '+(e&&e.message?e.message:e)); })
+        .diagnosticarNf(fo);
+    }).catch(e=>setStatus(statusId,'err', e.message));
+  }
+</script>
+</body>
+</html>

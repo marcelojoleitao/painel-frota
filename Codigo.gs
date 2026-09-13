@@ -64,6 +64,9 @@ const CONFIG = {
   ABA_LOG: 'LogAcoes',
   // Fila de ações que dependem do DETRAN (executadas pelo trabalhador Python local)
   ABA_FILA: 'FilaAcoes',
+  // Importação (arquivos .xlsx do GoodManager/Ticket Log)
+  DEST_COLS: 40,          // AbastBD e ManutBD gravam A:AN
+
   // DETRAN-CE — Central de Serviços
   DETRAN_BASE: 'https://sistemas.detran.ce.gov.br/central',
 
@@ -1185,6 +1188,395 @@ function salvarFotoViatura(token, placa, angulo, base64, tipoMime) {
   } finally { trava.releaseLock(); }
 }
 
+
+
+/* ============================================================
+   IMPORTAÇÃO E EXPORTAÇÃO (administrador)
+   Traz para o painel o que era feito pelo menu da planilha:
+   sobe o .xlsx do GoodManager e acrescenta em AbastBD / ManutBD,
+   ignorando o que já existe (chave: CODIGO TRANSACAO, coluna A).
+   Período livre — pode importar quinze dias, um mês ou dois.
+   ============================================================ */
+
+function importarBase(token, tipo, arquivo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const destino = tipo === 'abast' ? CONFIG.ABA_ABAST : tipo === 'manut' ? CONFIG.ABA_MANUT : '';
+  if (!destino) return { ok: false, erro: 'Tipo inválido.' };
+  if (!arquivo || !arquivo.base64) return { ok: false, erro: 'Selecione o arquivo .xlsx.' };
+
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(60000); } catch (e) { return { ok: false, erro: 'Outra importação em andamento. Tente de novo.' }; }
+  let temporario = null;
+  try {
+    const aba = p.ss.getSheetByName(destino);
+    if (!aba) return { ok: false, erro: 'Aba ' + destino + ' não encontrada.' };
+
+    // converte o .xlsx num arquivo temporário do Sheets e lê os valores exibidos
+    const blob = Utilities.newBlob(Utilities.base64Decode(arquivo.base64), arquivo.mimeType || MimeType.MICROSOFT_EXCEL, arquivo.nome || 'importacao.xlsx');
+    temporario = Drive.Files.create({ name: '[TEMP importação painel] ' + (arquivo.nome || ''), mimeType: MimeType.GOOGLE_SHEETS }, blob);
+    const dados = SpreadsheetApp.openById(temporario.id).getSheets()[0].getDataRange().getDisplayValues();
+    if (!dados || dados.length < 2) return { ok: false, erro: 'A planilha enviada está vazia.' };
+
+    const r = tipo === 'abast' ? _importarAbast_(aba, dados) : _importarManut_(aba, dados);
+    SpreadsheetApp.flush();
+    limparCache();
+    _logAcao_(p.ss, p.sessao.email, 'Importar ' + (tipo === 'abast' ? 'abastecimento' : 'manutenção'), '',
+      r.inseridos + ' inseridos', 'arquivo: ' + (arquivo.nome || '') + ' | lidos: ' + r.lidos + ' | duplicados: ' + r.duplicados + (r.periodo ? ' | período: ' + r.periodo : ''));
+    return { ok: true, destino: destino, lidos: r.lidos, inseridos: r.inseridos, duplicados: r.duplicados, periodo: r.periodo || '' };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  } finally {
+    if (temporario && temporario.id) { try { Drive.Files.remove(temporario.id); } catch (e) {} }
+    trava.releaseLock();
+  }
+}
+
+/** Abastecimento: o arquivo já vem na ordem das colunas de destino. */
+function _importarAbast_(destino, dados) {
+  const existentes = _codigosExistentes_(destino);
+  const novos = {}, inserir = [];
+  let lidos = 0, duplicados = 0, menor = '', maior = '';
+  for (let i = 1; i < dados.length; i++) {
+    const linha = dados[i];
+    const codigo = _codigoTransacao_(linha[0]);
+    if (!codigo) continue;
+    lidos++;
+    if (existentes[codigo] || novos[codigo]) { duplicados++; continue; }
+    const dia = _diaISO_(linha[4]);
+    if (dia) { if (!menor || dia < menor) menor = dia; if (!maior || dia > maior) maior = dia; }
+    inserir.push(_ajustarLinha_(linha, CONFIG.DEST_COLS));
+    novos[codigo] = true;
+  }
+  if (inserir.length) destino.getRange(Math.max(destino.getLastRow() + 1, 2), 1, inserir.length, CONFIG.DEST_COLS).setValues(inserir);
+  return { lidos: lidos, inseridos: inserir.length, duplicados: duplicados, periodo: menor ? _brDia_(menor) + ' a ' + _brDia_(maior) : '' };
+}
+
+/** Manutenção: a ordem das colunas varia; o arquivo é remapeado pelo nome do cabeçalho. */
+function _importarManut_(destino, dados) {
+  let linhaCab = -1;
+  for (let r = 0; r < dados.length && linhaCab < 0; r++) {
+    for (let c = 0; c < dados[r].length; c++) {
+      if (_normCab_(dados[r][c]) === 'CODIGO TRANSACAO') { linhaCab = r; break; }
+    }
+  }
+  if (linhaCab < 0) throw new Error('Não encontrei a linha de cabeçalho ("CODIGO TRANSACAO") no arquivo de manutenção.');
+  const cab = dados[linhaCab], mapa = {};
+  cab.forEach((h, i) => { const k = _normCab_(h); if (k && mapa[k] === undefined) mapa[k] = i; });
+  const desejadas = _colunasManut_();
+  const existentes = _codigosExistentes_(destino);
+  const novos = {}, inserir = [];
+  let lidos = 0, duplicados = 0, menor = '', maior = '';
+  for (let i = linhaCab + 1; i < dados.length; i++) {
+    const origem = dados[i];
+    const linha = desejadas.map(h => { const c = _resolverColuna_(mapa, h); return c > -1 ? (origem[c] || '') : ''; });
+    const codigo = _codigoTransacao_(linha[0]);
+    if (!codigo) continue;
+    lidos++;
+    if (existentes[codigo] || novos[codigo]) { duplicados++; continue; }
+    const dia = _diaISO_(linha[4]);
+    if (dia) { if (!menor || dia < menor) menor = dia; if (!maior || dia > maior) maior = dia; }
+    inserir.push(_ajustarLinha_(linha, CONFIG.DEST_COLS));
+    novos[codigo] = true;
+  }
+  if (inserir.length) destino.getRange(Math.max(destino.getLastRow() + 1, 2), 1, inserir.length, CONFIG.DEST_COLS).setValues(inserir);
+  return { lidos: lidos, inseridos: inserir.length, duplicados: duplicados, periodo: menor ? _brDia_(menor) + ' a ' + _brDia_(maior) : '' };
+}
+
+function _codigosExistentes_(aba) {
+  const mapa = {};
+  const n = aba.getLastRow();
+  if (n < 2) return mapa;
+  aba.getRange(2, 1, n - 1, 1).getDisplayValues().forEach(l => { const c = _codigoTransacao_(l[0]); if (c) mapa[c] = true; });
+  return mapa;
+}
+function _codigoTransacao_(v) { return String(v === null || v === undefined ? '' : v).replace(/\s+/g, '').replace(/\.0$/, ''); }
+function _ajustarLinha_(linha, n) { const saida = linha.slice(0, n); while (saida.length < n) saida.push(''); return saida; }
+function _normCab_(s) {
+  return String(s || '').trim().toUpperCase().replace(/[|_\t]/g, ' ')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+}
+function _colunasManut_() {
+  return ['CODIGO TRANSACAO','FORMA DE PAGAMENTO','CODIGO CLIENTE','NOME REDUZIDO','DATA TRANSACAO',
+    'PLACA','TIPO FROTA','MODELO VEICULO','NUMERO FROTA','ANO','MATRICULA','NOME MOTORISTA',
+    'SERVICO','TIPO COMBUSTIVEL','LITROS','VL/LITRO','HODOMETRO OU HORIMETRO',
+    'KM RODADOS OU HORAS TRABALHADAS','KM/LITRO OU LITROS/HORA','VALOR EMISSAO',
+    'CODIGO ESTABELECIMENTO','NOME ESTABELECIMENTO','TIPO ESTABELECIMENTO','ENDERECO','BAIRRO',
+    'CIDADE','UF','INFORMACAO ADIDIONAL 1','INFORMACAO ADIDIONAL 2','INFORMACAO ADIDIONAL 3',
+    'INFORMACAO ADIDIONAL 4','INFORMACAO ADIDIONAL 5','FORMA TRANSACAO','CODIGO LIBERACAO RESTRICAO',
+    'SERIE POS','NUMERO CARTAO','FAMILIA VEICULO','GRUPO RESTRICAO','CODIGO EMISSORA','RESPONSAVEL'];
+}
+/** Nomes alternativos aceitos para cada coluna (herdado do importador antigo). */
+function _resolverColuna_(mapa, desejada) {
+  const alt = {
+    'CODIGO TRANSACAO': ['CODIGO TRANSACAO'],
+    'DATA TRANSACAO': ['DATA TRANSACAO', 'DATA DA TRANSACAO', 'DATA'],
+    'MODELO VEICULO': ['MODELO VEICULO', 'MODELO'],
+    'NOME MOTORISTA': ['NOME MOTORISTA', 'MOTORISTA'],
+    'TIPO COMBUSTIVEL': ['TIPO COMBUSTIVEL', 'COMBUSTIVEL'],
+    'HODOMETRO OU HORIMETRO': ['HODOMETRO OU HORIMETRO', 'HODOMETRO', 'HODOMETRO/HORIMETRO'],
+    'KM RODADOS OU HORAS TRABALHADAS': ['KM RODADOS OU HORAS TRABALHADAS', 'KM RODADOS'],
+    'KM/LITRO OU LITROS/HORA': ['KM/LITRO OU LITROS/HORA', 'KM/LITRO'],
+    'VALOR EMISSAO': ['VALOR EMISSAO', 'VALOR'],
+    'NOME ESTABELECIMENTO': ['NOME ESTABELECIMENTO', 'ESTABELECIMENTO'],
+    'TIPO ESTABELECIMENTO': ['TIPO ESTABELECIMENTO']
+  };
+  const nomes = alt[desejada] || [desejada];
+  for (let i = 0; i < nomes.length; i++) { const k = _normCab_(nomes[i]); if (mapa[k] !== undefined) return mapa[k]; }
+  return -1;
+}
+
+/** Exporta AbastBD ou ManutBD como .xlsx e devolve o link do Drive. */
+function exportarBase(token, tipo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const nomeAba = tipo === 'abast' ? CONFIG.ABA_ABAST : tipo === 'manut' ? CONFIG.ABA_MANUT : '';
+  if (!nomeAba) return { ok: false, erro: 'Tipo inválido.' };
+  let temp = null;
+  try {
+    const origem = p.ss.getSheetByName(nomeAba);
+    if (!origem) return { ok: false, erro: 'Aba não encontrada.' };
+    const nome = nomeAba + '_' + Utilities.formatDate(new Date(), CONFIG.FUSO, 'yyyy-MM-dd_HHmm');
+    const nova = SpreadsheetApp.create(nome);
+    origem.copyTo(nova).setName(nomeAba);
+    const padrao = nova.getSheetByName('Sheet1') || nova.getSheetByName('Página1');
+    if (padrao) nova.deleteSheet(padrao);
+    SpreadsheetApp.flush();
+    temp = nova.getId();
+    const url = 'https://docs.google.com/spreadsheets/d/' + temp + '/export?format=xlsx';
+    const bytes = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true }).getBlob().setName(nome + '.xlsx');
+    const arq = DriveApp.createFile(bytes);
+    try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+    _logAcao_(p.ss, p.sessao.email, 'Exportar ' + nomeAba, '', 'OK', arq.getUrl());
+    return { ok: true, nome: nome + '.xlsx', link: arq.getUrl(), linhas: origem.getLastRow() - 1 };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  } finally {
+    if (temp) { try { Drive.Files.remove(temp); } catch (e) {} }
+  }
+}
+
+
+/* ============================================================
+   RELATÓRIO DE ABASTECIMENTO (PDF, paisagem)
+   Monta o documento em HTML com a identidade PRF e converte em PDF.
+   Não cria abas na planilha — o antigo espalhava quatro.
+   ============================================================ */
+
+function gerarRelatorioAbastecimento(token, de, ate) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const ini = String(de || '').substring(0, 7), fim = String(ate || '').substring(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(ini) || !/^\d{4}-\d{2}$/.test(fim)) return { ok: false, erro: 'Informe a competência inicial e final.' };
+  if (ini > fim) return { ok: false, erro: 'A competência inicial não pode ser maior que a final.' };
+
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    const veiculos = _lerVeiculos_(ss);
+    const cadastro = {};
+    veiculos.forEach(v => { cadastro[v.placa] = v; if (v.placaMerc && v.placaMerc !== v.placa) cadastro[v.placaMerc] = v; });
+    const dados = _dadosRelatorioAbast_(ss, ini, fim, cadastro);
+    if (!dados.registros) return { ok: false, erro: 'Nenhum abastecimento no período ' + _rotMes_(ini) + ' a ' + _rotMes_(fim) + '.' };
+
+    const html = _htmlRelatorioAbast_(dados, ini, fim, p.sessao);
+    const nome = 'Relatorio_Abastecimento_' + ini.replace('-', '') + (ini === fim ? '' : '_a_' + fim.replace('-', '')) + '.pdf';
+    const pdf = Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome);
+    const arq = DriveApp.createFile(pdf);
+    try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+    _logAcao_(p.ss, p.sessao.email, 'Relatório de abastecimento', '', _rotMes_(ini) + ' a ' + _rotMes_(fim), arq.getUrl());
+    return { ok: true, nome: nome, link: arq.getUrl(), resumo: { registros: dados.registros, valor: dados.valor, litros: dados.litros, km: dados.km, viaturas: Object.keys(dados.porPlaca).length, alertas: dados.totalAlertas } };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+function _dadosRelatorioAbast_(ss, ini, fim, cadastro) {
+  const tab = _abaTransacoes_(ss, CONFIG.ABA_ABAST, ['PLACA', 'LITROS', 'VALOR EMISSAO']);
+  const d = { registros: 0, valor: 0, litros: 0, km: 0, porPlaca: {}, porUnidade: {}, porUso: {}, porTipo: {}, porComb: {}, porPosto: {}, porCidade: {}, porMes: {},
+              alertas: { semCadastro: [], kmNegativo: [], kmZero: [], consumoAlto: [], consumoBaixo: [], divergencia: [], precoAcima: [], duplicidade: [] }, totalAlertas: 0 };
+  if (!tab) return d;
+  const { valores, cab } = tab;
+  const c = n => cab.indexOf(n);
+  const iData = c('DATA TRANSACAO'), iPlaca = c('PLACA'), iLit = c('LITROS'), iVlL = c('VL/LITRO'),
+        iKm = c('KM RODADOS OU HORAS TRABALHADAS'), iKmL = c('KM/LITRO OU LITROS/HORA'), iVal = c('VALOR EMISSAO'),
+        iComb = c('TIPO COMBUSTIVEL'), iEst = c('NOME ESTABELECIMENTO'), iCid = c('CIDADE'), iUf = c('UF'), iMot = c('NOME MOTORISTA');
+  const somaPreco = {}, contaPreco = {}, porDia = {};
+  const soma = (obj, chave, r) => {
+    const a = obj[chave] || (obj[chave] = { valor: 0, litros: 0, km: 0, qtd: 0, placas: {} });
+    a.valor += r.valor; a.litros += r.litros; a.km += Math.max(0, r.km); a.qtd++; a.placas[r.placa] = true;
+  };
+
+  for (let r = tab.inicio; r < valores.length; r++) {
+    const l = valores[r];
+    const placa = String(l[iPlaca] || '').trim().toUpperCase();
+    if (!placa) continue;
+    const dia = _diaISO_(l[iData]); if (!dia) continue;
+    const mes = dia.substring(0, 7);
+    if (mes < ini || mes > fim) continue;
+    const reg = { placa: placa, dia: dia, mes: mes, valor: _num_(l[iVal]) || 0, litros: _num_(l[iLit]) || 0,
+      km: _num_(l[iKm]) || 0, kmL: _num_(l[iKmL]) || 0, vlL: _num_(l[iVlL]) || 0,
+      comb: String(l[iComb] || '').trim().toUpperCase() || 'SEM COMBUSTÍVEL',
+      posto: String(l[iEst] || '').trim() || 'SEM POSTO', cidade: String(l[iCid] || '').trim() || 'SEM CIDADE',
+      uf: String(l[iUf] || '').trim().toUpperCase(), motorista: String(l[iMot] || '').trim() };
+    const v = cadastro[placa];
+    d.registros++; d.valor += reg.valor; d.litros += reg.litros; d.km += Math.max(0, reg.km);
+
+    soma(d.porPlaca, placa, reg);
+    soma(d.porUnidade, v ? (v.unidadeCurta || v.unidade || 'SEM CADASTRO') : 'SEM CADASTRO', reg);
+    soma(d.porUso, v ? (v.uso || 'SEM USO') : 'SEM USO', reg);
+    soma(d.porTipo, v ? (v.tipo || 'SEM TIPO') : 'SEM TIPO', reg);
+    soma(d.porComb, reg.comb, reg);
+    soma(d.porPosto, reg.posto + (reg.cidade !== 'SEM CIDADE' ? ' — ' + reg.cidade : ''), reg);
+    soma(d.porCidade, reg.cidade + (reg.uf ? '/' + reg.uf : ''), reg);
+    soma(d.porMes, reg.mes, reg);
+    if (v) { const pp = d.porPlaca[placa]; pp.modelo = v.modeloCurto; pp.unidade = v.unidadeCurta || v.unidade; pp.tipo = v.tipo; pp.uso = v.uso; }
+
+    if (reg.vlL > 0) { somaPreco[reg.comb] = (somaPreco[reg.comb] || 0) + reg.vlL; contaPreco[reg.comb] = (contaPreco[reg.comb] || 0) + 1; }
+    const chaveDia = placa + '|' + dia;
+    porDia[chaveDia] = (porDia[chaveDia] || 0) + 1;
+
+    // alertas
+    if (!v) d.alertas.semCadastro.push([placa, _brDia_(dia), reg.posto, _moedaBR_(reg.valor)]);
+    if (reg.km < 0) d.alertas.kmNegativo.push([placa, _brDia_(dia), String(reg.km), _moedaBR_(reg.valor)]);
+    else if (reg.km === 0) d.alertas.kmZero.push([placa, _brDia_(dia), _decBR_(reg.litros) + ' l', _moedaBR_(reg.valor)]);
+    const consumo = reg.kmL || (reg.litros > 0 && reg.km > 0 ? reg.km / reg.litros : 0);
+    if (consumo > 25) d.alertas.consumoAlto.push([placa, _brDia_(dia), _decBR_(consumo) + ' km/l', _decBR_(reg.litros) + ' l']);
+    else if (consumo > 0 && consumo < 3) d.alertas.consumoBaixo.push([placa, _brDia_(dia), _decBR_(consumo) + ' km/l', _decBR_(reg.litros) + ' l']);
+    if (v && v.comb && reg.comb !== 'SEM COMBUSTÍVEL') {
+      const cadComb = String(v.comb).toUpperCase();
+      const compativel = cadComb.indexOf(reg.comb.split(' ')[0]) >= 0 || reg.comb.indexOf(cadComb.split(' ')[0]) >= 0 ||
+        (/FLEX|ALCOOL|GASOLINA|ETANOL/.test(cadComb) && /GASOLINA|ALCOOL|ETANOL/.test(reg.comb));
+      if (!compativel) d.alertas.divergencia.push([placa, _brDia_(dia), 'cadastro: ' + v.comb, 'abastecido: ' + reg.comb]);
+    }
+    reg._chaveDia = chaveDia;
+    (d._regs = d._regs || []).push(reg);
+  }
+
+  // preço acima da média e duplicidade dependem do total
+  (d._regs || []).forEach(reg => {
+    const media = contaPreco[reg.comb] ? somaPreco[reg.comb] / contaPreco[reg.comb] : 0;
+    if (media > 0 && reg.vlL > media * 1.15) d.alertas.precoAcima.push([reg.placa, _brDia_(reg.dia), reg.comb, 'R$ ' + _decBR_(reg.vlL) + ' (média R$ ' + _decBR_(media) + ')']);
+  });
+  const jaVistos = {};
+  (d._regs || []).forEach(reg => {
+    if (porDia[reg._chaveDia] > 2 && !jaVistos[reg._chaveDia]) {
+      jaVistos[reg._chaveDia] = true;
+      d.alertas.duplicidade.push([reg.placa, _brDia_(reg.dia), porDia[reg._chaveDia] + ' abastecimentos no mesmo dia', '']);
+    }
+  });
+  delete d._regs;
+  Object.keys(d.alertas).forEach(k => { d.totalAlertas += d.alertas[k].length; });
+  return d;
+}
+
+function _htmlRelatorioAbast_(d, ini, fim, sessao) {
+  const lista = (obj, n) => Object.keys(obj).map(k => Object.assign({ chave: k }, obj[k])).sort((a, b) => b.valor - a.valor).slice(0, n || 9999);
+  const consumo = (km, litros) => litros > 0 ? _decBR_(km / litros) + ' km/l' : '—';
+  const porKm = (valor, km) => km > 0 ? 'R$ ' + _decBR_(valor / km) : '—';
+  const linhasTabela = (itens, colunas) => itens.map(i => '<tr>' + colunas.map(c => '<td' + (c.num ? ' class="num"' : '') + '>' + c.v(i) + '</td>').join('') + '</tr>').join('');
+  const tabela = (titulo, cabecalhos, itens, colunas) => !itens.length ? '' :
+    '<h3>' + titulo + '</h3><table><thead><tr>' + cabecalhos.map((h, i) => '<th' + (colunas[i].num ? ' class="num"' : '') + '>' + h + '</th>').join('') + '</tr></thead><tbody>' +
+    linhasTabela(itens, colunas) + '</tbody></table>';
+
+  const colPadrao = [
+    { v: i => _esc_(i.chave) }, { v: i => String(Object.keys(i.placas).length), num: true }, { v: i => String(i.qtd), num: true },
+    { v: i => _decBR_(i.litros), num: true }, { v: i => _fmtInt_(i.km), num: true }, { v: i => _moedaBR_(i.valor), num: true },
+    { v: i => consumo(i.km, i.litros), num: true }, { v: i => porKm(i.valor, i.km), num: true }
+  ];
+  const cabPadrao = ['', 'Viaturas', 'Abast.', 'Litros', 'Km', 'Valor', 'Consumo', 'R$/km'];
+
+  const meses = Object.keys(d.porMes).sort();
+  const maiorMes = Math.max(1, ...meses.map(m => d.porMes[m].valor));
+  const barras = meses.map(m => {
+    const a = d.porMes[m];
+    return '<tr><td>' + _rotMes_(m) + '</td><td class="num">' + String(a.qtd) + '</td><td class="num">' + _decBR_(a.litros) +
+      '</td><td class="num">' + _fmtInt_(a.km) + '</td><td class="num">' + _moedaBR_(a.valor) + '</td><td class="num">' + consumo(a.km, a.litros) +
+      '</td><td class="barra"><span style="width:' + Math.round(a.valor / maiorMes * 100) + '%"></span></td></tr>';
+  }).join('');
+
+  const alertas = [
+    ['Abastecimentos de placas sem cadastro na ConsultaBD', ['Placa', 'Data', 'Posto', 'Valor'], d.alertas.semCadastro],
+    ['Quilometragem negativa', ['Placa', 'Data', 'Km informado', 'Valor'], d.alertas.kmNegativo],
+    ['Quilometragem zerada', ['Placa', 'Data', 'Litros', 'Valor'], d.alertas.kmZero],
+    ['Consumo acima de 25 km/l', ['Placa', 'Data', 'Consumo', 'Litros'], d.alertas.consumoAlto],
+    ['Consumo abaixo de 3 km/l', ['Placa', 'Data', 'Consumo', 'Litros'], d.alertas.consumoBaixo],
+    ['Divergência entre combustível cadastrado e abastecido', ['Placa', 'Data', 'Cadastro', 'Abastecido'], d.alertas.divergencia],
+    ['Preço por litro acima de 15% da média do combustível', ['Placa', 'Data', 'Combustível', 'Preço'], d.alertas.precoAcima],
+    ['Mais de dois abastecimentos no mesmo dia', ['Placa', 'Data', 'Ocorrência', ''], d.alertas.duplicidade]
+  ].map(([titulo, cabs, itens]) => !itens.length ? '' :
+    '<h3>' + titulo + ' <span class="conta">' + itens.length + '</span></h3><table><thead><tr>' + cabs.map(h => '<th>' + h + '</th>').join('') +
+    '</tr></thead><tbody>' + itens.slice(0, 60).map(l => '<tr>' + l.map(c => '<td>' + _esc_(c) + '</td>').join('') + '</tr>').join('') +
+    '</tbody></table>' + (itens.length > 60 ? '<p class="nota">Exibindo 60 de ' + itens.length + ' ocorrências.</p>' : '')).join('');
+
+  const periodo = ini === fim ? _rotMesExtenso_(ini) : _rotMesExtenso_(ini) + ' a ' + _rotMesExtenso_(fim);
+  const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, "dd/MM/yyyy 'às' HH:mm");
+
+  return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><style>' +
+    '@page { size: A4 landscape; margin: 12mm 10mm; }' +
+    'body { font-family: Arial, Helvetica, sans-serif; color: #14181F; font-size: 9.5pt; margin: 0; }' +
+    '.capa { background: #0B2C5C; color: #fff; padding: 16px 20px; border-bottom: 5px solid #F2B705; margin-bottom: 14px; }' +
+    '.capa h1 { margin: 0 0 2px; font-size: 19pt; } .capa .sub { font-size: 11pt; opacity: .85; } .capa .per { margin-top: 8px; font-size: 12pt; font-weight: bold; color: #F2B705; }' +
+    'h2 { color: #0B2C5C; font-size: 13pt; margin: 16px 0 6px; border-bottom: 2px solid #F2B705; padding-bottom: 3px; }' +
+    'h3 { color: #0B2C5C; font-size: 10.5pt; margin: 12px 0 4px; }' +
+    '.conta { background: #F2B705; color: #14181F; border-radius: 8px; padding: 1px 7px; font-size: 8.5pt; }' +
+    'table { width: 100%; border-collapse: collapse; margin-bottom: 6px; }' +
+    'th { background: #0B2C5C; color: #fff; text-align: left; padding: 4px 6px; font-size: 8.5pt; }' +
+    'td { padding: 3px 6px; border-bottom: 1px solid #E3E8F0; font-size: 8.5pt; }' +
+    'tr:nth-child(even) td { background: #F6F8FC; }' +
+    '.num { text-align: right; font-variant-numeric: tabular-nums; }' +
+    '.kpis { display: table; width: 100%; table-layout: fixed; border-spacing: 6px 0; margin-bottom: 6px; }' +
+    '.kpi { display: table-cell; background: #F6F8FC; border-left: 3px solid #0B2C5C; padding: 7px 9px; }' +
+    '.kpi .r { font-size: 7.5pt; text-transform: uppercase; letter-spacing: .06em; color: #5A6576; }' +
+    '.kpi .v { font-size: 13pt; font-weight: bold; color: #0B2C5C; }' +
+    '.barra { width: 22%; } .barra span { display: block; height: 9px; background: #2E6FD9; border-radius: 2px; }' +
+    '.nota { font-size: 8pt; color: #5A6576; margin: 2px 0 8px; }' +
+    '.rodape { margin-top: 14px; border-top: 1px solid #E3E8F0; padding-top: 5px; font-size: 7.5pt; color: #5A6576; }' +
+    '.quebra { page-break-before: always; }' +
+    '</style></head><body>' +
+    '<div class="capa"><h1>Relatório de Abastecimento</h1><div class="sub">16ª Superintendência da Polícia Rodoviária Federal — Ceará</div>' +
+    '<div class="per">' + periodo + '</div></div>' +
+
+    '<div class="kpis">' +
+    '<div class="kpi"><div class="r">Valor total</div><div class="v">' + _moedaBR_(d.valor) + '</div></div>' +
+    '<div class="kpi"><div class="r">Litros</div><div class="v">' + _decBR_(d.litros) + '</div></div>' +
+    '<div class="kpi"><div class="r">Km rodados</div><div class="v">' + _fmtInt_(d.km) + '</div></div>' +
+    '<div class="kpi"><div class="r">Consumo médio</div><div class="v">' + consumo(d.km, d.litros) + '</div></div>' +
+    '<div class="kpi"><div class="r">Custo por km</div><div class="v">' + porKm(d.valor, d.km) + '</div></div>' +
+    '<div class="kpi"><div class="r">Abastecimentos</div><div class="v">' + _fmtInt_(d.registros) + '</div></div>' +
+    '<div class="kpi"><div class="r">Viaturas</div><div class="v">' + Object.keys(d.porPlaca).length + '</div></div>' +
+    '</div>' +
+
+    '<h2>Evolução mensal</h2><table><thead><tr><th>Competência</th><th class="num">Abast.</th><th class="num">Litros</th><th class="num">Km</th><th class="num">Valor</th><th class="num">Consumo</th><th></th></tr></thead><tbody>' + barras + '</tbody></table>' +
+
+    '<h2>Consolidado por unidade</h2>' + tabela('', ['Unidade'].concat(cabPadrao.slice(1)), lista(d.porUnidade), colPadrao) +
+
+    '<div class="quebra"></div><h2>Consolidados</h2>' +
+    tabela('Por combustível', ['Combustível'].concat(cabPadrao.slice(1)), lista(d.porComb), colPadrao) +
+    tabela('Por uso SIPAC', ['Uso'].concat(cabPadrao.slice(1)), lista(d.porUso), colPadrao) +
+    tabela('Por tipo de veículo', ['Tipo'].concat(cabPadrao.slice(1)), lista(d.porTipo), colPadrao) +
+
+    '<div class="quebra"></div><h2>Rankings</h2>' +
+    tabela('Vinte viaturas com maior gasto', ['Placa', 'Modelo', 'Unidade', 'Abast.', 'Litros', 'Km', 'Valor', 'Consumo', 'R$/km'], lista(d.porPlaca, 20),
+      [{ v: i => _esc_(i.chave) }, { v: i => _esc_(i.modelo || '—') }, { v: i => _esc_(i.unidade || 'SEM CADASTRO') }, { v: i => String(i.qtd), num: true },
+       { v: i => _decBR_(i.litros), num: true }, { v: i => _fmtInt_(i.km), num: true }, { v: i => _moedaBR_(i.valor), num: true },
+       { v: i => consumo(i.km, i.litros), num: true }, { v: i => porKm(i.valor, i.km), num: true }]) +
+    tabela('Quinze postos com maior faturamento', ['Posto'].concat(cabPadrao.slice(1)), lista(d.porPosto, 15), colPadrao) +
+    tabela('Quinze cidades com maior gasto', ['Cidade'].concat(cabPadrao.slice(1)), lista(d.porCidade, 15), colPadrao) +
+
+    (d.totalAlertas ? '<div class="quebra"></div><h2>Alertas e inconsistências <span class="conta">' + d.totalAlertas + '</span></h2>' +
+      '<p class="nota">Critérios automáticos de conferência aplicados a todos os registros do período.</p>' + alertas : '') +
+
+    '<div class="rodape">Gerado pelo Painel da Frota — 16ª SPRF/CE em ' + agora + ' por ' + _esc_(sessao.email) +
+    '. Fonte: AbastBD (GoodManager/Ticket Log) e ConsultaBD.</div>' +
+    '</body></html>';
+}
+
+function _esc_(t) { return String(t === null || t === undefined ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function _fmtInt_(n) { return Math.round(n || 0).toLocaleString('pt-BR'); }
+function _decBR_(n) { return (Math.round((n || 0) * 100) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function _moedaBR_(n) { return 'R$ ' + _decBR_(n); }
+function _rotMes_(m) { return m.substring(5, 7) + '/' + m.substring(0, 4); }
+function _rotMesExtenso_(m) {
+  const nomes = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  return nomes[parseInt(m.substring(5, 7), 10) - 1] + ' de ' + m.substring(0, 4);
+}
 
 /* ============================================================
    FILA DE AÇÕES DO DETRAN
