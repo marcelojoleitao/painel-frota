@@ -14,7 +14,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.4.0';
+const VERSAO_PAINEL = '2.4.1';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -790,6 +790,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (p && p.classList.contains('aberta') && !e.target.closest('#painel-filtros') && !e.target.closest('#btn-filtros')) p.classList.remove('aberta');
   });
   let ajusteTimer; window.addEventListener('resize', () => { clearTimeout(ajusteTimer); ajusteTimer = setTimeout(ajustarKpis, 150); });
+  txt('login-versao', 'v' + VERSAO_PAINEL + ' — servido via GitHub');
   iniciarSessao();
 });
 
