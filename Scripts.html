@@ -62,7 +62,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.12.4';
+const VERSAO_PAINEL = '2.12.5';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2335,7 +2335,8 @@ function renderRelatorios(c) {
       <div class="acao-cartao">
         <h4>Relatório de Ordens de Serviço — Resumo</h4>
         <div class="desc">A lista de OS aceitas na competência, agrupada por unidade, com o tipo de aceite (gestor ou automático), composição por tipo, por unidade e por estabelecimento. Placas com processo de acidente em aberto vêm destacadas.</div>
-        <div class="form-campo" style="margin-bottom:10px"><label>Competência</label><input type="month" id="aceites-comp" value="${padrao}"></div>
+        <div class="form-campo" style="margin-bottom:10px"><label>Competência</label>
+          <select id="aceites-comp"><option value="">carregando…</option></select></div>
         <button class="btn amarelo" id="btn-rel-aceites">Gerar PDF</button>
         <div class="foto-data" id="aceites-status"></div>
         <div id="aceites-result"></div>
@@ -2343,7 +2344,8 @@ function renderRelatorios(c) {
       <div class="acao-cartao">
         <h4>Relatório de Ordens de Serviço — Analítico</h4>
         <div class="desc">Detalhamento das peças e serviços por veículo e família, com subtotais e total geral, a partir do DetalhamentoDB. Ao gerar, o painel confere as placas contra a aba Acidentes e avisa se alguma tiver processo em aberto.</div>
-        <div class="form-campo" style="margin-bottom:10px"><label>Competência</label><input type="month" id="pecas-comp" value="${padrao}"></div>
+        <div class="form-campo" style="margin-bottom:10px"><label>Competência</label>
+          <select id="pecas-comp"><option value="">carregando…</option></select></div>
         <button class="btn amarelo" id="btn-rel-pecas">Gerar PDF</button>
         <div class="foto-data" id="pecas-status"></div>
         <div id="pecas-result"></div>
@@ -2387,6 +2389,7 @@ function renderRelatorios(c) {
       .gerarRelatorioAbastecimento(ESTADO.token, de, ate);
   });
   verificarServidor();
+  carregarCompetencias();
   ouvir('btn-rel-pecas', 'click', gerarPecas);
   ouvir('btn-rel-aceites', 'click', gerarAceites);
   ouvir('glosa-rel-comp', 'change', carregarCombustiveisGlosa);
@@ -2396,8 +2399,11 @@ function renderRelatorios(c) {
 
 
 /* ---------------- Relatório de glosa ---------------- */
-function competenciaBR(valorMonth) {
-  return valorMonth ? valorMonth.substring(5, 7) + '/' + valorMonth.substring(0, 4) : '';
+function competenciaBR(valor) {
+  if (!valor) return '';
+  if (/^\d{2}\/\d{4}$/.test(valor)) return valor;              // já está em MM/AAAA
+  if (/^\d{4}-\d{2}/.test(valor)) return valor.substring(5, 7) + '/' + valor.substring(0, 4);
+  return valor;
 }
 
 function carregarCombustiveisGlosa() {
@@ -2519,6 +2525,28 @@ function verificarServidor() {
     () => { caixa.innerHTML = '<b style="color:var(--vermelho)">O servidor não respondeu à verificação.</b> Cole o Codigo.gs mais recente e faça Nova versão.'; });
   if (run) run.infoServidor(ESTADO.token);
   else caixa.innerHTML = '<b style="color:var(--vermelho)">Servidor antigo:</b> a verificação nem existe nele. Cole o Codigo.gs e faça Nova versão.';
+}
+
+
+/* ---------------- Competências existentes nas bases ---------------- */
+function carregarCompetencias() {
+  const preencher = (id, lista, rotuloVazio) => {
+    const sel = el(id); if (!sel) return;
+    if (!lista.length) { sel.innerHTML = `<option value="">${rotuloVazio}</option>`; sel.disabled = true; return; }
+    sel.disabled = false;
+    sel.innerHTML = lista.map((c, i) => `<option value="${escAttr(c.comp)}" ${i === 0 ? 'selected' : ''}>${esc(c.comp)} — ${fmtInt(c.qtd)} registro(s)</option>`).join('');
+  };
+  const run = servidor('competenciasDisponiveis',
+    r => {
+      if (!r || !r.ok) return;
+      preencher('pecas-comp', r.competencias.detalhamento, 'nenhuma competência no DetalhamentoDB');
+      preencher('aceites-comp', r.competencias.aceites, 'nenhuma competência no AceitesDB');
+      if (r.competencias.erro) toast('Leitura das bases: ' + r.competencias.erro, true);
+    },
+    e => {
+      ['pecas-comp', 'aceites-comp'].forEach(id => { const s = el(id); if (s) s.innerHTML = '<option value="">falha ao listar</option>'; });
+    });
+  if (run) run.competenciasDisponiveis(ESTADO.token);
 }
 
 </script>
