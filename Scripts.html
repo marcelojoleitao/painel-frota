@@ -32,6 +32,16 @@ function entregarPdf(r) {
   return '<div class="cartao-dica">O servidor não devolveu o arquivo. Veja o Registro em Ações.</div>';
 }
 
+/** Mostra a falha no próprio cartão, de forma permanente (não some como o aviso do rodapé). */
+function falhaNoCartao(idResultado, msg) {
+  const caixa = el(idResultado);
+  const texto = String(msg && msg.message ? msg.message : msg || 'Falha sem mensagem.');
+  if (caixa) caixa.innerHTML = `<div class="alerta-item" style="margin-top:10px; cursor:pointer" onclick="copiar(this.dataset.msg)" data-msg="${escAttr(texto)}">
+      <span class="t">NÃO FOI POSSÍVEL GERAR</span><div style="margin-top:3px">${esc(texto)}</div>
+      <div style="margin-top:4px; opacity:.75">Clique para copiar a mensagem.</div></div>`;
+  toast(texto, true);
+}
+
 function servidor(nome, aoOk, aoErro) {
   const run = google.script.run
     .withSuccessHandler(r => { if (!sessaoExpirou(r)) aoOk(r); })
@@ -62,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.13.3';
+const VERSAO_PAINEL = '2.13.4';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2376,7 +2386,7 @@ function renderRelatorios(c) {
       .withSuccessHandler(r => {
         btn.disabled = false; btn.textContent = 'Gerar PDF';
         if (sessaoExpirou(r)) return;
-        if (!r || !r.ok) { if (status) status.textContent = ''; toast((r && r.erro) || 'Falha ao gerar.'); return; }
+        if (!r || !r.ok) { if (status) status.textContent = ''; falhaNoCartao('rel-result', (r && r.erro) || 'Falha ao gerar.'); return; }
         if (status) status.innerHTML = entregarPdf(r);
         if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
           <div class="dado"><div class="k">Abastecimentos</div><div class="v">${fmtInt(r.resumo.registros)}</div></div>
@@ -2385,7 +2395,7 @@ function renderRelatorios(c) {
           <div class="dado"><div class="k">Alertas</div><div class="v ${r.resumo.alertas ? 'alerta-txt' : 'ok-txt'}">${fmtInt(r.resumo.alertas)}</div></div>
         </div>`;
       })
-      .withFailureHandler(e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; toast('Erro: ' + (e && e.message ? e.message : e)); })
+      .withFailureHandler(e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; falhaNoCartao('rel-result', e); })
       .gerarRelatorioAbastecimento(ESTADO.token, de, ate);
   });
   verificarServidor();
@@ -2435,7 +2445,7 @@ function gerarGlosa() {
   const run = servidor('gerarRelatorioGlosa',
     r => {
       btn.disabled = false; btn.textContent = 'Gerar PDF';
-      if (!r || !r.ok) { if (status) status.textContent = ''; toast((r && r.erro) || 'Falha ao gerar.'); return; }
+      if (!r || !r.ok) { if (status) status.textContent = ''; falhaNoCartao('glosa-result', (r && r.erro) || 'Falha ao gerar.'); return; }
       if (status) status.innerHTML = entregarPdf(r);
       if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
         <div class="dado"><div class="k">Total da glosa</div><div class="v ${r.total ? 'alerta-txt' : 'ok-txt'}">${fmtMoeda(r.total)}</div></div>
@@ -2443,7 +2453,7 @@ function gerarGlosa() {
         ${r.grupos.map(g => `<div class="dado"><div class="k">${esc(g.combustivel)}</div><div class="v">${fmtMoeda(g.subtotal)} <small style="font-weight:500; color:var(--tinta-suave)">${g.itens} item(ns)</small></div></div>`).join('')}
       </div>${r.semTeto && r.semTeto.length ? `<div class="cartao-dica">Sem teto publicado na ANP: ${esc(r.semTeto.join('; '))}</div>` : ''}`;
     },
-    e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; });
+    e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; falhaNoCartao('glosa-result', e); });
   if (run) run.gerarRelatorioGlosa(ESTADO.token, comp, escolhidos);
 }
 
@@ -2459,7 +2469,7 @@ function gerarPecas() {
   const run = servidor('gerarRelatorioPecas',
     r => {
       btn.disabled = false; btn.textContent = 'Gerar PDF';
-      if (!r || !r.ok) { if (status) status.textContent = ''; toast((r && r.erro) || 'Falha ao gerar.'); return; }
+      if (!r || !r.ok) { if (status) status.textContent = ''; falhaNoCartao('pecas-result', (r && r.erro) || 'Falha ao gerar.'); return; }
       if (status) status.innerHTML = entregarPdf(r);
       if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
         <div class="dado"><div class="k">Total</div><div class="v">${fmtMoeda(r.total)}</div></div>
@@ -2472,7 +2482,7 @@ function gerarPecas() {
         : `<div class="cartao-dica">Nenhuma placa do relatório tem processo de acidente em aberto.</div>`);
       if (r.acidentes && r.acidentes.length) toast('Atenção: ' + r.acidentes.length + ' placa(s) com processo de acidente em aberto neste relatório.', true);
     },
-    e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; });
+    e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; falhaNoCartao('pecas-result', e); });
   if (run) run.gerarRelatorioPecas(ESTADO.token, comp, '');
 }
 
@@ -2488,7 +2498,7 @@ function gerarAceites() {
   const run = servidor('gerarRelatorioAceites',
     r => {
       btn.disabled = false; btn.textContent = 'Gerar PDF';
-      if (!r || !r.ok) { if (status) status.textContent = ''; toast((r && r.erro) || 'Falha ao gerar.'); return; }
+      if (!r || !r.ok) { if (status) status.textContent = ''; falhaNoCartao('aceites-result', (r && r.erro) || 'Falha ao gerar.'); return; }
       if (status) status.innerHTML = entregarPdf(r);
       if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
         <div class="dado"><div class="k">Total</div><div class="v">${fmtMoeda(r.total)}</div></div>
@@ -2502,7 +2512,7 @@ function gerarAceites() {
         : `<div class="cartao-dica">Nenhuma placa com processo de acidente em aberto nesta competência.</div>`);
       if (r.acidentes && r.acidentes.length) toast('Atenção: ' + r.acidentes.length + ' placa(s) com processo de acidente em aberto.', true);
     },
-    e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; });
+    e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; falhaNoCartao('aceites-result', e); });
   if (run) run.gerarRelatorioAceites(ESTADO.token, comp);
 }
 
