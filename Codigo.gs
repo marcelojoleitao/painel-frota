@@ -111,6 +111,9 @@ function _arquivoHtml_(nome) {
     try {
       const texto = _baixarDoGitHub_(nome + '.html');
       if (texto !== null) {
+        // um arquivo novo indica push recente: derruba o cache dos demais para
+        // não servir HTMLs de versões diferentes na mesma página
+        if (nome === 'App') limparCacheHtml();
         const fatias = {}; let n = 0;
         for (let i = 0; i < texto.length; i += 90000) fatias[chave + '_' + (n++)] = texto.substring(i, i + 90000);
         cache.putAll(fatias, HTML_CACHE_SEG);
