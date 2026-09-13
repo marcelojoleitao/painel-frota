@@ -91,7 +91,7 @@ function doGet() {
   pagina = pagina.replace(/<\?=\s*titulo\s*\?>/g, CONFIG.TITULO);
   pagina = pagina.replace(/<\?!=\s*incluir\(\s*'([^']+)'\s*\);?\s*\?>/g, function (m, nome) { return _arquivoHtml_(nome); });
   // carimbo escrito pelo servidor: aparece mesmo que o JavaScript falhe
-  Logger.log('doGet: página montada com ' + pagina.length + ' caracteres.');
+  Logger.log('doGet: ' + pagina.length + ' caracteres servidos.');
   const v = (pagina.match(/VERSAO_PAINEL\s*=\s*'([^']+)'/) || [])[1] || '?';
   const origem = (PropertiesService.getScriptProperties().getProperty('HTML_ORIGEM') || HTML_ORIGEM_PADRAO) === 'github' ? 'GitHub' : 'projeto';
   pagina = pagina.replace(/\{\{VERSAO\}\}/g, 'v' + v + ' — ' + origem);
@@ -106,51 +106,25 @@ function incluir(nome) {
 }
 
 function _arquivoHtml_(nome) {
-  const conteudo = _arquivoHtmlInterno_(nome);
-  Logger.log('  ' + nome + ': ' + conteudo.length + ' caracteres servidos');
-  return conteudo;
-}
-
-function _arquivoHtmlInterno_(nome) {
   const origem = PropertiesService.getScriptProperties().getProperty('HTML_ORIGEM') || HTML_ORIGEM_PADRAO;
   if (origem === 'github') {
-    const chave = 'html_' + nome;
-    const cache = CacheService.getScriptCache();
-
-    // Só usa o cache se TODAS as fatias estiverem lá. Um pedaço ausente serviria
-    // um arquivo truncado — e um HTML/JS cortado quebra a página inteira.
-    const n = parseInt(cache.get(chave + '_n'), 10);
-    if (n > 0) {
-      const chaves = []; for (let i = 0; i < n; i++) chaves.push(chave + '_' + i);
-      const partes = cache.getAll(chaves);
-      let completo = true, texto = '';
-      for (let i = 0; i < n; i++) {
-        const p = partes[chave + '_' + i];
-        if (p === undefined || p === null) { completo = false; break; }
-        texto += p;
-      }
-      const esperado = parseInt(cache.get(chave + '_len'), 10) || 0;
-      if (completo && texto.length && texto.length === esperado) return texto;
-      Logger.log('Cache de ' + nome + ' inválido (tinha ' + texto.length + ' de ' + esperado + ' caracteres) — descartado e rebuscado.');
-      cache.removeAll(chaves.concat([chave + '_n']));
-    }
-
-    let texto = null;
-    try { texto = _baixarDoGitHub_(nome + '.html'); }
-    catch (e) { Logger.log('GitHub indisponível para ' + nome + ' (' + e + '); usando arquivo local.'); }
-    if (texto !== null) {
-      try {
-        if (nome === 'App') limparCacheHtml();   // push novo: derruba os demais para não misturar versões
-        let n2 = 0;
-        for (let i = 0; i < texto.length; i += 30000) cache.put(chave + '_' + (n2++), texto.substring(i, i + 30000), HTML_CACHE_SEG);
-        cache.put(chave + '_n', String(n2), HTML_CACHE_SEG);
-        cache.put(chave + '_len', String(texto.length), HTML_CACHE_SEG);
-      } catch (e) { Logger.log('Cache do HTML ' + nome + ' não gravado (' + e + ') — servindo direto do GitHub.'); }
-      return texto;
-    }
-    Logger.log('HTML ' + nome + ' não encontrado no GitHub; usando arquivo local.');
+    try {
+      const texto = _baixarDoGitHub_(nome + '.html');
+      if (texto !== null && texto.length > 50) return texto;
+      Logger.log('HTML ' + nome + ' não encontrado no GitHub; usando arquivo local.');
+    } catch (e) { Logger.log('GitHub indisponível para ' + nome + ' (' + e + '); usando arquivo local.'); }
   }
   return HtmlService.createHtmlOutputFromFile(nome).getContent();
+}
+
+/**
+ * Sem cache por decisão: o HTML é buscado inteiro a cada carregamento.
+ * O cache fatiado que existia aqui servia arquivos truncados quando o Scripts
+ * passou de 100 KB, e um script cortado derruba a página inteira.
+ * Custo atual: ~1 s por carregamento. Mantido assim por ser previsível.
+ */
+function limparCacheHtml() {
+  return 'Não há mais cache de HTML — cada carregamento busca o GitHub direto.';
 }
 
 /** Diz exatamente o que está sendo servido em cada arquivo — rode no editor. */
@@ -171,16 +145,6 @@ function diagnosticarHtml() {
       (versao ? ' | versão ' + versao : ''));
   });
   limparCacheHtml();
-}
-
-/** Depois de um push, rode isto (ou espere até 5 min) para o painel refletir o GitHub. */
-function limparCacheHtml() {
-  const cache = CacheService.getScriptCache();
-  ['App', 'Login', 'Estilos', 'Scripts'].forEach(nome => {
-    const lista = ['html_' + nome + '_n', 'html_' + nome + '_len']; for (let i = 0; i < 120; i++) lista.push('html_' + nome + '_' + i);
-    cache.removeAll(lista);
-  });
-  return 'Cache de HTML limpo — próximo acesso baixa do GitHub.';
 }
 
 /* ------------------------------------------------------------ */
