@@ -2424,6 +2424,19 @@ function _tetosAnp_(ss) {
   }
   return mapa;
 }
+/** Competência de qualquer célula, sem lançar erro: Date, "7/2024", "07/2024", "2024-07". */
+function _compSegura_(v) {
+  if (v instanceof Date && !isNaN(v)) return ('0' + (v.getMonth() + 1)).slice(-2) + '/' + v.getFullYear();
+  const t = String(v === null || v === undefined ? '' : v).trim();
+  let m = t.match(/^(\d{1,2})[\/\-](\d{4})/);
+  if (m) return ('0' + m[1]).slice(-2) + '/' + m[2];
+  m = t.match(/^(\d{4})[\/\-](\d{1,2})$/);
+  if (m) return ('0' + m[2]).slice(-2) + '/' + m[1];
+  m = t.match(/(\d{2})\/(\d{2})\/(\d{4})/);          // data completa → mês/ano
+  if (m) return m[2] + '/' + m[3];
+  return '';
+}
+
 function _competenciaDaCelula_(v) {
   if (v instanceof Date && !isNaN(v)) return ('0' + (v.getMonth() + 1)).slice(-2) + '/' + v.getFullYear();
   const m = String(v || '').match(/(\d{1,2})[\/\-](\d{4})/);
@@ -2682,8 +2695,7 @@ function gerarRelatorioPecas(token, competencia, placa) {
     // índices herdados do relatório antigo (0-based)
     const C_GESTOR = 0, C_PLACA = 5, C_FAMILIA = 10, C_INI_DADOS = 11, C_FIM_DADOS = 29, C_TOTAL = 27, C_COMP = 29;
     const registros = dados.slice(linhaCab + 1).filter(l => {
-      const compLinha = _competenciaDaCelula_(l[C_COMP]) || _formatarCompetencia_(l[C_COMP], true);
-      if (compLinha !== comp) return false;
+      if (_compSegura_(l[C_COMP]) !== comp) return false;
       if (filtroPlaca && String(l[C_PLACA] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase() !== filtroPlaca) return false;
       return true;
     });
@@ -2809,7 +2821,7 @@ function _mapaAceitesDb_(valores) {
   const regs = {
     os: /^(OS|ORDEM DE SERVICO|N OS)$/, placa: /PLACA/, modelo: /MODELO/, unidade: /UNIDADE/,
     estabelecimento: /ESTABELEC|OFICINA|FORNECEDOR/, aprovacao: /APROVA/, inicio: /INICIO/,
-    conclusao: /CONCLUS/, valor: /VALOR/, tipo: /TIPO/
+    conclusao: /CONCLUS/, valor: /VALOR/, tipo: /TIPO/, competencia: /COMPET/
   };
   for (let i = 0; i < Math.min(12, valores.length); i++) {
     const idx = achar(valores[i], regs);
@@ -2818,6 +2830,35 @@ function _mapaAceitesDb_(valores) {
   // reserva: ordem em que o importador grava (A:G do arquivo + H = tipo)
   return { linhaCab: 0, porNome: false,
            idx: { os: 0, placa: 1, modelo: 2, unidade: 3, estabelecimento: 4, aprovacao: 5, conclusao: 6, tipo: 7, inicio: -1, valor: -1 } };
+}
+
+/** OrçamentosDB → { numeroDaOS: {pecas, mo, total, estabelecimento} }. */
+function _orcamentosPorOs_(ss) {
+  const mapa = {};
+  try {
+    const aba = ss.getSheetByName(CONFIG.ABA_ORCAMENTOS);
+    if (!aba || aba.getLastRow() < 3) return mapa;
+    const valores = aba.getDataRange().getValues();
+    let cab = -1;
+    for (let i = 0; i < Math.min(6, valores.length); i++) {
+      if (valores[i].some(c => /ORDEM\s*SERVI|^OS$/i.test(String(c).trim()))) { cab = i; break; }
+    }
+    if (cab < 0) return mapa;
+    const nomes = valores[cab].map(c => _normCab_(c));
+    const col = re => nomes.findIndex(x => re.test(x));
+    const iOs = col(/ORDEM SERVICO|^OS$/), iMo = col(/MAO DE OBRA/), iPec = col(/^PECAS$/),
+          iTot = col(/TOTAL O S|TOTAL OS|^TOTAL/), iEst = col(/^ESTABELECIMENTO$/);
+    if (iOs < 0) return mapa;
+    for (let r = cab + 1; r < valores.length; r++) {
+      const os = String(valores[r][iOs] || '').replace(/\D/g, '');
+      if (!os) continue;
+      mapa[os] = { pecas: iPec >= 0 ? (_num_(valores[r][iPec]) || 0) : 0,
+                   mo: iMo >= 0 ? (_num_(valores[r][iMo]) || 0) : 0,
+                   total: iTot >= 0 ? (_num_(valores[r][iTot]) || 0) : 0,
+                   estabelecimento: iEst >= 0 ? String(valores[r][iEst] || '').trim() : '' };
+    }
+  } catch (e) { Logger.log('OrçamentosDB: ' + e); }
+  return mapa;
 }
 
 function gerarRelatorioAceites(token, competencia) {
@@ -2833,14 +2874,14 @@ function gerarRelatorioAceites(token, competencia) {
     const g = (l, k) => mapa.idx[k] >= 0 ? l[mapa.idx[k]] : '';
 
     const acidentes = _placasComAcidenteAberto_();
+    const orcamentos = _orcamentosPorOs_(SpreadsheetApp.openById(CONFIG.ID_MANUT_DB));
     const itens = [], porTipo = {}, porUnidade = {}, porOficina = {}, alerta = {};
-    let total = 0;
+    let total = 0, totalPecas = 0, totalMo = 0;
     for (let r = mapa.linhaCab + 1; r < valores.length; r++) {
       const l = valores[r];
       const os = String(g(l, 'os') || '').trim();
       if (!os) continue;
-      const dataRef = g(l, 'conclusao') || g(l, 'aprovacao');
-      const compLinha = _competenciaDaCelula_(dataRef) || _formatarCompetencia_(dataRef, true);
+      const compLinha = _compSegura_(g(l, 'competencia')) || _compSegura_(g(l, 'conclusao')) || _compSegura_(g(l, 'aprovacao'));
       if (compLinha !== comp) continue;
       const placa = String(g(l, 'placa') || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
       const valor = _num_(g(l, 'valor')) || 0;
@@ -2849,10 +2890,13 @@ function gerarRelatorioAceites(token, competencia) {
       const oficina = String(g(l, 'estabelecimento') || '').trim() || 'Sem estabelecimento';
       const acidente = acidentes[placa] !== undefined;
       if (acidente) alerta[placa] = acidentes[placa];
+      const orc = orcamentos[String(os).replace(/\D/g, '')] || null;
       itens.push({ unidade: unidade, os: os, placa: placa, modelo: String(g(l, 'modelo') || '').trim(),
-        oficina: oficina, aprovacao: _dataTxt_(g(l, 'aprovacao')), inicio: _dataTxt_(g(l, 'inicio')),
-        conclusao: _dataTxt_(g(l, 'conclusao')), valor: valor, tipo: tipo, acidente: acidente });
+        oficina: oficina || (orc ? orc.estabelecimento : ''), aprovacao: _dataTxt_(g(l, 'aprovacao')), inicio: _dataTxt_(g(l, 'inicio')),
+        conclusao: _dataTxt_(g(l, 'conclusao')), valor: valor, tipo: tipo, acidente: acidente,
+        pecas: orc ? orc.pecas : null, mo: orc ? orc.mo : null });
       total += valor;
+      if (orc) { totalPecas += orc.pecas; totalMo += orc.mo; }
       const soma = (obj, chave) => { const a = obj[chave] || (obj[chave] = { valor: 0, qtd: 0 }); a.valor += valor; a.qtd++; };
       soma(porTipo, tipo); soma(porUnidade, unidade); soma(porOficina, oficina);
     }
@@ -2860,13 +2904,13 @@ function gerarRelatorioAceites(token, competencia) {
       (mapa.porNome ? '' : ' (As colunas do AceitesDB não foram reconhecidas pelo nome — rode diagnosticarRelatorios() no editor.)') };
 
     itens.sort((a, b) => a.unidade.localeCompare(b.unidade) || b.valor - a.valor);
-    const dados = { comp: comp, itens: itens, total: total, porTipo: porTipo, porUnidade: porUnidade, porOficina: porOficina, acidentes: alerta };
+    const dados = { comp: comp, itens: itens, total: total, totalPecas: totalPecas, totalMo: totalMo, porTipo: porTipo, porUnidade: porUnidade, porOficina: porOficina, acidentes: alerta };
     const html = _htmlRelatorioAceites_(dados, p.sessao);
     const nome = 'Relatorio_OS_Resumo_' + comp.replace('/', '-') + '.pdf';
     const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);
     _logAcao_(p.ss, p.sessao.email, 'Relatório de OS (resumo)', '', comp, _moedaBR_(total) + ' | ' + itens.length + ' OS');
     return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '',
-      total: total, ordens: itens.length,
+      total: total, ordens: itens.length, pecas: totalPecas, mo: totalMo,
       tipos: Object.keys(porTipo).map(k => ({ tipo: k, valor: porTipo[k].valor, qtd: porTipo[k].qtd })),
       acidentes: Object.keys(alerta).map(k => ({ placa: k, processo: alerta[k] })) };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
@@ -2891,17 +2935,18 @@ function _htmlRelatorioAceites_(d, sessao) {
   })();
 
   let unidadeAtual = '', corpo = '', subtotal = 0, qtdUnidade = 0;
-  const fechaUnidade = () => unidadeAtual ? '<tr class="subtotal"><td colspan="7">Subtotal ' + _esc_(unidadeAtual) + ' — ' + qtdUnidade + ' OS</td><td class="num">' + _moedaBR_(subtotal) + '</td><td></td></tr>' : '';
+  const fechaUnidade = () => unidadeAtual ? '<tr class="subtotal"><td colspan="8">Subtotal ' + _esc_(unidadeAtual) + ' — ' + qtdUnidade + ' OS</td><td class="num">' + _moedaBR_(subtotal) + '</td><td></td></tr>' : '';
   d.itens.forEach(i => {
     if (i.unidade !== unidadeAtual) {
       corpo += fechaUnidade();
       unidadeAtual = i.unidade; subtotal = 0; qtdUnidade = 0;
-      corpo += '<tr class="unidade"><td colspan="9">' + _esc_(unidadeAtual) + '</td></tr>';
+      corpo += '<tr class="unidade"><td colspan="10">' + _esc_(unidadeAtual) + '</td></tr>';
     }
     subtotal += i.valor; qtdUnidade++;
     corpo += '<tr' + (i.acidente ? ' class="acidente"' : '') + '><td class="mono">' + _esc_(i.os) + '</td><td class="mono">' + _esc_(i.placa) +
       (i.acidente ? ' <span class="tag">acidente</span>' : '') + '</td><td>' + _esc_(i.modelo) + '</td><td>' + _esc_(i.oficina) +
-      '</td><td class="c">' + _esc_(i.aprovacao) + '</td><td class="c">' + _esc_(i.inicio) + '</td><td class="c">' + _esc_(i.conclusao) +
+      '</td><td class="c">' + _esc_(i.aprovacao) + '</td><td class="c">' + _esc_(i.conclusao) +
+      '</td><td class="num">' + (i.pecas === null ? '—' : _moedaBR_(i.pecas)) + '</td><td class="num">' + (i.mo === null ? '—' : _moedaBR_(i.mo)) +
       '</td><td class="num forte">' + _moedaBR_(i.valor) + '</td><td class="c">' + _esc_(i.tipo) + '</td></tr>';
   });
   corpo += fechaUnidade();
@@ -2949,6 +2994,8 @@ function _htmlRelatorioAceites_(d, sessao) {
     '<div class="kpi"><div class="r">Viaturas</div><div class="v">' + Object.keys(d.itens.reduce((o, i) => { o[i.placa] = 1; return o; }, {})).length + '</div></div>' +
     '<div class="kpi"><div class="r">Valor médio por OS</div><div class="v">' + _moedaBR_(d.total / Math.max(1, d.itens.length)) + '</div></div>' +
     '<div class="kpi"><div class="r">Unidades</div><div class="v">' + Object.keys(d.porUnidade).length + '</div></div>' +
+    (d.totalPecas || d.totalMo ? '<div class="kpi"><div class="r">Peças × mão de obra</div><div class="v" style="font-size:9.5pt">' +
+      _moedaBR_(d.totalPecas) + ' · ' + _moedaBR_(d.totalMo) + '</div></div>' : '') +
     '</div>' +
 
     (Object.keys(d.acidentes).length ? '<div class="aviso"><b>Atenção — processo de acidente em aberto:</b> ' +
@@ -2960,7 +3007,7 @@ function _htmlRelatorioAceites_(d, sessao) {
     '</div><div><h3>Por estabelecimento</h3>' + barras(ordenar(d.porOficina).slice(0, 10), '#2E6FD9') + '</div></div>' +
 
     '<h2>Ordens de serviço da competência</h2>' +
-    '<table><thead><tr><th>OS</th><th>Placa</th><th>Modelo</th><th>Estabelecimento</th><th class="c">Aprovação</th><th class="c">Início</th><th class="c">Conclusão</th><th class="num">Valor</th><th class="c">Aceite</th></tr></thead><tbody>' +
+    '<table><thead><tr><th>OS</th><th>Placa</th><th>Modelo</th><th>Estabelecimento</th><th class="c">Aprovação</th><th class="c">Conclusão</th><th class="num">Peças</th><th class="num">Mão de obra</th><th class="num">Valor</th><th class="c">Aceite</th></tr></thead><tbody>' +
     corpo + '</tbody></table>' +
     '<table class="total"><tr><td>TOTAL GERAL</td><td class="num" style="text-align:right">' + _moedaBR_(d.total) + '</td></tr></table>' +
     '<div class="rodape">Gerado pelo Painel da Frota — 16ª SPRF/CE em ' + agora + ' por ' + _esc_(sessao.email) +
@@ -2986,7 +3033,7 @@ function diagnosticarRelatorios() {
   if (det && det.getLastRow() > 1) {
     const comp = {};
     det.getRange(2, 30, det.getLastRow() - 1, 1).getValues().forEach(l => {
-      const c = _competenciaDaCelula_(l[0]) || _formatarCompetencia_(l[0], true);
+      const c = _compSegura_(l[0]);
       if (c) comp[c] = (comp[c] || 0) + 1;
     });
     Logger.log('Competências no DetalhamentoDB (coluna AD): ' + (Object.keys(comp).length ? Object.keys(comp).sort().map(k => k + ' (' + comp[k] + ')').join(', ') : 'NENHUMA reconhecida'));
