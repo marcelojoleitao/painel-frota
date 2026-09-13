@@ -1381,6 +1381,123 @@ function exportarBase(token, tipo) {
 
 
 /* ------------------------------------------------------------ */
+/*  Auxiliares herdados do importador da planilha                */
+/* ------------------------------------------------------------ */
+
+function _parseNumeroBR_(v) {
+  if (v === null || v === undefined) return '';
+  let s = String(v).trim().replace(/r\$/gi, '').replace(/\s/g, '');
+  if (!s) return '';
+  if (s.indexOf(',') > -1) s = s.replace(/\./g, '').replace(',', '.');
+  const n = parseFloat(s);
+  return isNaN(n) ? '' : n;
+}
+
+function _parseDataBR_(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v).trim();
+  if (!s) return '';
+  const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (!m) return s;
+  const d = new Date(normalizarAno_(m[3]), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+  return isNaN(d.getTime()) ? s : d;
+}
+
+function _formatarCompetencia_(s, obrigatorio) {
+  let t = (s === null || s === undefined) ? '' : String(s).trim();
+  if (!t) { if (obrigatorio) throw new Error('Informe a competência no formato MM/YYYY (ex.: 05/2026).'); return ''; }
+  const p = _parseCompetenciaCelula_(t);
+  if (!p) throw new Error('Competência inválida: "' + t + '". Use MM/YYYY (ex.: 05/2026).');
+  return String(p.mm).padStart(2, '0') + '/' + p.yyyy;
+}
+
+function _parseCompetenciaCelula_(v) {
+  if (v === null || v === undefined) return null;
+  if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v)) {
+    return { mm: v.getMonth() + 1, yyyy: v.getFullYear() };
+  }
+  let s = _removerAcentos_(String(v).trim().toLowerCase()).replace(/\s+/g, '');
+  if (!s) return null;
+  let m = s.match(/^([a-z]{3,})[\/\-.]?(\d{2,4})$/);            // mai/26
+  if (m) { const mes = MESES_PT[m[1].substring(0, 3)]; return mes ? { mm: mes, yyyy: normalizarAno_(m[2]) } : null; }
+  m = s.match(/^\d{1,2}[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);     // dd/mm/aaaa
+  if (m) { const mes = parseInt(m[1], 10); return (mes >= 1 && mes <= 12) ? { mm: mes, yyyy: normalizarAno_(m[2]) } : null; }
+  m = s.match(/^(\d{1,2})[\/\-.](\d{2,4})$/);                   // mm/aaaa
+  if (m) { const mes = parseInt(m[1], 10); return (mes >= 1 && mes <= 12) ? { mm: mes, yyyy: normalizarAno_(m[2]) } : null; }
+  return null;
+}
+
+function _primeiraLinhaVaziaNaColuna_(aba, col, startRow) {
+  const maxRows = aba.getMaxRows();
+  if (startRow > maxRows) return startRow;
+  const vals = aba.getRange(startRow, col, maxRows - startRow + 1, 1).getDisplayValues();
+  for (let i = 0; i < vals.length; i++) if (String(vals[i][0]).trim() === '') return startRow + i;
+  return maxRows + 1;
+}
+
+function _proximaLinhaAppend_(aba, col, floor) {
+  const maxRows = aba.getMaxRows();
+  const vals = aba.getRange(1, col, maxRows, 1).getDisplayValues();
+  let last = 0;
+  for (let i = 0; i < vals.length; i++) if (String(vals[i][0]).trim() !== '') last = i + 1;
+  return Math.max(last + 1, floor);
+}
+
+function _obterValoresColuna_(aba, col, startRow) {
+  const set = new Set();
+  const maxRows = aba.getMaxRows();
+  if (maxRows < startRow) return set;
+  const vals = aba.getRange(startRow, col, maxRows - startRow + 1, 1).getDisplayValues();
+  vals.forEach(r => { const v = _normalizarCodigo_(r[0]); if (v) set.add(v); });
+  return set;
+}
+
+function _parseHtmlTable_(html) {
+  const tabelas = html.match(/<table[\s\S]*?<\/table>/gi) || [];
+  if (!tabelas.length) return [];
+  const tableHtml = tabelas.sort((a, b) => b.length - a.length)[0];
+  const trs = tableHtml.match(/<tr[\s\S]*?<\/tr>/gi) || [];
+  const grid = [];
+  const carry = {}; // col -> { value, remaining } (rowspan pendente)
+
+  trs.forEach(tr => {
+    const cells = tr.match(/<t[dh][\s\S]*?<\/t[dh]>/gi) || [];
+    const rowOut = [];
+    let col = 0;
+    const aplicarCarry = () => {
+      while (carry[col] && carry[col].remaining > 0) {
+        rowOut[col] = carry[col].value;
+        carry[col].remaining--;
+        if (carry[col].remaining === 0) delete carry[col];
+        col++;
+      }
+    };
+    cells.forEach(cell => {
+      aplicarCarry();
+      const colspan = parseInt((cell.match(/colspan\s*=\s*"?(\d+)/i) || [])[1] || '1', 10);
+      const rowspan = parseInt((cell.match(/rowspan\s*=\s*"?(\d+)/i) || [])[1] || '1', 10);
+      const val = limparCelulaHtml_(cell);
+      for (let k = 0; k < colspan; k++) {
+        rowOut[col] = val;
+        if (rowspan > 1) carry[col] = { value: val, remaining: rowspan - 1 };
+        col++;
+      }
+    });
+    aplicarCarry();
+    grid.push(rowOut);
+  });
+
+  const width = grid.reduce((m, r) => Math.max(m, r.length), 0);
+  return grid.map(r => { const o = new Array(width).fill(''); for (let i = 0; i < width; i++) o[i] = (r[i] !== undefined ? r[i] : ''); return o; });
+}
+
+function _removerAcentos_(s) {
+  return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function _normalizarCodigo_(v) { return String(v || '').trim(); }
+
+/* ------------------------------------------------------------ */
 /*  Importações de títulos, detalhamento, aceites e glosa ANP    */
 /*  (portadas do importador que ficava no menu da planilha)      */
 /* ------------------------------------------------------------ */
@@ -1654,7 +1771,7 @@ function _lerTabelaArquivo_(arquivo) {
   }
 }
 
-function __parseNumeroBR_(v) {
+function _parseNumeroBR_(v) {
   if (v === null || v === undefined) return '';
   let s = String(v).trim().replace(/r\$/gi, '').replace(/\s/g, '');
   if (!s) return '';
@@ -1663,7 +1780,7 @@ function __parseNumeroBR_(v) {
   return isNaN(n) ? '' : n;
 }
 
-function __parseDataBR_(v) {
+function _parseDataBR_(v) {
   if (v === null || v === undefined) return '';
   const s = String(v).trim();
   if (!s) return '';
@@ -1673,7 +1790,7 @@ function __parseDataBR_(v) {
   return isNaN(d.getTime()) ? s : d;
 }
 
-function __formatarCompetencia_(s, obrigatorio) {
+function _formatarCompetencia_(s, obrigatorio) {
   let t = (s === null || s === undefined) ? '' : String(s).trim();
   if (!t) { if (obrigatorio) throw new Error('Informe a competência no formato MM/YYYY (ex.: 05/2026).'); return ''; }
   const p = _parseCompetenciaCelula_(t);
@@ -1681,7 +1798,7 @@ function __formatarCompetencia_(s, obrigatorio) {
   return String(p.mm).padStart(2, '0') + '/' + p.yyyy;
 }
 
-function __parseCompetenciaCelula_(v) {
+function _parseCompetenciaCelula_(v) {
   if (v === null || v === undefined) return null;
   if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v)) {
     return { mm: v.getMonth() + 1, yyyy: v.getFullYear() };
@@ -1697,7 +1814,7 @@ function __parseCompetenciaCelula_(v) {
   return null;
 }
 
-function __primeiraLinhaVaziaNaColuna_(aba, col, startRow) {
+function _primeiraLinhaVaziaNaColuna_(aba, col, startRow) {
   const maxRows = aba.getMaxRows();
   if (startRow > maxRows) return startRow;
   const vals = aba.getRange(startRow, col, maxRows - startRow + 1, 1).getDisplayValues();
@@ -1705,7 +1822,7 @@ function __primeiraLinhaVaziaNaColuna_(aba, col, startRow) {
   return maxRows + 1;
 }
 
-function __proximaLinhaAppend_(aba, col, floor) {
+function _proximaLinhaAppend_(aba, col, floor) {
   const maxRows = aba.getMaxRows();
   const vals = aba.getRange(1, col, maxRows, 1).getDisplayValues();
   let last = 0;
@@ -1713,7 +1830,7 @@ function __proximaLinhaAppend_(aba, col, floor) {
   return Math.max(last + 1, floor);
 }
 
-function __obterValoresColuna_(aba, col, startRow) {
+function _obterValoresColuna_(aba, col, startRow) {
   const set = new Set();
   const maxRows = aba.getMaxRows();
   if (maxRows < startRow) return set;
@@ -1722,7 +1839,7 @@ function __obterValoresColuna_(aba, col, startRow) {
   return set;
 }
 
-function __parseHtmlTable_(html) {
+function _parseHtmlTable_(html) {
   const tabelas = html.match(/<table[\s\S]*?<\/table>/gi) || [];
   if (!tabelas.length) return [];
   const tableHtml = tabelas.sort((a, b) => b.length - a.length)[0];
@@ -1761,11 +1878,11 @@ function __parseHtmlTable_(html) {
   return grid.map(r => { const o = new Array(width).fill(''); for (let i = 0; i < width; i++) o[i] = (r[i] !== undefined ? r[i] : ''); return o; });
 }
 
-function __removerAcentos_(s) {
+function _removerAcentos_(s) {
   return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
-function __normalizarCodigo_(v) { return String(v || '').trim(); }
+function _normalizarCodigo_(v) { return String(v || '').trim(); }
 
 /* ============================================================
    RELATÓRIO DE ABASTECIMENTO (PDF, paisagem)
@@ -2555,11 +2672,16 @@ function gerarRelatorioPecas(token, competencia, placa) {
     const aba = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB).getSheetByName(CONFIG.ABA_DETALHE);
     if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_DETALHE + '" não encontrada. Importe o detalhamento primeiro.' };
     const dados = aba.getDataRange().getValues();
-    if (dados.length < 2) return { ok: false, erro: 'O DetalhamentoDB está vazio.' };
+    if (dados.length < 3) return { ok: false, erro: 'O DetalhamentoDB está vazio.' };
 
+    // a primeira linha traz instruções de colagem; o cabeçalho real é a linha com "Competência"
+    let linhaCab = 0;
+    for (let i = 0; i < Math.min(6, dados.length); i++) {
+      if (dados[i].some(c => /COMPET/i.test(String(c)))) { linhaCab = i; break; }
+    }
     // índices herdados do relatório antigo (0-based)
     const C_GESTOR = 0, C_PLACA = 5, C_FAMILIA = 10, C_INI_DADOS = 11, C_FIM_DADOS = 29, C_TOTAL = 27, C_COMP = 29;
-    const registros = dados.slice(1).filter(l => {
+    const registros = dados.slice(linhaCab + 1).filter(l => {
       const compLinha = _competenciaDaCelula_(l[C_COMP]) || _formatarCompetencia_(l[C_COMP], true);
       if (compLinha !== comp) return false;
       if (filtroPlaca && String(l[C_PLACA] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase() !== filtroPlaca) return false;
@@ -2689,7 +2811,7 @@ function _mapaAceitesDb_(valores) {
     estabelecimento: /ESTABELEC|OFICINA|FORNECEDOR/, aprovacao: /APROVA/, inicio: /INICIO/,
     conclusao: /CONCLUS/, valor: /VALOR/, tipo: /TIPO/
   };
-  for (let i = 0; i < Math.min(10, valores.length); i++) {
+  for (let i = 0; i < Math.min(12, valores.length); i++) {
     const idx = achar(valores[i], regs);
     if (idx.os >= 0 && idx.placa >= 0 && idx.valor >= 0) return { linhaCab: i, idx: idx, porNome: true };
   }
@@ -2856,8 +2978,8 @@ function diagnosticarRelatorios() {
     const linhas = aba.getLastRow(), cols = aba.getLastColumn();
     Logger.log('--- ' + nome + ': ' + linhas + ' linhas, ' + cols + ' colunas');
     if (linhas < 1) return;
-    Logger.log('   cabeçalho: ' + aba.getRange(1, 1, 1, Math.min(cols, 35)).getValues()[0].map((c, i) => (i + 1) + '=' + String(c).substring(0, 18)).join(' | '));
-    if (linhas > 1) Logger.log('   1ª linha: ' + aba.getRange(2, 1, 1, Math.min(cols, 35)).getDisplayValues()[0].map((c, i) => (i + 1) + '=' + String(c).substring(0, 18)).join(' | '));
+    const amostra = aba.getRange(1, 1, Math.min(4, linhas), Math.min(cols, 35)).getDisplayValues();
+    amostra.forEach((l, n) => Logger.log('   linha ' + (n + 1) + ': ' + l.map((c, i) => (i + 1) + '=' + String(c).substring(0, 16)).filter(x => !/=$/.test(x)).join(' | ')));
   });
   // competências disponíveis no detalhamento
   const det = ss.getSheetByName(CONFIG.ABA_DETALHE);
