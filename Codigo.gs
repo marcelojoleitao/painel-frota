@@ -54,6 +54,11 @@ const CONFIG = {
   // verificação ou fundo nessas cores (azul = fórmula, cinza = preenchida por script)
   EDICAO_CORES_BLOQUEADAS: ['#cfe2f3', '#e8e8e8'],
   EDICAO_LINHAS_VERIFICACAO: [2, 3],
+  EDICAO_OBRIGATORIOS: ['placa', 'modelo', 'tipo', 'categoria', 'especie', 'cor', 'comb', 'anoFab', 'anoMod', 'chassi', 'renavam', 'blind', 'carac'],
+
+  // Fotos das viaturas: pasta do Drive onde os envios pelo painel são salvos.
+  // Cole o ID da pasta (da URL drive.google.com/drive/folders/<ID>). Vazio = envio desligado.
+  PASTA_FOTOS: '',
 
   TITULO: 'Painel da Frota — 16ª SPRF/CE',
   FUSO: 'America/Fortaleza'
@@ -215,7 +220,11 @@ function carregarDados(token, forcarAtualizacao) {
   payload.usuario = { email: sessao.email, nome: sessao.nome || '', lotacao: sessao.lotacao || '', admin: !!sessao.admin };
   if (!sessao.admin) { payload.solicitacoes = []; payload.edicao = null; }
   else {
-    try { payload.edicao = _mapaEdicao_(SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_BASE)).lista; }
+    try {
+      payload.edicao = _mapaEdicao_(SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_BASE)).lista;
+      payload.edicaoObrigatorios = CONFIG.EDICAO_OBRIGATORIOS;
+      payload.fotosHabilitadas = !!CONFIG.PASTA_FOTOS;
+    }
     catch (e) { payload.edicao = null; Logger.log('Mapa de edição: ' + e); }
   }
   return payload;
@@ -653,6 +662,8 @@ function criarViatura(token, dados) {
   if (!sessao.admin) return { ok: false, erro: 'Apenas o administrador pode cadastrar.' };
   const placa = String((dados || {}).placa || '').trim().toUpperCase();
   if (!placa) return { ok: false, erro: 'Informe a placa.' };
+  const faltando = CONFIG.EDICAO_OBRIGATORIOS.filter(c => c !== 'placa' && !String((dados || {})[c] || '').trim());
+  if (faltando.length) return { ok: false, erro: 'Campos obrigatórios sem preenchimento: ' + faltando.join(', ') + '.' };
 
   const trava = LockService.getScriptLock();
   try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Planilha em uso por outra gravação. Tente de novo.' }; }
@@ -688,6 +699,56 @@ function criarViatura(token, dados) {
     limparCache();
     Logger.log('CADASTRO por ' + sessao.email + ' — ' + placa + ' (linha ' + nova + '): ' + gravados.join(', '));
     return { ok: true, linha: nova, gravados: gravados, recusados: recusados };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  } finally { trava.releaseLock(); }
+}
+
+/**
+ * Recebe uma foto (base64) do painel, salva na pasta CONFIG.PASTA_FOTOS e grava
+ * o link na coluna do ângulo (FD/LE/TR/LD) da viatura. Somente administrador.
+ * O arquivo novo não apaga o antigo (histórico fica na pasta); o link da planilha
+ * passa a apontar para o novo.
+ */
+function salvarFotoViatura(token, placa, angulo, base64, tipoMime) {
+  const sessao = _sessao_(token);
+  if (!sessao) return { expirado: true };
+  if (!sessao.admin) return { ok: false, erro: 'Apenas o administrador pode enviar fotos.' };
+  if (!CONFIG.PASTA_FOTOS) return { ok: false, erro: 'Defina CONFIG.PASTA_FOTOS (ID da pasta do Drive) para habilitar o envio.' };
+  placa = String(placa || '').trim().toUpperCase();
+  angulo = String(angulo || '').trim().toUpperCase();
+  const campo = { FD: 'fotoFD', LE: 'fotoLE', TR: 'fotoTR', LD: 'fotoLD' }[angulo];
+  if (!campo) return { ok: false, erro: 'Ângulo inválido: ' + angulo };
+  if (!base64 || base64.length < 100) return { ok: false, erro: 'Arquivo vazio.' };
+  if (base64.length > 8 * 1024 * 1024) return { ok: false, erro: 'Foto muito grande mesmo após compressão (limite ~6 MB).' };
+
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Outra gravação em andamento. Tente de novo.' }; }
+  try {
+    const aba = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_BASE);
+    const mapa = _mapaEdicao_(aba);
+    const info = mapa.porCampo[campo];
+    if (!info) return { ok: false, erro: 'Coluna ' + angulo + ' não encontrada na ConsultaBD.' };
+    if (!info.editavel) return { ok: false, erro: 'Coluna ' + angulo + ' está bloqueada (' + info.motivo + ').' };
+    const colPlaca = mapa.porCampo.placa ? mapa.porCampo.placa.col : 1;
+    const placas = aba.getRange(2, colPlaca, Math.max(1, aba.getLastRow() - 1), 1).getValues().map(l => String(l[0] || '').trim().toUpperCase());
+    const posicao = placas.indexOf(placa);
+    if (posicao < 0) return { ok: false, erro: 'Placa ' + placa + ' não encontrada.' };
+
+    const pasta = DriveApp.getFolderById(CONFIG.PASTA_FOTOS);
+    const carimbo = Utilities.formatDate(new Date(), CONFIG.FUSO, 'yyyyMMdd_HHmm');
+    const nome = placa + '_' + angulo + '_' + carimbo + '.jpg';
+    const blob = Utilities.newBlob(Utilities.base64Decode(base64), tipoMime || 'image/jpeg', nome);
+    const arquivo = pasta.createFile(blob);
+    try { arquivo.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); }
+    catch (e) { Logger.log('Compartilhamento do arquivo restrito pela política do Drive: ' + e); }
+    const link = 'https://drive.google.com/uc?export=view&id=' + arquivo.getId();
+    aba.getRange(posicao + 2, info.col).setValue(link);
+    SpreadsheetApp.flush();
+    limparCache();
+    // limpa a data em cache da foto antiga desse ângulo
+    Logger.log('FOTO por ' + sessao.email + ' — ' + placa + ' ' + angulo + ' → ' + nome);
+    return { ok: true, link: link, id: arquivo.getId(), nome: nome };
   } catch (e) {
     return { ok: false, erro: String(e.message || e) };
   } finally { trava.releaseLock(); }
