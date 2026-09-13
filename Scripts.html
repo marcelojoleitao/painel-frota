@@ -27,7 +27,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.4.8';
+const VERSAO_PAINEL = '2.4.9';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -1898,7 +1898,7 @@ function renderCompletude(c, lista) {
       ${kpi('Falta mais', piores.length ? piores[0][0] : '—', piores.length ? 'em ' + piores[0][1] + ' viaturas' : '', piores.length ? 'vermelho' : 'verde', null, true)}
     </div>
     <div class="cartao largo" style="margin-bottom:14px"><div class="cartao-cab"><h3>O que mais falta na seleção</h3><small>clique para ver só quem falta… na tabela abaixo</small></div>
-      <div style="display:flex; flex-wrap:wrap; gap:6px">${piores.map(([f, n]) => `<button class="subaba ${ESTADO.filtroFalta === f ? 'ativa' : ''}" data-f="${escAttr(f)}">${esc(f)} (${n})</button>`).join('') || '<span class="ok-txt">Nada faltando 🎉</span>'}</div></div>
+      <div style="display:flex; flex-wrap:wrap; gap:6px">${piores.map(([f, n]) => `<button class="subaba ${ESTADO.filtroFalta === f ? 'ativa' : ''}" data-f="${escAttr(f)}">${esc(f)} (${n})</button>`).join('') || '<span class="ok-txt">Nada faltando</span>'}</div></div>
     <div class="cartao largo"><div class="cartao-cab"><h3>Completude por viatura</h3><small>clique na linha para completar no formulário de edição</small></div>
       <div class="mini-tabela" style="max-height:600px"><table class="tabela-simples"><thead><tr><th>Placa</th><th>Modelo</th><th>Unidade</th><th>Completo</th><th>O que falta</th></tr></thead><tbody>
       ${linhas.filter(l => !ESTADO.filtroFalta || l.faltas.indexOf(ESTADO.filtroFalta) >= 0).slice(0, 300).map(l => {
