@@ -2669,6 +2669,215 @@ function _htmlRelatorioPecas_(d, sessao) {
     '</body></html>';
 }
 
+
+/* ============================================================
+   RELATÓRIO DE ORDENS DE SERVIÇO — RESUMO
+   Equivalente à aba "Aceites Mensal": lista as OS da competência
+   com o tipo de aceite (gestor ou automático), totais e gráficos.
+   ============================================================ */
+
+/** Localiza as colunas do AceitesDB pelo nome do cabeçalho, com reserva por posição. */
+function _mapaAceitesDb_(valores) {
+  const achar = (linha, regs) => {
+    const cab = linha.map(c => _normCab_(c));
+    const idx = {};
+    Object.keys(regs).forEach(k => { idx[k] = cab.findIndex(x => regs[k].test(x)); });
+    return idx;
+  };
+  const regs = {
+    os: /^(OS|ORDEM DE SERVICO|N OS)$/, placa: /PLACA/, modelo: /MODELO/, unidade: /UNIDADE/,
+    estabelecimento: /ESTABELEC|OFICINA|FORNECEDOR/, aprovacao: /APROVA/, inicio: /INICIO/,
+    conclusao: /CONCLUS/, valor: /VALOR/, tipo: /TIPO/
+  };
+  for (let i = 0; i < Math.min(10, valores.length); i++) {
+    const idx = achar(valores[i], regs);
+    if (idx.os >= 0 && idx.placa >= 0 && idx.valor >= 0) return { linhaCab: i, idx: idx, porNome: true };
+  }
+  // reserva: ordem em que o importador grava (A:G do arquivo + H = tipo)
+  return { linhaCab: 0, porNome: false,
+           idx: { os: 0, placa: 1, modelo: 2, unidade: 3, estabelecimento: 4, aprovacao: 5, conclusao: 6, tipo: 7, inicio: -1, valor: -1 } };
+}
+
+function gerarRelatorioAceites(token, competencia) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const comp = _formatarCompetencia_(competencia || '', true);
+  if (!comp) return { ok: false, erro: 'Informe a competência no formato MM/AAAA.' };
+  try {
+    const aba = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB).getSheetByName(CONFIG.ABA_ACEITES);
+    if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_ACEITES + '" não encontrada. Importe os aceites primeiro.' };
+    const valores = aba.getDataRange().getValues();
+    if (valores.length < 2) return { ok: false, erro: 'O AceitesDB está vazio.' };
+    const mapa = _mapaAceitesDb_(valores);
+    const g = (l, k) => mapa.idx[k] >= 0 ? l[mapa.idx[k]] : '';
+
+    const acidentes = _placasComAcidenteAberto_();
+    const itens = [], porTipo = {}, porUnidade = {}, porOficina = {}, alerta = {};
+    let total = 0;
+    for (let r = mapa.linhaCab + 1; r < valores.length; r++) {
+      const l = valores[r];
+      const os = String(g(l, 'os') || '').trim();
+      if (!os) continue;
+      const dataRef = g(l, 'conclusao') || g(l, 'aprovacao');
+      const compLinha = _competenciaDaCelula_(dataRef) || _formatarCompetencia_(dataRef, true);
+      if (compLinha !== comp) continue;
+      const placa = String(g(l, 'placa') || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      const valor = _num_(g(l, 'valor')) || 0;
+      const tipo = String(g(l, 'tipo') || '').trim() || 'Não informado';
+      const unidade = String(g(l, 'unidade') || '').trim() || 'Sem unidade';
+      const oficina = String(g(l, 'estabelecimento') || '').trim() || 'Sem estabelecimento';
+      const acidente = acidentes[placa] !== undefined;
+      if (acidente) alerta[placa] = acidentes[placa];
+      itens.push({ unidade: unidade, os: os, placa: placa, modelo: String(g(l, 'modelo') || '').trim(),
+        oficina: oficina, aprovacao: _dataTxt_(g(l, 'aprovacao')), inicio: _dataTxt_(g(l, 'inicio')),
+        conclusao: _dataTxt_(g(l, 'conclusao')), valor: valor, tipo: tipo, acidente: acidente });
+      total += valor;
+      const soma = (obj, chave) => { const a = obj[chave] || (obj[chave] = { valor: 0, qtd: 0 }); a.valor += valor; a.qtd++; };
+      soma(porTipo, tipo); soma(porUnidade, unidade); soma(porOficina, oficina);
+    }
+    if (!itens.length) return { ok: false, erro: 'Nenhuma ordem de serviço com aceite na competência ' + comp + '.' +
+      (mapa.porNome ? '' : ' (As colunas do AceitesDB não foram reconhecidas pelo nome — rode diagnosticarRelatorios() no editor.)') };
+
+    itens.sort((a, b) => a.unidade.localeCompare(b.unidade) || b.valor - a.valor);
+    const dados = { comp: comp, itens: itens, total: total, porTipo: porTipo, porUnidade: porUnidade, porOficina: porOficina, acidentes: alerta };
+    const html = _htmlRelatorioAceites_(dados, p.sessao);
+    const nome = 'Relatorio_OS_Resumo_' + comp.replace('/', '-') + '.pdf';
+    const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);
+    _logAcao_(p.ss, p.sessao.email, 'Relatório de OS (resumo)', '', comp, _moedaBR_(total) + ' | ' + itens.length + ' OS');
+    return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '',
+      total: total, ordens: itens.length,
+      tipos: Object.keys(porTipo).map(k => ({ tipo: k, valor: porTipo[k].valor, qtd: porTipo[k].qtd })),
+      acidentes: Object.keys(alerta).map(k => ({ placa: k, processo: alerta[k] })) };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+function _htmlRelatorioAceites_(d, sessao) {
+  const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, "dd/MM/yyyy 'às' HH:mm");
+  const ordenar = obj => Object.keys(obj).map(k => ({ chave: k, valor: obj[k].valor, qtd: obj[k].qtd })).sort((a, b) => b.valor - a.valor);
+  const barras = (itens, cor) => {
+    const maximo = Math.max(1, ...itens.map(i => i.valor));
+    return '<table class="graf">' + itens.map(i => '<tr><td class="rot">' + _esc_(i.chave) + '</td>' +
+      '<td class="bar"><div class="preench" style="width:' + Math.max(1, Math.round(i.valor / maximo * 100)) + '%; background:' + cor + '"></div></td>' +
+      '<td class="val">' + _moedaBR_(i.valor) + ' <small>(' + i.qtd + ')</small></td></tr>').join('') + '</table>';
+  };
+  const tipos = ordenar(d.porTipo);
+  const faixa = (() => {
+    const cores = { 'Gestor': '#0B2C5C', 'Automático': '#F2B705', 'Não informado': '#8A94A6' };
+    return '<table class="faixa"><tr>' + tipos.map(t => '<td style="width:' + (t.valor / Math.max(1, d.total) * 100) +
+      '%; background:' + (cores[t.chave] || '#2E6FD9') + '"></td>').join('') + '</tr></table><div class="legenda">' +
+      tipos.map(t => '<span style="background:' + (cores[t.chave] || '#2E6FD9') + '"></span>' + _esc_(t.chave) + ' — ' +
+      _moedaBR_(t.valor) + ' (' + _decBR_(t.valor / Math.max(1, d.total) * 100) + '% · ' + t.qtd + ' OS)').join('') + '</div>';
+  })();
+
+  let unidadeAtual = '', corpo = '', subtotal = 0, qtdUnidade = 0;
+  const fechaUnidade = () => unidadeAtual ? '<tr class="subtotal"><td colspan="7">Subtotal ' + _esc_(unidadeAtual) + ' — ' + qtdUnidade + ' OS</td><td class="num">' + _moedaBR_(subtotal) + '</td><td></td></tr>' : '';
+  d.itens.forEach(i => {
+    if (i.unidade !== unidadeAtual) {
+      corpo += fechaUnidade();
+      unidadeAtual = i.unidade; subtotal = 0; qtdUnidade = 0;
+      corpo += '<tr class="unidade"><td colspan="9">' + _esc_(unidadeAtual) + '</td></tr>';
+    }
+    subtotal += i.valor; qtdUnidade++;
+    corpo += '<tr' + (i.acidente ? ' class="acidente"' : '') + '><td class="mono">' + _esc_(i.os) + '</td><td class="mono">' + _esc_(i.placa) +
+      (i.acidente ? ' <span class="tag">acidente</span>' : '') + '</td><td>' + _esc_(i.modelo) + '</td><td>' + _esc_(i.oficina) +
+      '</td><td class="c">' + _esc_(i.aprovacao) + '</td><td class="c">' + _esc_(i.inicio) + '</td><td class="c">' + _esc_(i.conclusao) +
+      '</td><td class="num forte">' + _moedaBR_(i.valor) + '</td><td class="c">' + _esc_(i.tipo) + '</td></tr>';
+  });
+  corpo += fechaUnidade();
+
+  return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><style>' +
+    '@page { size: A4 landscape; margin: 11mm 9mm; }' +
+    '* { box-sizing: border-box; }' +
+    'body { font-family: Arial, Helvetica, sans-serif; color: #14181F; font-size: 8.5pt; margin: 0; }' +
+    '.cab { display: table; width: 100%; border-bottom: 4px solid #F2B705; padding-bottom: 8px; margin-bottom: 10px; }' +
+    '.cab > div { display: table-cell; vertical-align: middle; } .cab .marca { width: 70px; }' +
+    '.cab h1 { margin: 0; font-size: 15pt; color: #0B2C5C; } .cab .org { font-size: 9pt; color: #5A6576; }' +
+    '.cab .per { text-align: right; font-size: 10pt; font-weight: bold; color: #0B2C5C; }' +
+    '.kpis { display: table; width: 100%; table-layout: fixed; border-spacing: 5px 0; margin-bottom: 8px; }' +
+    '.kpi { display: table-cell; background: #F6F8FC; border-left: 3px solid #0B2C5C; padding: 6px 8px; }' +
+    '.kpi .r { font-size: 7pt; text-transform: uppercase; color: #5A6576; } .kpi .v { font-size: 12pt; font-weight: bold; color: #0B2C5C; }' +
+    '.aviso { background: #FDF3E7; border-left: 3px solid #B23A2E; padding: 8px 10px; font-size: 8.5pt; margin-bottom: 10px; }' +
+    '.aviso b { color: #B23A2E; }' +
+    'h2 { color: #0B2C5C; font-size: 11pt; margin: 12px 0 5px; border-bottom: 2px solid #F2B705; padding-bottom: 3px; }' +
+    'h3 { color: #0B2C5C; font-size: 9.5pt; margin: 8px 0 4px; }' +
+    'table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }' +
+    'th { background: #0B2C5C; color: #fff; text-align: left; padding: 4px 5px; font-size: 7.5pt; }' +
+    'td { padding: 3px 5px; border-bottom: 1px solid #E3E8F0; font-size: 7.5pt; }' +
+    'tr.unidade td { background: #E8EEFA; font-weight: bold; color: #0B2C5C; font-size: 8.5pt; }' +
+    'tr.subtotal td { background: #EFF2F7; font-weight: bold; }' +
+    'tr.acidente td { background: #FDECEA; }' +
+    '.tag { background: #B23A2E; color: #fff; border-radius: 7px; padding: 0 5px; font-size: 6.5pt; }' +
+    '.num { text-align: right; } .c { text-align: center; } .forte { font-weight: bold; } .mono { font-family: "Courier New", monospace; font-weight: bold; }' +
+    'table.graf td { border: 0; padding: 2px 4px; } table.graf .rot { width: 38%; }' +
+    'table.graf .bar { width: 42%; } table.graf .bar .preench { height: 11px; border-radius: 2px; }' +
+    'table.graf .val { width: 20%; text-align: right; font-weight: bold; white-space: nowrap; }' +
+    'table.faixa { table-layout: fixed; margin-bottom: 3px; } table.faixa td { height: 16px; border: 0; padding: 0; }' +
+    '.legenda { font-size: 7.5pt; color: #5A6576; margin-bottom: 8px; }' +
+    '.legenda span { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 3px 0 10px; }' +
+    '.col2 { display: table; width: 100%; border-spacing: 8px 0; } .col2 > div { display: table-cell; width: 50%; vertical-align: top; }' +
+    '.total { background: #0B2C5C; } .total td { background: #0B2C5C; color: #fff; font-size: 11pt; font-weight: bold; padding: 8px 12px; border: 0; }' +
+    '.rodape { margin-top: 10px; border-top: 1px solid #E3E8F0; padding-top: 5px; font-size: 7pt; color: #5A6576; }' +
+    '</style></head><body>' +
+    '<div class="cab"><div class="marca">' + _brasaoHtml_() + '</div>' +
+    '<div><h1>Relatório de Ordens de Serviço — Resumo</h1><div class="org">16ª Superintendência da Polícia Rodoviária Federal — Ceará</div></div>' +
+    '<div class="per">Mês de Referência<br>' + _esc_(d.comp) + '</div></div>' +
+
+    '<div class="kpis">' +
+    '<div class="kpi"><div class="r">Valor total</div><div class="v">' + _moedaBR_(d.total) + '</div></div>' +
+    '<div class="kpi"><div class="r">Ordens de serviço</div><div class="v">' + d.itens.length + '</div></div>' +
+    '<div class="kpi"><div class="r">Viaturas</div><div class="v">' + Object.keys(d.itens.reduce((o, i) => { o[i.placa] = 1; return o; }, {})).length + '</div></div>' +
+    '<div class="kpi"><div class="r">Valor médio por OS</div><div class="v">' + _moedaBR_(d.total / Math.max(1, d.itens.length)) + '</div></div>' +
+    '<div class="kpi"><div class="r">Unidades</div><div class="v">' + Object.keys(d.porUnidade).length + '</div></div>' +
+    '</div>' +
+
+    (Object.keys(d.acidentes).length ? '<div class="aviso"><b>Atenção — processo de acidente em aberto:</b> ' +
+      _esc_(Object.keys(d.acidentes).map(k => k + (d.acidentes[k] ? ' (' + d.acidentes[k] + ')' : '')).join(' · ')) +
+      '. O pagamento dessas ordens de serviço recebe tratamento distinto; confira antes de encaminhar.</div>' : '') +
+
+    '<h2>Composição por tipo de aceite</h2>' + faixa +
+    '<div class="col2"><div><h3>Por unidade</h3>' + barras(ordenar(d.porUnidade), '#0B2C5C') +
+    '</div><div><h3>Por estabelecimento</h3>' + barras(ordenar(d.porOficina).slice(0, 10), '#2E6FD9') + '</div></div>' +
+
+    '<h2>Ordens de serviço da competência</h2>' +
+    '<table><thead><tr><th>OS</th><th>Placa</th><th>Modelo</th><th>Estabelecimento</th><th class="c">Aprovação</th><th class="c">Início</th><th class="c">Conclusão</th><th class="num">Valor</th><th class="c">Aceite</th></tr></thead><tbody>' +
+    corpo + '</tbody></table>' +
+    '<table class="total"><tr><td>TOTAL GERAL</td><td class="num" style="text-align:right">' + _moedaBR_(d.total) + '</td></tr></table>' +
+    '<div class="rodape">Gerado pelo Painel da Frota — 16ª SPRF/CE em ' + agora + ' por ' + _esc_(sessao.email) +
+    '. Fontes: AceitesDB (importação dos aceites) e aba Acidentes da planilha de gestão.</div>' +
+    '</body></html>';
+}
+
+/** Diagnóstico das bases dos relatórios de OS — rode no editor. */
+function diagnosticarRelatorios() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB);
+  ['ABA_DETALHE', 'ABA_ACEITES', 'ABA_ORCAMENTOS'].forEach(k => {
+    const nome = CONFIG[k];
+    const aba = ss.getSheetByName(nome);
+    if (!aba) { Logger.log(nome + ': ABA NÃO ENCONTRADA'); return; }
+    const linhas = aba.getLastRow(), cols = aba.getLastColumn();
+    Logger.log('--- ' + nome + ': ' + linhas + ' linhas, ' + cols + ' colunas');
+    if (linhas < 1) return;
+    Logger.log('   cabeçalho: ' + aba.getRange(1, 1, 1, Math.min(cols, 35)).getValues()[0].map((c, i) => (i + 1) + '=' + String(c).substring(0, 18)).join(' | '));
+    if (linhas > 1) Logger.log('   1ª linha: ' + aba.getRange(2, 1, 1, Math.min(cols, 35)).getDisplayValues()[0].map((c, i) => (i + 1) + '=' + String(c).substring(0, 18)).join(' | '));
+  });
+  // competências disponíveis no detalhamento
+  const det = ss.getSheetByName(CONFIG.ABA_DETALHE);
+  if (det && det.getLastRow() > 1) {
+    const comp = {};
+    det.getRange(2, 30, det.getLastRow() - 1, 1).getValues().forEach(l => {
+      const c = _competenciaDaCelula_(l[0]) || _formatarCompetencia_(l[0], true);
+      if (c) comp[c] = (comp[c] || 0) + 1;
+    });
+    Logger.log('Competências no DetalhamentoDB (coluna AD): ' + (Object.keys(comp).length ? Object.keys(comp).sort().map(k => k + ' (' + comp[k] + ')').join(', ') : 'NENHUMA reconhecida'));
+  }
+  const ace = ss.getSheetByName(CONFIG.ABA_ACEITES);
+  if (ace && ace.getLastRow() > 1) {
+    const mapa = _mapaAceitesDb_(ace.getDataRange().getValues());
+    Logger.log('AceitesDB: colunas reconhecidas ' + (mapa.porNome ? 'pelo cabeçalho' : 'por posição (reserva)') + ' → ' + JSON.stringify(mapa.idx));
+  }
+  const acid = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_ACIDENTES);
+  Logger.log('Acidentes: ' + (acid ? acid.getLastRow() + ' linhas | placas em aberto: ' + Object.keys(_placasComAcidenteAberto_()).join(', ') : 'aba não encontrada'));
+}
+
 /* ============================================================
    FILA DE AÇÕES DO DETRAN
    O Apps Script não alcança sistemas.detran.ce.gov.br (o Google sai

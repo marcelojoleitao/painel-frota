@@ -57,7 +57,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.11.1';
+const VERSAO_PAINEL = '2.12.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2328,6 +2328,14 @@ function renderRelatorios(c) {
         <div id="rel-result"></div>
       </div>
       <div class="acao-cartao">
+        <h4>Relatório de Ordens de Serviço — Resumo</h4>
+        <div class="desc">A lista de OS aceitas na competência, agrupada por unidade, com o tipo de aceite (gestor ou automático), composição por tipo, por unidade e por estabelecimento. Placas com processo de acidente em aberto vêm destacadas.</div>
+        <div class="form-campo" style="margin-bottom:10px"><label>Competência</label><input type="month" id="aceites-comp" value="${padrao}"></div>
+        <button class="btn amarelo" id="btn-rel-aceites">Gerar PDF</button>
+        <div class="foto-data" id="aceites-status"></div>
+        <div id="aceites-result"></div>
+      </div>
+      <div class="acao-cartao">
         <h4>Relatório de Ordens de Serviço — Analítico</h4>
         <div class="desc">Detalhamento das peças e serviços por veículo e família, com subtotais e total geral, a partir do DetalhamentoDB. Ao gerar, o painel confere as placas contra a aba Acidentes e avisa se alguma tiver processo em aberto.</div>
         <div class="form-campo" style="margin-bottom:10px"><label>Competência</label><input type="month" id="pecas-comp" value="${padrao}"></div>
@@ -2374,6 +2382,7 @@ function renderRelatorios(c) {
       .gerarRelatorioAbastecimento(ESTADO.token, de, ate);
   });
   ouvir('btn-rel-pecas', 'click', gerarPecas);
+  ouvir('btn-rel-aceites', 'click', gerarAceites);
   ouvir('glosa-rel-comp', 'change', carregarCombustiveisGlosa);
   ouvir('btn-rel-glosa', 'click', gerarGlosa);
   carregarCombustiveisGlosa();
@@ -2453,6 +2462,35 @@ function gerarPecas() {
     },
     e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; });
   if (run) run.gerarRelatorioPecas(ESTADO.token, comp, '');
+}
+
+
+/* ---------------- Relatório de OS resumo ---------------- */
+function gerarAceites() {
+  const comp = competenciaBR(val('aceites-comp'));
+  if (!comp) { toast('Informe a competência.'); return; }
+  const btn = el('btn-rel-aceites'), status = el('aceites-status'), resultado = el('aceites-result');
+  btn.disabled = true; btn.textContent = 'Montando…';
+  if (status) status.textContent = 'Lendo os aceites da competência…';
+  if (resultado) resultado.innerHTML = '';
+  const run = servidor('gerarRelatorioAceites',
+    r => {
+      btn.disabled = false; btn.textContent = 'Gerar PDF';
+      if (!r || !r.ok) { if (status) status.textContent = ''; toast((r && r.erro) || 'Falha ao gerar.'); return; }
+      if (status) status.innerHTML = entregarPdf(r);
+      if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
+        <div class="dado"><div class="k">Total</div><div class="v">${fmtMoeda(r.total)}</div></div>
+        <div class="dado"><div class="k">Ordens de serviço</div><div class="v">${fmtInt(r.ordens)}</div></div>
+        ${r.tipos.map(t => `<div class="dado"><div class="k">${esc(t.tipo)}</div><div class="v">${fmtMoeda(t.valor)} <small style="font-weight:500; color:var(--tinta-suave)">${t.qtd} OS</small></div></div>`).join('')}
+      </div>` + (r.acidentes && r.acidentes.length
+        ? `<div class="alerta-item" style="margin-top:10px; cursor:default"><span class="t">PROCESSO DE ACIDENTE EM ABERTO</span><br>
+             ${r.acidentes.map(a => `<b style="font-family:var(--fonte-dados)">${esc(a.placa)}</b>${a.processo ? ' — ' + esc(a.processo) : ''}`).join(' · ')}
+             <div style="margin-top:4px">Confira se a ordem de serviço é do acidente antes de encaminhar o pagamento.</div></div>`
+        : `<div class="cartao-dica">Nenhuma placa com processo de acidente em aberto nesta competência.</div>`);
+      if (r.acidentes && r.acidentes.length) toast('Atenção: ' + r.acidentes.length + ' placa(s) com processo de acidente em aberto.', true);
+    },
+    e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; });
+  if (run) run.gerarRelatorioAceites(ESTADO.token, comp);
 }
 
 </script>
