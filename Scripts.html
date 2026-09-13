@@ -27,7 +27,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.8.1';
+const VERSAO_PAINEL = '2.8.2';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -1827,7 +1827,29 @@ function prepararLote(acao) {
   const e = elegiveis(acao, ESTADO.filtrado, op);
   const pulados = Object.keys(e.motivo).map(p => ({ placa: p, st: 'PULADA', detalhe: e.motivo[p] }));
   if (!e.sel.length) { toast('Nenhuma viatura elegível na seleção (' + pulados.length + ' puladas).'); return; }
-  if (!confirm(ACOES_DEF[acao].rotulo + '\n\nExecutar em ' + e.sel.length + ' viatura(s)?' + (pulados.length ? '\n(' + pulados.length + ' serão puladas: já feitas/sem dados)' : ''))) return;
+  const naFila = !!ACOES_DEF[acao].fila;
+  if (!confirm(ACOES_DEF[acao].rotulo + '\n\n' + (naFila ? 'Enviar ' : 'Executar em ') + e.sel.length + ' viatura(s)' +
+      (naFila ? ' para a fila do DETRAN?' : '?') + (pulados.length ? '\n(' + pulados.length + ' serão puladas: já feitas ou sem dados)' : ''))) return;
+
+  // Ações que dependem do DETRAN não rodam aqui: o Google não alcança o portal.
+  // Vão para a aba FilaAcoes e o worker_detran.py executa na rede local.
+  if (naFila) {
+    const botao = document.querySelector('button[data-acao="' + acao + '"]');
+    if (botao) { botao.disabled = true; botao.textContent = 'Enfileirando…'; }
+    google.script.run
+      .withSuccessHandler(r => {
+        if (sessaoExpirou(r)) return;
+        if (!r || !r.ok) { toast((r && r.erro) || 'Falha ao enfileirar.'); renderAcoes(ESTADO.filtrado); return; }
+        toast(r.enfileiradas + ' viatura(s) na fila do DETRAN' + (r.repetidas && r.repetidas.length ? ' • ' + r.repetidas.length + ' já estavam pendentes' : '') + '. Rode o trabalhador para processar.');
+        ESTADO.subAcoes = 'fila';
+        document.querySelectorAll('#subabas-acoes .subaba').forEach(x => x.classList.toggle('ativa', x.dataset.sub === 'fila'));
+        renderAcoes(ESTADO.filtrado);
+      })
+      .withFailureHandler(err => { toast('Erro: ' + (err && err.message ? err.message : err)); renderAcoes(ESTADO.filtrado); })
+      .enfileirarAcoes(ESTADO.token, acao, e.sel.map(v => v.placa));
+    return;
+  }
+
   ESTADO.lote = { acao: acao, fila: e.sel.map(v => v.placa), total: e.sel.length, feito: 0, ok: 0, erro: 0, ativo: true, itens: pulados.slice() };
   renderAcoes(ESTADO.filtrado);
   processarProximo();
