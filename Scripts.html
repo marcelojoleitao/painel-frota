@@ -14,7 +14,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.2.0';
+const VERSAO_PAINEL = '2.2.1';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -325,7 +325,7 @@ function pct(a, b) { return b ? Math.round(a / b * 100) + '% do exibido' : '—'
 function kpi(rotulo, valor, sub, cor, filtro, estatico) {
   const ativo = filtro && ESTADO.filtros[filtro.k] && [].concat(filtro.v).every(x => ESTADO.filtros[filtro.k].has(String(x)));
   return `<div class="kpi ${cor || ''} ${ativo ? 'ativo' : ''} ${estatico ? 'estatico' : ''}" ${filtro ? `data-k="${filtro.k}" data-v='${JSON.stringify([].concat(filtro.v))}'` : ''}>
-    <div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${valor}</div><div class="kpi-sub">${sub}</div></div>`;
+    <div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor ${String(valor).length >= 15 ? 'longo' : String(valor).length >= 11 ? 'medio' : ''}">${valor}</div><div class="kpi-sub">${sub}</div></div>`;
 }
 function ligarKpis() {
   document.querySelectorAll('.kpi[data-k]').forEach(k => k.addEventListener('click', () => {
@@ -930,17 +930,22 @@ function renderPeriodo(idCont, chaveEstado, meses, nota) {
 /* ---------- gráfico de colunas (série mensal) ---------- */
 function cartaoColunas(titulo, meses, serieA, serieB, fmtA, fmtB, rotA, rotB) {
   const card = document.createElement('div'); card.className = 'cartao largo';
-  const maxA = Math.max(1, ...meses.map(m => serieA[m] || 0)), maxB = serieB ? Math.max(1, ...meses.map(m => serieB[m] || 0)) : 1;
+  // ESCALA ÚNICA para as duas séries — as alturas ficam comparáveis entre si
+  const maximo = Math.max(1, ...meses.map(m => Math.max(serieA[m] || 0, serieB ? (serieB[m] || 0) : 0)));
   const passo = meses.length > 24 ? Math.ceil(meses.length / 24) : 1;
-  card.innerHTML = `<div class="cartao-cab"><h3>${titulo}</h3><small>${meses.length} meses</small></div>
-    <div class="colunas">${meses.map((m, i) => `<div class="coluna" title="${rotMes(m)}: ${fmtA(serieA[m] || 0)}${serieB ? ' • ' + fmtB(serieB[m] || 0) : ''}">
-      <span class="val">${fmtA(serieA[m] || 0)}</span>
+  const larguraMin = meses.length > 26 ? (meses.length * (serieB ? 30 : 22)) : 0;   // muitos meses → rolagem horizontal
+  card.innerHTML = `<div class="cartao-cab"><h3>${titulo}</h3><small>${meses.length} meses • pico ${fmtA(maximo)}</small></div>
+    <div class="colunas-rol"><div class="colunas" ${larguraMin ? `style="min-width:${larguraMin}px"` : ''}>${meses.map((m, i) => {
+      const a = serieA[m] || 0, b = serieB ? (serieB[m] || 0) : 0;
+      return `<div class="coluna">
+      <span class="val"><span class="la">${esc(rotA)}:</span> ${fmtA(a)}${serieB ? `<br><span class="lb">${esc(rotB)}:</span> ${fmtB(b)}` : ''}</span>
       <div style="display:flex; gap:1px; align-items:flex-end; width:100%; height:100%">
-        <div class="preench" style="height:${Math.round((serieA[m] || 0) / maxA * 100)}%"></div>
-        ${serieB ? `<div class="preench alt" style="height:${Math.round((serieB[m] || 0) / maxB * 100)}%"></div>` : ''}
+        <div class="preench" style="height:${Math.round(a / maximo * 100)}%" title="${escAttr(rotA + ' ' + rotMes(m) + ': ')}${escAttr(fmtA(a))}"></div>
+        ${serieB ? `<div class="preench alt" style="height:${Math.round(b / maximo * 100)}%" title="${escAttr(rotB + ' ' + rotMes(m) + ': ')}${escAttr(fmtB(b))}"></div>` : ''}
       </div>
-      <span class="rot">${i % passo === 0 ? rotMes(m) : ''}</span></div>`).join('')}</div>
-    <div class="serie-legenda"><span>${rotA}</span>${serieB ? `<span class="alt">${rotB}</span>` : ''}</div>`;
+      <span class="rot">${i % passo === 0 ? rotMes(m) : ''}</span></div>`;
+    }).join('')}</div></div>
+    <div class="serie-legenda"><span>${esc(rotA)}</span>${serieB ? `<span class="alt">${esc(rotB)}</span>` : ''}</div>`;
   return card;
 }
 
@@ -1411,9 +1416,11 @@ function renderPagamentos() {
   g.appendChild(cartaoColunas('Manutenção — peças × mão de obra', mm, serie(ma.map(t => ({ mes: t.mes, x: t.pecas + t.pecasAcid })), 'x'), serie(ma.map(t => ({ mes: t.mes, x: t.mo + t.moAcid })), 'x'), fmtMoeda, fmtMoeda, 'Peças', 'Mão de obra'));
   g.appendChild(cartaoColunas('Glosas por competência', mm, serie(sel, 'glosaIMR'), serie(sel, 'glosaPrecos'), fmtMoeda, fmtMoeda, 'Glosa IMR', 'Glosa preços abusivos'));
   if (T.glosaHist && T.glosaHist.length) {
-    const gh = {}; const mh = []; T.glosaHist.forEach(x => { const m = x.comp.match(/(\d{1,2})\/(\d{4})/); if (!m) return; const k = m[2] + '-' + ('0' + m[1]).slice(-2); gh[k] = x.valor; mh.push(k); });
+    const gh = {}; let mh = [];
+    T.glosaHist.forEach(x => { const m = x.comp.match(/(\d{1,2})\/(\d{4})/); if (!m) return; const k = m[2] + '-' + ('0' + m[1]).slice(-2); gh[k] = x.valor; mh.push(k); });
     mh.sort();
-    g.appendChild(cartaoColunas('Histórico de glosa de preços abusivos (aba Resumo Glosa, desde ' + rotMes(mh[0]) + ')', mh, gh, null, fmtMoeda, null, 'Glosa preços abusivos (R$)'));
+    const mhSel = mh.filter(m => m >= ini && m <= fim);      // respeita o período escolhido acima
+    if (mhSel.length) g.appendChild(cartaoColunas('Glosa de preços abusivos — aba Resumo Glosa (' + rotMes(mhSel[0]) + ' a ' + rotMes(mhSel[mhSel.length - 1]) + ')', mhSel, gh, null, fmtMoeda, null, 'Glosa preços abusivos (R$)', ''));
   }
   g.appendChild(cartaoAgregado('Por ano (bruto)', sel, t => t.mes.substring(0, 4), t => t.bruto, fmtMoeda, null));
   g.appendChild(cartaoDeducoes(sel));
