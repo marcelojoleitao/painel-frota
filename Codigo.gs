@@ -1782,44 +1782,60 @@ function gerarRelatorioAbastecimento(token, de, ate) {
     const veiculos = _lerVeiculos_(ss);
     const cadastro = {};
     veiculos.forEach(v => { cadastro[v.placa] = v; if (v.placaMerc && v.placaMerc !== v.placa) cadastro[v.placaMerc] = v; });
-    const dados = _dadosRelatorioAbast_(ss, ini, fim, cadastro);
+    let tetos = null;
+    try { tetos = _tetosAnp_(ss); } catch (e) { Logger.log('Tetos da ANP indisponíveis: ' + e); }
+    const dados = _dadosRelatorioAbast_(ss, ini, fim, cadastro, tetos);
     if (!dados.registros) return { ok: false, erro: 'Nenhum abastecimento no período ' + _rotMes_(ini) + ' a ' + _rotMes_(fim) + '.' };
 
-    const html = _htmlRelatorioAbast_(dados, ini, fim, p.sessao);
+    // mesmo número de meses imediatamente anterior, para comparação
+    const nMeses = _mesesNoIntervalo_(ini, fim).length;
+    const iniAnt = _mesAnterior_(ini, nMeses), fimAnt = _mesAnterior_(ini, 1);
+    let anterior = null;
+    try { const a = _dadosRelatorioAbast_(ss, iniAnt, fimAnt, cadastro, null); if (a.registros) anterior = { ini: iniAnt, fim: fimAnt, dados: a }; } catch (e) {}
+
+    const frotaAtiva = veiculos.filter(v => String(v.status || '').toUpperCase() !== 'ALIENADO');
+    const html = _htmlRelatorioAbast_(dados, ini, fim, p.sessao, anterior, frotaAtiva);
     const nome = 'Relatorio_Abastecimento_' + ini.replace('-', '') + (ini === fim ? '' : '_a_' + fim.replace('-', '')) + '.pdf';
     const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);
     _logAcao_(p.ss, p.sessao.email, 'Relatório de abastecimento', '', _rotMes_(ini) + ' a ' + _rotMes_(fim), pdf.link || 'download direto');
-    return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '', resumo: { registros: dados.registros, valor: dados.valor, litros: dados.litros, km: dados.km, viaturas: Object.keys(dados.porPlaca).length, alertas: dados.totalAlertas } };
+    return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '', resumo: { registros: dados.registros, valor: dados.valor, litros: dados.litros, km: dados.km, viaturas: Object.keys(dados.porPlaca).length, alertas: dados.totalAlertas, glosaPotencial: dados.glosaPotencial } };
   } catch (e) {
     return { ok: false, erro: String(e.message || e) };
   }
 }
 
-function _dadosRelatorioAbast_(ss, ini, fim, cadastro) {
+function _dadosRelatorioAbast_(ss, ini, fim, cadastro, tetos) {
   const tab = _abaTransacoes_(ss, CONFIG.ABA_ABAST, ['PLACA', 'LITROS', 'VALOR EMISSAO']);
-  const d = { registros: 0, valor: 0, litros: 0, km: 0, porPlaca: {}, porUnidade: {}, porUso: {}, porTipo: {}, porComb: {}, porPosto: {}, porCidade: {}, porMes: {},
-              alertas: { semCadastro: [], kmNegativo: [], kmZero: [], consumoAlto: [], consumoBaixo: [], divergencia: [], precoAcima: [], duplicidade: [] }, totalAlertas: 0 };
+  const vazio = () => ({ registros: 0, valor: 0, litros: 0, km: 0, porPlaca: {}, porUnidade: {}, porUso: {}, porTipo: {}, porComb: {},
+    porPosto: {}, porCidade: {}, porMes: {}, porModelo: {}, porDiaSemana: {}, porFaixaHora: {}, foraUf: { qtd: 0, valor: 0 },
+    glosaPotencial: 0, itensGlosa: 0, precoPorComb: {}, tetoPorComb: {}, intervalos: [],
+    alertas: { semCadastro: [], kmNegativo: [], kmZero: [], consumoAlto: [], consumoBaixo: [], divergencia: [], precoAcima: [], duplicidade: [], foraExpediente: [], acimaTetoAnp: [] }, totalAlertas: 0 });
+  const d = vazio();
   if (!tab) return d;
   const { valores, cab } = tab;
   const c = n => cab.indexOf(n);
   const iData = c('DATA TRANSACAO'), iPlaca = c('PLACA'), iLit = c('LITROS'), iVlL = c('VL/LITRO'),
         iKm = c('KM RODADOS OU HORAS TRABALHADAS'), iKmL = c('KM/LITRO OU LITROS/HORA'), iVal = c('VALOR EMISSAO'),
-        iComb = c('TIPO COMBUSTIVEL'), iEst = c('NOME ESTABELECIMENTO'), iCid = c('CIDADE'), iUf = c('UF'), iMot = c('NOME MOTORISTA');
-  const somaPreco = {}, contaPreco = {}, porDia = {};
+        iComb = c('TIPO COMBUSTIVEL'), iEst = c('NOME ESTABELECIMENTO'), iCid = c('CIDADE'), iUf = c('UF'),
+        iMot = c('NOME MOTORISTA'), iOdo = c('HODOMETRO OU HORIMETRO');
+  const somaPreco = {}, contaPreco = {}, porDia = {}, ultimoAbast = {};
   const soma = (obj, chave, r) => {
     const a = obj[chave] || (obj[chave] = { valor: 0, litros: 0, km: 0, qtd: 0, placas: {} });
     a.valor += r.valor; a.litros += r.litros; a.km += Math.max(0, r.km); a.qtd++; a.placas[r.placa] = true;
   };
+  const semanas = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
 
   for (let r = tab.inicio; r < valores.length; r++) {
     const l = valores[r];
     const placa = String(l[iPlaca] || '').trim().toUpperCase();
     if (!placa) continue;
-    const dia = _diaISO_(l[iData]); if (!dia) continue;
+    const bruto = l[iData];
+    const dia = _diaISO_(bruto); if (!dia) continue;
     const mes = dia.substring(0, 7);
     if (mes < ini || mes > fim) continue;
-    const reg = { placa: placa, dia: dia, mes: mes, valor: _num_(l[iVal]) || 0, litros: _num_(l[iLit]) || 0,
-      km: _num_(l[iKm]) || 0, kmL: _num_(l[iKmL]) || 0, vlL: _num_(l[iVlL]) || 0,
+    const hora = _horaDaCelula_(bruto);
+    const reg = { placa: placa, dia: dia, mes: mes, hora: hora, valor: _num_(l[iVal]) || 0, litros: _num_(l[iLit]) || 0,
+      km: _num_(l[iKm]) || 0, kmL: _num_(l[iKmL]) || 0, vlL: _num_(l[iVlL]) || 0, odo: _num_(l[iOdo]) || 0,
       comb: String(l[iComb] || '').trim().toUpperCase() || 'SEM COMBUSTÍVEL',
       posto: String(l[iEst] || '').trim() || 'SEM POSTO', cidade: String(l[iCid] || '').trim() || 'SEM CIDADE',
       uf: String(l[iUf] || '').trim().toUpperCase(), motorista: String(l[iMot] || '').trim() };
@@ -1830,17 +1846,48 @@ function _dadosRelatorioAbast_(ss, ini, fim, cadastro) {
     soma(d.porUnidade, v ? (v.unidadeCurta || v.unidade || 'SEM CADASTRO') : 'SEM CADASTRO', reg);
     soma(d.porUso, v ? (v.uso || 'SEM USO') : 'SEM USO', reg);
     soma(d.porTipo, v ? (v.tipo || 'SEM TIPO') : 'SEM TIPO', reg);
+    soma(d.porModelo, v ? (v.modeloCurto || 'SEM CADASTRO') : 'SEM CADASTRO', reg);
     soma(d.porComb, reg.comb, reg);
     soma(d.porPosto, reg.posto + (reg.cidade !== 'SEM CIDADE' ? ' — ' + reg.cidade : ''), reg);
     soma(d.porCidade, reg.cidade + (reg.uf ? '/' + reg.uf : ''), reg);
     soma(d.porMes, reg.mes, reg);
-    if (v) { const pp = d.porPlaca[placa]; pp.modelo = v.modeloCurto; pp.unidade = v.unidadeCurta || v.unidade; pp.tipo = v.tipo; pp.uso = v.uso; }
+    const dataObj = new Date(reg.dia + 'T12:00:00');
+    soma(d.porDiaSemana, semanas[dataObj.getDay()], reg);
+    soma(d.porFaixaHora, _faixaHora_(hora), reg);
+    if (reg.uf && reg.uf !== 'CE') { d.foraUf.qtd++; d.foraUf.valor += reg.valor; }
 
-    if (reg.vlL > 0) { somaPreco[reg.comb] = (somaPreco[reg.comb] || 0) + reg.vlL; contaPreco[reg.comb] = (contaPreco[reg.comb] || 0) + 1; }
+    const pp = d.porPlaca[placa];
+    if (v) { pp.modelo = v.modeloCurto; pp.unidade = v.unidadeCurta || v.unidade; pp.tipo = v.tipo; pp.uso = v.uso; pp.comb = v.comb; }
+    if (reg.odo > 0) { pp.odoMin = pp.odoMin === undefined ? reg.odo : Math.min(pp.odoMin, reg.odo); pp.odoMax = Math.max(pp.odoMax || 0, reg.odo); }
+    if (ultimoAbast[placa]) {
+      const dias = Math.round((new Date(reg.dia) - new Date(ultimoAbast[placa])) / 86400000);
+      if (dias > 0 && dias < 120) d.intervalos.push(dias);
+    }
+    if (!ultimoAbast[placa] || reg.dia > ultimoAbast[placa]) ultimoAbast[placa] = reg.dia;
+
+    if (reg.vlL > 0) {
+      somaPreco[reg.comb] = (somaPreco[reg.comb] || 0) + reg.vlL * reg.litros;
+      contaPreco[reg.comb] = (contaPreco[reg.comb] || 0) + reg.litros;
+      // comparação com o teto da ANP (mesmo mês e UF) — glosa potencial
+      const prodAnp = _produtoAnp_(reg.comb);
+      if (tetos && prodAnp && reg.uf) {
+        const teto = tetos[(reg.mes.substring(5, 7) + '/' + reg.mes.substring(0, 4)) + '|' + reg.uf + '|' + _normCab_(prodAnp.anp)];
+        if (teto !== undefined) {
+          const t = d.tetoPorComb[reg.comb] || (d.tetoPorComb[reg.comb] = { soma: 0, litros: 0 });
+          t.soma += teto * reg.litros; t.litros += reg.litros;
+          if (reg.vlL > teto) {
+            const g = Math.round(reg.vlL * reg.litros * 100) / 100 - Math.round(teto * reg.litros * 100) / 100;
+            if (g > 0) {
+              d.glosaPotencial += g; d.itensGlosa++;
+              d.alertas.acimaTetoAnp.push([placa, _brDia_(dia), reg.comb + '/' + reg.uf, 'pago R$ ' + _decBR3_(reg.vlL) + ' • teto R$ ' + _decBR3_(teto) + ' • glosa ' + _moedaBR_(g)]);
+            }
+          }
+        }
+      }
+    }
     const chaveDia = placa + '|' + dia;
     porDia[chaveDia] = (porDia[chaveDia] || 0) + 1;
 
-    // alertas
     if (!v) d.alertas.semCadastro.push([placa, _brDia_(dia), reg.posto, _moedaBR_(reg.valor)]);
     if (reg.km < 0) d.alertas.kmNegativo.push([placa, _brDia_(dia), String(reg.km), _moedaBR_(reg.valor)]);
     else if (reg.km === 0) d.alertas.kmZero.push([placa, _brDia_(dia), _decBR_(reg.litros) + ' l', _moedaBR_(reg.valor)]);
@@ -1853,54 +1900,150 @@ function _dadosRelatorioAbast_(ss, ini, fim, cadastro) {
         (/FLEX|ALCOOL|GASOLINA|ETANOL/.test(cadComb) && /GASOLINA|ALCOOL|ETANOL/.test(reg.comb));
       if (!compativel) d.alertas.divergencia.push([placa, _brDia_(dia), 'cadastro: ' + v.comb, 'abastecido: ' + reg.comb]);
     }
+    if (hora !== null && (hora < 5 || hora >= 22)) d.alertas.foraExpediente.push([placa, _brDia_(dia), ('0' + hora).slice(-2) + 'h', reg.posto + ' — ' + _moedaBR_(reg.valor)]);
     reg._chaveDia = chaveDia;
     (d._regs = d._regs || []).push(reg);
   }
 
-  // preço acima da média e duplicidade dependem do total
   (d._regs || []).forEach(reg => {
     const media = contaPreco[reg.comb] ? somaPreco[reg.comb] / contaPreco[reg.comb] : 0;
-    if (media > 0 && reg.vlL > media * 1.15) d.alertas.precoAcima.push([reg.placa, _brDia_(reg.dia), reg.comb, 'R$ ' + _decBR_(reg.vlL) + ' (média R$ ' + _decBR_(media) + ')']);
+    if (media > 0 && reg.vlL > media * 1.15) d.alertas.precoAcima.push([reg.placa, _brDia_(reg.dia), reg.comb, 'R$ ' + _decBR3_(reg.vlL) + ' (média R$ ' + _decBR3_(media) + ')']);
   });
-  const jaVistos = {};
+  const vistos = {};
   (d._regs || []).forEach(reg => {
-    if (porDia[reg._chaveDia] > 2 && !jaVistos[reg._chaveDia]) {
-      jaVistos[reg._chaveDia] = true;
+    if (porDia[reg._chaveDia] > 2 && !vistos[reg._chaveDia]) {
+      vistos[reg._chaveDia] = true;
       d.alertas.duplicidade.push([reg.placa, _brDia_(reg.dia), porDia[reg._chaveDia] + ' abastecimentos no mesmo dia', '']);
     }
   });
   delete d._regs;
+  Object.keys(somaPreco).forEach(k => { d.precoPorComb[k] = contaPreco[k] ? somaPreco[k] / contaPreco[k] : 0; });
+  d.glosaPotencial = Math.round(d.glosaPotencial * 100) / 100;
   Object.keys(d.alertas).forEach(k => { d.totalAlertas += d.alertas[k].length; });
   return d;
 }
 
-function _htmlRelatorioAbast_(d, ini, fim, sessao) {
+function _horaDaCelula_(v) {
+  if (v instanceof Date && !isNaN(v)) return v.getHours();
+  const m = String(v || '').match(/\d{1,2}\/\d{1,2}\/\d{4}[\sT]+(\d{1,2}):(\d{2})/);
+  return m ? parseInt(m[1], 10) : null;
+}
+function _faixaHora_(h) {
+  if (h === null) return 'Sem horário';
+  if (h < 6) return 'Madrugada (0h–6h)';
+  if (h < 12) return 'Manhã (6h–12h)';
+  if (h < 18) return 'Tarde (12h–18h)';
+  return 'Noite (18h–24h)';
+}
+function _mesAnterior_(mes, n) {
+  const y = parseInt(mes.substring(0, 4), 10), m = parseInt(mes.substring(5, 7), 10);
+  const d = new Date(y, m - 1 - n, 1);
+  return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2);
+}
+function _mesesNoIntervalo_(ini, fim) {
+  const out = []; let [y, m] = ini.split('-').map(Number); const [fy, fm] = fim.split('-').map(Number);
+  while (y < fy || (y === fy && m <= fm)) { out.push(y + '-' + ('0' + m).slice(-2)); m++; if (m > 12) { m = 1; y++; } }
+  return out;
+}
+
+function _htmlRelatorioAbast_(d, ini, fim, sessao, anterior, frotaAtiva) {
   const lista = (obj, n) => Object.keys(obj).map(k => Object.assign({ chave: k }, obj[k])).sort((a, b) => b.valor - a.valor).slice(0, n || 9999);
   const consumo = (km, litros) => litros > 0 ? _decBR_(km / litros) + ' km/l' : '—';
   const porKm = (valor, km) => km > 0 ? 'R$ ' + _decBR_(valor / km) : '—';
-  const linhasTabela = (itens, colunas) => itens.map(i => '<tr>' + colunas.map(c => '<td' + (c.num ? ' class="num"' : '') + '>' + c.v(i) + '</td>').join('') + '</tr>').join('');
-  const tabela = (titulo, cabecalhos, itens, colunas) => !itens.length ? '' :
-    '<h3>' + titulo + '</h3><table><thead><tr>' + cabecalhos.map((h, i) => '<th' + (colunas[i].num ? ' class="num"' : '') + '>' + h + '</th>').join('') + '</tr></thead><tbody>' +
-    linhasTabela(itens, colunas) + '</tbody></table>';
+  const pct = (a, b) => b > 0 ? Math.round(a / b * 1000) / 10 : 0;
+  const meses = _mesesNoIntervalo_(ini, fim);
+  const nMeses = meses.length;
+  const viaturas = Object.keys(d.porPlaca).length;
+  const a = anterior ? anterior.dados : null;
 
-  const colPadrao = [
-    { v: i => _esc_(i.chave) }, { v: i => String(Object.keys(i.placas).length), num: true }, { v: i => String(i.qtd), num: true },
-    { v: i => _decBR_(i.litros), num: true }, { v: i => _fmtInt_(i.km), num: true }, { v: i => _moedaBR_(i.valor), num: true },
-    { v: i => consumo(i.km, i.litros), num: true }, { v: i => porKm(i.valor, i.km), num: true }
-  ];
-  const cabPadrao = ['', 'Viaturas', 'Abast.', 'Litros', 'Km', 'Valor', 'Consumo', 'R$/km'];
+  /* gráficos desenhados com tabelas — o conversor de PDF do Apps Script não processa SVG */
+  const barrasH = (itens, cor) => {
+    if (!itens.length) return '<p class="nota">Sem dados.</p>';
+    const maximo = Math.max(1, ...itens.map(i => i.valor));
+    return '<table class="graf">' + itens.map(i =>
+      '<tr><td class="rot">' + _esc_(i.rotulo) + '</td>' +
+      '<td class="bar"><div class="preench" style="width:' + Math.max(1, Math.round(i.valor / maximo * 100)) + '%; background:' + (cor || '#2E6FD9') + '"></div></td>' +
+      '<td class="val">' + _esc_(i.texto) + '</td></tr>').join('') + '</table>';
+  };
+  const colunas = (chaves, serieA, serieB, fmtA, rotA, rotB) => {
+    const maximo = Math.max(1, ...chaves.map(k => Math.max(serieA[k] || 0, serieB ? (serieB[k] || 0) : 0)));
+    const alt = v => Math.max(2, Math.round((v || 0) / maximo * 78));
+    return '<table class="colunas"><tr>' + chaves.map(k =>
+      '<td><div class="pilha">' +
+      '<div class="col a" style="height:' + alt(serieA[k]) + 'px"></div>' +
+      (serieB ? '<div class="col b" style="height:' + alt(serieB[k]) + 'px"></div>' : '') +
+      '</div><div class="vlr">' + _esc_(fmtA(serieA[k] || 0)) + '</div><div class="lbl">' + _esc_(_rotMes_(k)) + '</div></td>').join('') +
+      '</tr></table><div class="legenda"><span class="a"></span>' + _esc_(rotA) + (serieB ? '<span class="b"></span>' + _esc_(rotB) : '') + '</div>';
+  };
+  const faixa100 = itens => {
+    const total = itens.reduce((s, i) => s + i.valor, 0) || 1;
+    const cores = ['#0B2C5C', '#2E6FD9', '#F2B705', '#2F9E6B', '#B23A2E', '#7D5BA6', '#00A3B5'];
+    return '<table class="faixa"><tr>' + itens.map((i, n) =>
+      '<td style="width:' + (i.valor / total * 100) + '%; background:' + cores[n % cores.length] + '"></td>').join('') + '</tr></table>' +
+      '<div class="legenda">' + itens.map((i, n) => '<span style="background:' + cores[n % cores.length] + '"></span>' +
+      _esc_(i.rotulo) + ' ' + _decBR_(i.valor / total * 100) + '%').join('') + '</div>';
+  };
 
-  const meses = Object.keys(d.porMes).sort();
-  const maiorMes = Math.max(1, ...meses.map(m => d.porMes[m].valor));
-  const barras = meses.map(m => {
-    const a = d.porMes[m];
-    return '<tr><td>' + _rotMes_(m) + '</td><td class="num">' + String(a.qtd) + '</td><td class="num">' + _decBR_(a.litros) +
-      '</td><td class="num">' + _fmtInt_(a.km) + '</td><td class="num">' + _moedaBR_(a.valor) + '</td><td class="num">' + consumo(a.km, a.litros) +
-      '</td><td class="barra"><span style="width:' + Math.round(a.valor / maiorMes * 100) + '%"></span></td></tr>';
-  }).join('');
+  const precoMedio = d.litros > 0 ? d.valor / d.litros : 0;
+  const kpi = (r, v, s, destaque) => '<div class="kpi' + (destaque ? ' ' + destaque : '') + '"><div class="r">' + r + '</div><div class="v">' + v + '</div>' + (s ? '<div class="s">' + s + '</div>' : '') + '</div>';
+  const variacao = (atual, ant) => {
+    if (!ant) return '';
+    const p = (atual - ant) / ant * 100;
+    return '<span class="var ' + (p > 0 ? 'sobe' : p < 0 ? 'desce' : '') + '">' + (p > 0 ? '▲' : p < 0 ? '▼' : '=') + ' ' + _decBR_(Math.abs(p)) + '% vs. anterior</span>';
+  };
+
+  const unidades = lista(d.porUnidade).map(u => ({
+    chave: u.chave, valor: u.valor, litros: u.litros, km: u.km, qtd: u.qtd, viaturas: Object.keys(u.placas).length,
+    rsKm: u.km > 0 ? u.valor / u.km : 0, kmL: u.litros > 0 ? u.km / u.litros : 0,
+    porViatura: u.valor / Math.max(1, Object.keys(u.placas).length)
+  }));
+
+  const placas = Object.keys(d.porPlaca).map(k => {
+    const p = d.porPlaca[k];
+    return { placa: k, modelo: p.modelo || '—', unidade: p.unidade || 'SEM CADASTRO', valor: p.valor, litros: p.litros,
+      km: p.km, qtd: p.qtd, rsKm: p.km > 0 ? p.valor / p.km : 0, kmL: p.litros > 0 ? p.km / p.litros : 0 };
+  });
+  const porGasto = placas.slice().sort((x, y) => y.valor - x.valor);
+  const top10 = porGasto.slice(0, 10).reduce((s, p) => s + p.valor, 0);
+  const eficientes = placas.filter(p => p.km >= 500 && p.kmL > 0).sort((x, y) => y.kmL - x.kmL);
+  const custosos = placas.filter(p => p.km >= 500 && p.rsKm > 0).sort((x, y) => y.rsKm - x.rsKm);
+  const modelos = lista(d.porModelo).filter(m => m.litros > 0 && m.km > 0).map(m => ({ chave: m.chave, kmL: m.km / m.litros, valor: m.valor, placas: Object.keys(m.placas).length }));
+
+  const ativas = {}; Object.keys(d.porPlaca).forEach(p => { ativas[p] = true; });
+  const semAbastecer = (frotaAtiva || []).filter(v => !ativas[v.placa] && !ativas[v.placaMerc] && String(v.status || '').toUpperCase() === 'DISPONÍVEL');
+
+  const tabela = (cabs, linhas) => '<table><thead><tr>' + cabs.map(c => '<th' + (c.n ? ' class="num"' : '') + '>' + c.t + '</th>').join('') + '</tr></thead><tbody>' + linhas + '</tbody></table>';
+
+  const linhasUnidade = unidades.map(u => '<tr><td>' + _esc_(u.chave) + '</td><td class="num">' + u.viaturas + '</td><td class="num">' + u.qtd +
+    '</td><td class="num">' + _decBR_(u.litros) + '</td><td class="num">' + _fmtInt_(u.km) + '</td><td class="num forte">' + _moedaBR_(u.valor) +
+    '</td><td class="num">' + _decBR_(pct(u.valor, d.valor)) + '%</td><td class="num">' + (u.kmL ? _decBR_(u.kmL) : '—') +
+    '</td><td class="num">' + (u.rsKm ? 'R$ ' + _decBR_(u.rsKm) : '—') + '</td><td class="num">' + _moedaBR_(u.porViatura) + '</td></tr>').join('');
+
+  const linhasViatura = porGasto.slice(0, 25).map((p, i) => '<tr><td class="num">' + (i + 1) + '</td><td class="mono">' + _esc_(p.placa) +
+    '</td><td>' + _esc_(p.modelo) + '</td><td>' + _esc_(p.unidade) + '</td><td class="num">' + p.qtd + '</td><td class="num">' + _decBR_(p.litros) +
+    '</td><td class="num">' + _fmtInt_(p.km) + '</td><td class="num forte">' + _moedaBR_(p.valor) + '</td><td class="num">' + (p.kmL ? _decBR_(p.kmL) : '—') +
+    '</td><td class="num">' + (p.rsKm ? 'R$ ' + _decBR_(p.rsKm) : '—') + '</td></tr>').join('');
+
+  const comparativo = a ? tabela(
+    [{ t: 'Indicador' }, { t: _rotMes_(anterior.ini) + ' a ' + _rotMes_(anterior.fim), n: true }, { t: _rotMes_(ini) + ' a ' + _rotMes_(fim), n: true }, { t: 'Variação', n: true }],
+    [['Gasto', a.valor, d.valor, 'moeda'], ['Litros', a.litros, d.litros, 'dec'], ['Km rodados', a.km, d.km, 'int'],
+     ['Abastecimentos', a.registros, d.registros, 'int'], ['Viaturas abastecidas', Object.keys(a.porPlaca).length, viaturas, 'int'],
+     ['Preço médio por litro', a.litros ? a.valor / a.litros : 0, precoMedio, 'moeda3'],
+     ['Custo por km', a.km ? a.valor / a.km : 0, d.km ? d.valor / d.km : 0, 'moeda2'],
+     ['Consumo médio (km/l)', a.litros ? a.km / a.litros : 0, d.litros ? d.km / d.litros : 0, 'dec'],
+     ['Volume médio por abastecimento', a.registros ? a.litros / a.registros : 0, d.registros ? d.litros / d.registros : 0, 'dec']
+    ].map(item => {
+      const rot = item[0], ant = item[1], atual = item[2], tipo = item[3];
+      const f = x => tipo === 'moeda' ? _moedaBR_(x) : tipo === 'moeda2' ? 'R$ ' + _decBR_(x) : tipo === 'moeda3' ? 'R$ ' + _decBR3_(x) : tipo === 'int' ? _fmtInt_(x) : _decBR_(x);
+      const p = ant > 0 ? (atual - ant) / ant * 100 : 0;
+      return '<tr><td>' + rot + '</td><td class="num">' + f(ant) + '</td><td class="num forte">' + f(atual) +
+        '</td><td class="num ' + (Math.abs(p) < 0.05 ? '' : (p > 0 ? 'sobe' : 'desce')) + '">' + (ant > 0 ? (p > 0 ? '+' : '') + _decBR_(p) + '%' : '—') + '</td></tr>';
+    }).join('')) : '<p class="nota">Sem dados no período anterior para comparação.</p>';
 
   const alertas = [
-    ['Abastecimentos de placas sem cadastro na ConsultaBD', ['Placa', 'Data', 'Posto', 'Valor'], d.alertas.semCadastro],
+    ['Abastecimento acima do preço máximo da ANP (glosa potencial)', ['Placa', 'Data', 'Combustível/UF', 'Detalhe'], d.alertas.acimaTetoAnp],
+    ['Placas sem cadastro na ConsultaBD', ['Placa', 'Data', 'Posto', 'Valor'], d.alertas.semCadastro],
+    ['Abastecimento em horário atípico (antes das 5h ou após as 22h)', ['Placa', 'Data', 'Hora', 'Local e valor'], d.alertas.foraExpediente],
     ['Quilometragem negativa', ['Placa', 'Data', 'Km informado', 'Valor'], d.alertas.kmNegativo],
     ['Quilometragem zerada', ['Placa', 'Data', 'Litros', 'Valor'], d.alertas.kmZero],
     ['Consumo acima de 25 km/l', ['Placa', 'Data', 'Consumo', 'Litros'], d.alertas.consumoAlto],
@@ -1908,72 +2051,151 @@ function _htmlRelatorioAbast_(d, ini, fim, sessao) {
     ['Divergência entre combustível cadastrado e abastecido', ['Placa', 'Data', 'Cadastro', 'Abastecido'], d.alertas.divergencia],
     ['Preço por litro acima de 15% da média do combustível', ['Placa', 'Data', 'Combustível', 'Preço'], d.alertas.precoAcima],
     ['Mais de dois abastecimentos no mesmo dia', ['Placa', 'Data', 'Ocorrência', ''], d.alertas.duplicidade]
-  ].map(([titulo, cabs, itens]) => !itens.length ? '' :
-    '<h3>' + titulo + ' <span class="conta">' + itens.length + '</span></h3><table><thead><tr>' + cabs.map(h => '<th>' + h + '</th>').join('') +
-    '</tr></thead><tbody>' + itens.slice(0, 60).map(l => '<tr>' + l.map(c => '<td>' + _esc_(c) + '</td>').join('') + '</tr>').join('') +
-    '</tbody></table>' + (itens.length > 60 ? '<p class="nota">Exibindo 60 de ' + itens.length + ' ocorrências.</p>' : '')).join('');
+  ].map(item => {
+    const titulo = item[0], cabs = item[1], itens = item[2];
+    if (!itens.length) return '';
+    return '<h3>' + titulo + ' <span class="conta">' + itens.length + '</span></h3><table><thead><tr>' + cabs.map(h => '<th>' + h + '</th>').join('') +
+      '</tr></thead><tbody>' + itens.slice(0, 40).map(l => '<tr>' + l.map(c => '<td>' + _esc_(c) + '</td>').join('') + '</tr>').join('') + '</tbody></table>' +
+      (itens.length > 40 ? '<p class="nota">Exibindo 40 de ' + itens.length + ' ocorrências.</p>' : '');
+  }).join('');
 
   const periodo = ini === fim ? _rotMesExtenso_(ini) : _rotMesExtenso_(ini) + ' a ' + _rotMesExtenso_(fim);
   const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, "dd/MM/yyyy 'às' HH:mm");
+  const intervaloMedio = d.intervalos.length ? d.intervalos.reduce((s, x) => s + x, 0) / d.intervalos.length : 0;
+  const sMes = {}, sKm = {};
+  meses.forEach(m => { sMes[m] = (d.porMes[m] || {}).valor || 0; sKm[m] = (d.porMes[m] || {}).km || 0; });
 
   return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><style>' +
-    '@page { size: A4 landscape; margin: 12mm 10mm; }' +
+    '@page { size: A4 landscape; margin: 11mm 9mm; }' +
     '* { box-sizing: border-box; }' +
-    'body { font-family: Arial, Helvetica, sans-serif; color: #14181F; font-size: 9.5pt; margin: 0; }' +
-    '.capa { background: #0B2C5C; color: #fff; padding: 16px 20px; border-bottom: 5px solid #F2B705; margin-bottom: 14px; }' +
-    '.capa h1 { margin: 0 0 2px; font-size: 19pt; } .capa .sub { font-size: 11pt; opacity: .85; } .capa .per { margin-top: 8px; font-size: 12pt; font-weight: bold; color: #F2B705; }' +
-    'h2 { color: #0B2C5C; font-size: 13pt; margin: 16px 0 6px; border-bottom: 2px solid #F2B705; padding-bottom: 3px; }' +
-    'h3 { color: #0B2C5C; font-size: 10.5pt; margin: 12px 0 4px; }' +
-    '.conta { background: #F2B705; color: #14181F; border-radius: 8px; padding: 1px 7px; font-size: 8.5pt; }' +
-    'table { width: 100%; border-collapse: collapse; margin-bottom: 6px; }' +
-    'th { background: #0B2C5C; color: #fff; text-align: left; padding: 4px 6px; font-size: 8.5pt; }' +
-    'td { padding: 3px 6px; border-bottom: 1px solid #E3E8F0; font-size: 8.5pt; }' +
-    'tr:nth-child(even) td { background: #F6F8FC; }' +
-    '.num { text-align: right; font-variant-numeric: tabular-nums; }' +
-    '.kpis { display: table; width: 100%; table-layout: fixed; border-spacing: 6px 0; margin-bottom: 6px; }' +
-    '.kpi { display: table-cell; background: #F6F8FC; border-left: 3px solid #0B2C5C; padding: 7px 9px; }' +
-    '.kpi .r { font-size: 7.5pt; text-transform: uppercase; letter-spacing: .06em; color: #5A6576; }' +
-    '.kpi .v { font-size: 13pt; font-weight: bold; color: #0B2C5C; }' +
-    '.barra { width: 22%; } .barra span { display: block; height: 9px; background: #2E6FD9; border-radius: 2px; }' +
-    '.nota { font-size: 8pt; color: #5A6576; margin: 2px 0 8px; }' +
-    '.rodape { margin-top: 14px; border-top: 1px solid #E3E8F0; padding-top: 5px; font-size: 7.5pt; color: #5A6576; }' +
+    'body { font-family: Arial, Helvetica, sans-serif; color: #14181F; font-size: 9pt; margin: 0; }' +
+    '.cab { display: table; width: 100%; border-bottom: 4px solid #F2B705; padding-bottom: 8px; margin-bottom: 10px; }' +
+    '.cab > div { display: table-cell; vertical-align: middle; } .cab .marca { width: 70px; }' +
+    '.cab h1 { margin: 0; font-size: 16pt; color: #0B2C5C; } .cab .org { font-size: 9.5pt; color: #5A6576; }' +
+    '.cab .per { text-align: right; font-size: 10.5pt; font-weight: bold; color: #0B2C5C; }' +
+    'h2 { color: #0B2C5C; font-size: 12pt; margin: 14px 0 6px; border-bottom: 2px solid #F2B705; padding-bottom: 3px; }' +
+    'h3 { color: #0B2C5C; font-size: 10pt; margin: 10px 0 4px; }' +
+    '.conta { background: #F2B705; color: #14181F; border-radius: 8px; padding: 1px 7px; font-size: 8pt; }' +
+    'table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }' +
+    'th { background: #0B2C5C; color: #fff; text-align: left; padding: 4px 6px; font-size: 8pt; }' +
+    'td { padding: 3px 6px; border-bottom: 1px solid #E3E8F0; font-size: 8pt; }' +
+    'tbody tr:nth-child(even) td { background: #F6F8FC; }' +
+    '.num { text-align: right; } .forte { font-weight: bold; } .mono { font-family: "Courier New", monospace; font-weight: bold; }' +
+    '.sobe { color: #B23A2E; font-weight: bold; } .desce { color: #2F9E6B; font-weight: bold; }' +
+    '.kpis { display: table; width: 100%; table-layout: fixed; border-spacing: 5px 0; margin-bottom: 6px; }' +
+    '.kpi { display: table-cell; background: #F6F8FC; border-left: 3px solid #0B2C5C; padding: 6px 8px; }' +
+    '.kpi.alerta { border-left-color: #B23A2E; } .kpi.bom { border-left-color: #2F9E6B; }' +
+    '.kpi .r { font-size: 7pt; text-transform: uppercase; letter-spacing: .05em; color: #5A6576; }' +
+    '.kpi .v { font-size: 12.5pt; font-weight: bold; color: #0B2C5C; white-space: nowrap; }' +
+    '.kpi .s { font-size: 7pt; color: #5A6576; }' +
+    '.var { font-size: 7pt; } .var.sobe { color: #B23A2E; } .var.desce { color: #2F9E6B; }' +
+    'table.graf td { border: 0; padding: 2px 4px; } table.graf .rot { width: 34%; font-size: 8pt; }' +
+    'table.graf .bar { width: 46%; } table.graf .bar .preench { height: 11px; border-radius: 2px; }' +
+    'table.graf .val { width: 20%; text-align: right; font-size: 8pt; font-weight: bold; white-space: nowrap; }' +
+    'table.colunas { table-layout: fixed; } table.colunas td { border: 0; text-align: center; vertical-align: bottom; padding: 0 2px; }' +
+    '.pilha { height: 80px; }' +
+    '.col { display: inline-block; width: 11px; vertical-align: bottom; border-radius: 2px 2px 0 0; }' +
+    '.col.a { background: #0B2C5C; } .col.b { background: #F2B705; }' +
+    '.vlr { font-size: 6.5pt; margin-top: 2px; } .lbl { font-size: 6.5pt; color: #5A6576; }' +
+    'table.faixa { table-layout: fixed; margin-bottom: 3px; } table.faixa td { height: 14px; border: 0; padding: 0; }' +
+    '.legenda { font-size: 7.5pt; color: #5A6576; margin-bottom: 8px; }' +
+    '.legenda span { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 3px 0 8px; }' +
+    '.legenda span.a { background: #0B2C5C; } .legenda span.b { background: #F2B705; }' +
+    '.col2 { display: table; width: 100%; border-spacing: 8px 0; } .col2 > div { display: table-cell; width: 50%; vertical-align: top; }' +
+    '.nota { font-size: 7.5pt; color: #5A6576; margin: 2px 0 8px; }' +
+    '.rodape { margin-top: 12px; border-top: 1px solid #E3E8F0; padding-top: 5px; font-size: 7pt; color: #5A6576; }' +
     '.quebra { page-break-before: always; }' +
     '</style></head><body>' +
-    '<div class="capa"><h1>Relatório de Abastecimento</h1><div class="sub">16ª Superintendência da Polícia Rodoviária Federal — Ceará</div>' +
-    '<div class="per">' + periodo + '</div></div>' +
 
+    '<div class="cab"><div class="marca">' + _brasaoHtml_() + '</div>' +
+    '<div><h1>Relatório de Abastecimento</h1><div class="org">16ª Superintendência da Polícia Rodoviária Federal — Ceará</div></div>' +
+    '<div class="per">' + periodo + '<br><span style="font-weight:normal; font-size:8pt; color:#5A6576">' + nMeses + ' competência(s)</span></div></div>' +
+
+    '<h2>Panorama</h2>' +
     '<div class="kpis">' +
-    '<div class="kpi"><div class="r">Valor total</div><div class="v">' + _moedaBR_(d.valor) + '</div></div>' +
-    '<div class="kpi"><div class="r">Litros</div><div class="v">' + _decBR_(d.litros) + '</div></div>' +
-    '<div class="kpi"><div class="r">Km rodados</div><div class="v">' + _fmtInt_(d.km) + '</div></div>' +
-    '<div class="kpi"><div class="r">Consumo médio</div><div class="v">' + consumo(d.km, d.litros) + '</div></div>' +
-    '<div class="kpi"><div class="r">Custo por km</div><div class="v">' + porKm(d.valor, d.km) + '</div></div>' +
-    '<div class="kpi"><div class="r">Abastecimentos</div><div class="v">' + _fmtInt_(d.registros) + '</div></div>' +
-    '<div class="kpi"><div class="r">Viaturas</div><div class="v">' + Object.keys(d.porPlaca).length + '</div></div>' +
+    kpi('Gasto total', _moedaBR_(d.valor), a ? variacao(d.valor, a.valor) : _moedaBR_(d.valor / nMeses) + ' por mês') +
+    kpi('Litros', _decBR_(d.litros), _decBR_(d.litros / nMeses) + ' por mês') +
+    kpi('Km rodados', _fmtInt_(d.km), _fmtInt_(d.km / nMeses) + ' por mês') +
+    kpi('Consumo médio', consumo(d.km, d.litros), 'km ÷ litros') +
+    kpi('Custo por km', porKm(d.valor, d.km), 'no período') +
+    kpi('Preço médio por litro', 'R$ ' + _decBR3_(precoMedio), 'ponderado por litro') +
+    '</div><div class="kpis">' +
+    kpi('Abastecimentos', _fmtInt_(d.registros), _decBR_(d.registros / Math.max(1, viaturas)) + ' por viatura') +
+    kpi('Viaturas abastecidas', _fmtInt_(viaturas), _moedaBR_(d.valor / Math.max(1, viaturas)) + ' por viatura') +
+    kpi('Volume médio', _decBR_(d.litros / Math.max(1, d.registros)) + ' l', 'por abastecimento') +
+    kpi('Intervalo médio', intervaloMedio ? _decBR_(intervaloMedio) + ' dias' : '—', 'entre abastecimentos da viatura') +
+    kpi('Fora do Ceará', _fmtInt_(d.foraUf.qtd), _moedaBR_(d.foraUf.valor) + ' · ' + _decBR_(pct(d.foraUf.valor, d.valor)) + '%', d.foraUf.qtd ? 'alerta' : 'bom') +
+    kpi('Glosa potencial (ANP)', _moedaBR_(d.glosaPotencial), d.itensGlosa + ' acima do teto', d.glosaPotencial ? 'alerta' : 'bom') +
     '</div>' +
 
-    '<h2>Evolução mensal</h2><table><thead><tr><th>Competência</th><th class="num">Abast.</th><th class="num">Litros</th><th class="num">Km</th><th class="num">Valor</th><th class="num">Consumo</th><th></th></tr></thead><tbody>' + barras + '</tbody></table>' +
+    '<h2>Evolução mensal</h2>' + colunas(meses, sMes, sKm, _moedaBR_, 'Gasto (R$)', 'Km rodados') +
 
-    '<h2>Consolidado por unidade</h2>' + tabela('', ['Unidade'].concat(cabPadrao.slice(1)), lista(d.porUnidade), colPadrao) +
+    '<div class="col2"><div><h3>Participação por combustível</h3>' +
+    faixa100(lista(d.porComb).map(x => ({ rotulo: x.chave, valor: x.valor }))) +
+    '<h3>Gasto por uso SIPAC</h3>' +
+    barrasH(lista(d.porUso, 6).map(x => ({ rotulo: x.chave, valor: x.valor, texto: _moedaBR_(x.valor) })), '#2E6FD9') +
+    '</div><div><h3>Gasto por unidade</h3>' +
+    barrasH(unidades.slice(0, 8).map(x => ({ rotulo: x.chave, valor: x.valor, texto: _moedaBR_(x.valor) })), '#0B2C5C') +
+    '<h3>Gasto por tipo de veículo</h3>' +
+    barrasH(lista(d.porTipo, 6).map(x => ({ rotulo: x.chave, valor: x.valor, texto: _moedaBR_(x.valor) })), '#F2B705') +
+    '</div></div>' +
 
-    '<div class="quebra"></div><h2>Consolidados</h2>' +
-    tabela('Por combustível', ['Combustível'].concat(cabPadrao.slice(1)), lista(d.porComb), colPadrao) +
-    tabela('Por uso SIPAC', ['Uso'].concat(cabPadrao.slice(1)), lista(d.porUso), colPadrao) +
-    tabela('Por tipo de veículo', ['Tipo'].concat(cabPadrao.slice(1)), lista(d.porTipo), colPadrao) +
+    '<div class="quebra"></div><h2>Comparativo com o período anterior</h2>' + comparativo +
 
-    '<div class="quebra"></div><h2>Rankings</h2>' +
-    tabela('Vinte viaturas com maior gasto', ['Placa', 'Modelo', 'Unidade', 'Abast.', 'Litros', 'Km', 'Valor', 'Consumo', 'R$/km'], lista(d.porPlaca, 20),
-      [{ v: i => _esc_(i.chave) }, { v: i => _esc_(i.modelo || '—') }, { v: i => _esc_(i.unidade || 'SEM CADASTRO') }, { v: i => String(i.qtd), num: true },
-       { v: i => _decBR_(i.litros), num: true }, { v: i => _fmtInt_(i.km), num: true }, { v: i => _moedaBR_(i.valor), num: true },
-       { v: i => consumo(i.km, i.litros), num: true }, { v: i => porKm(i.valor, i.km), num: true }]) +
-    tabela('Quinze postos com maior faturamento', ['Posto'].concat(cabPadrao.slice(1)), lista(d.porPosto, 15), colPadrao) +
-    tabela('Quinze cidades com maior gasto', ['Cidade'].concat(cabPadrao.slice(1)), lista(d.porCidade, 15), colPadrao) +
+    '<h2>Eficiência por unidade</h2>' +
+    tabela([{ t: 'Unidade' }, { t: 'Viaturas', n: true }, { t: 'Abast.', n: true }, { t: 'Litros', n: true }, { t: 'Km', n: true },
+            { t: 'Gasto', n: true }, { t: '% do total', n: true }, { t: 'km/l', n: true }, { t: 'R$/km', n: true }, { t: 'Gasto por viatura', n: true }], linhasUnidade) +
+
+    '<div class="col2"><div><h3>Melhor consumo — viaturas (mín. 500 km)</h3>' +
+    barrasH(eficientes.slice(0, 8).map(p => ({ rotulo: p.placa + ' · ' + p.modelo, valor: p.kmL, texto: _decBR_(p.kmL) + ' km/l' })), '#2F9E6B') +
+    '<h3>Consumo médio por modelo</h3>' +
+    barrasH(modelos.sort((x, y) => y.kmL - x.kmL).slice(0, 8).map(m => ({ rotulo: m.chave + ' (' + m.placas + ')', valor: m.kmL, texto: _decBR_(m.kmL) + ' km/l' })), '#00A3B5') +
+    '</div><div><h3>Maior custo por km — viaturas (mín. 500 km)</h3>' +
+    barrasH(custosos.slice(0, 8).map(p => ({ rotulo: p.placa + ' · ' + p.modelo, valor: p.rsKm, texto: 'R$ ' + _decBR_(p.rsKm) })), '#B23A2E') +
+    '<h3>Maior gasto por viatura</h3>' +
+    barrasH(porGasto.slice(0, 8).map(p => ({ rotulo: p.placa + ' · ' + p.unidade, valor: p.valor, texto: _moedaBR_(p.valor) })), '#7D5BA6') +
+    '</div></div>' +
+
+    '<div class="quebra"></div><h2>Viaturas — 25 maiores gastos</h2>' +
+    '<p class="nota">As dez viaturas de maior gasto concentram ' + _moedaBR_(top10) + ', ' + _decBR_(pct(top10, d.valor)) + '% do total do período.</p>' +
+    tabela([{ t: '#', n: true }, { t: 'Placa' }, { t: 'Modelo' }, { t: 'Unidade' }, { t: 'Abast.', n: true }, { t: 'Litros', n: true },
+            { t: 'Km', n: true }, { t: 'Gasto', n: true }, { t: 'km/l', n: true }, { t: 'R$/km', n: true }], linhasViatura) +
+
+    (semAbastecer.length ? '<h3>Viaturas disponíveis sem abastecimento no período <span class="conta">' + semAbastecer.length + '</span></h3>' +
+      '<p class="nota">' + _esc_(semAbastecer.slice(0, 60).map(v => v.placa + ' (' + (v.unidadeCurta || '—') + ')').join(' · ')) +
+      (semAbastecer.length > 60 ? ' …' : '') + '</p>' : '') +
+
+    '<div class="quebra"></div><h2>Onde e quando se abastece</h2>' +
+    '<div class="col2"><div><h3>Postos com maior faturamento</h3>' +
+    barrasH(lista(d.porPosto, 10).map(x => ({ rotulo: x.chave, valor: x.valor, texto: _moedaBR_(x.valor) })), '#2E6FD9') +
+    '</div><div><h3>Cidades</h3>' +
+    barrasH(lista(d.porCidade, 10).map(x => ({ rotulo: x.chave, valor: x.valor, texto: _moedaBR_(x.valor) })), '#7D5BA6') +
+    '</div></div>' +
+    '<div class="col2"><div><h3>Abastecimentos por dia da semana</h3>' +
+    barrasH(['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'].filter(k => d.porDiaSemana[k])
+      .map(k => ({ rotulo: k, valor: d.porDiaSemana[k].qtd, texto: _fmtInt_(d.porDiaSemana[k].qtd) })), '#0B2C5C') +
+    '</div><div><h3>Abastecimentos por faixa de horário</h3>' +
+    barrasH(['Madrugada (0h–6h)', 'Manhã (6h–12h)', 'Tarde (12h–18h)', 'Noite (18h–24h)', 'Sem horário'].filter(k => d.porFaixaHora[k])
+      .map(k => ({ rotulo: k, valor: d.porFaixaHora[k].qtd, texto: _fmtInt_(d.porFaixaHora[k].qtd) })), '#F2B705') +
+    '</div></div>' +
+
+    '<h3>Preço médio pago por combustível' + (Object.keys(d.tetoPorComb).length ? ' × teto da ANP' : '') + '</h3>' +
+    tabela([{ t: 'Combustível' }, { t: 'Litros', n: true }, { t: 'Preço médio pago', n: true }, { t: 'Teto médio ANP', n: true }, { t: 'Diferença', n: true }, { t: 'Gasto', n: true }],
+      lista(d.porComb).map(x => {
+        const preco = d.precoPorComb[x.chave] || 0;
+        const t = d.tetoPorComb[x.chave];
+        const teto = t && t.litros ? t.soma / t.litros : 0;
+        const dif = teto ? (preco - teto) / teto * 100 : 0;
+        return '<tr><td>' + _esc_(x.chave) + '</td><td class="num">' + _decBR_(x.litros) + '</td><td class="num forte">R$ ' + _decBR3_(preco) +
+          '</td><td class="num">' + (teto ? 'R$ ' + _decBR3_(teto) : '—') + '</td><td class="num ' + (dif > 0 ? 'sobe' : dif < 0 ? 'desce' : '') + '">' +
+          (teto ? (dif > 0 ? '+' : '') + _decBR_(dif) + '%' : '—') + '</td><td class="num">' + _moedaBR_(x.valor) + '</td></tr>';
+      }).join('')) +
 
     (d.totalAlertas ? '<div class="quebra"></div><h2>Alertas e inconsistências <span class="conta">' + d.totalAlertas + '</span></h2>' +
-      '<p class="nota">Critérios automáticos de conferência aplicados a todos os registros do período.</p>' + alertas : '') +
+      '<p class="nota">Conferências automáticas aplicadas a todos os registros do período. Servem como roteiro de apuração, não como conclusão.</p>' + alertas : '') +
 
     '<div class="rodape">Gerado pelo Painel da Frota — 16ª SPRF/CE em ' + agora + ' por ' + _esc_(sessao.email) +
-    '. Fonte: AbastBD (GoodManager/Ticket Log) e ConsultaBD.</div>' +
+    '. Fontes: AbastBD (GoodManager/Ticket Log), ConsultaBD' + (Object.keys(d.tetoPorComb).length ? ' e série histórica de preços da ANP' : '') + '.</div>' +
     '</body></html>';
 }
 
