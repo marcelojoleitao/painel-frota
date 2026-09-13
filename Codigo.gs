@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.13.5';
+const CODIGO_VERSAO = '2.14.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3068,43 +3068,54 @@ function gerarRelatorioAceites(token, competencia) {
 
     const acidentes = _placasComAcidenteAberto_();
     const orcamentos = _orcamentosPorOs_(_ssManut_());
-    const itens = [], porTipo = {}, porUnidade = {}, porOficina = {}, alerta = {};
-    let total = 0, totalPecas = 0, totalMo = 0;
+    const itens = [], porTipo = {}, porUnidade = {}, porOficina = {}, alerta = {}, vistos = {}, duplicadas = [];
+    const temColunaComp = mapa.idx.competencia >= 0;
+    let total = 0, totalPecas = 0, totalMo = 0, semEstabelecimento = 0;
     for (let r = mapa.linhaCab + 1; r < valores.length; r++) {
       const l = valores[r];
       const os = String(g(l, 'os') || '').trim();
       if (!os) continue;
-      const compLinha = _compSegura_(g(l, 'competencia')) || _compSegura_(g(l, 'conclusao')) || _compSegura_(g(l, 'aprovacao'));
+      // A competência é a da coluna própria do AceitesDB. Só quando ela não
+      // existe na base é que caímos na data de conclusão — assim o total bate
+      // com a aba Aceites Mensal, que usa exatamente essa coluna.
+      const compLinha = temColunaComp ? _compSegura_(g(l, 'competencia'))
+                                      : (_compSegura_(g(l, 'conclusao')) || _compSegura_(g(l, 'aprovacao')));
       if (compLinha !== comp) continue;
+      const chaveOs = String(os).replace(/\D/g, '');
+      if (vistos[chaveOs]) { duplicadas.push(os); continue; }
+      vistos[chaveOs] = true;
       const placa = String(g(l, 'placa') || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
       const valor = _num_(g(l, 'valor')) || 0;
       const tipo = String(g(l, 'tipo') || '').trim() || 'Não informado';
       const unidade = String(g(l, 'unidade') || '').trim() || 'Sem unidade';
-      const oficina = String(g(l, 'estabelecimento') || '').trim() || 'Sem estabelecimento';
+
       const acidente = acidentes[placa] !== undefined;
       if (acidente) alerta[placa] = acidentes[placa];
-      const orc = orcamentos[String(os).replace(/\D/g, '')] || null;
+      const orc = orcamentos[chaveOs] || null;
+      const estabelecimento = (String(g(l, 'estabelecimento') || '').trim()) || (orc ? orc.estabelecimento : '') || '';
+      if (!estabelecimento) semEstabelecimento++;
       itens.push({ unidade: unidade, os: os, placa: placa, modelo: String(g(l, 'modelo') || '').trim(),
-        oficina: oficina || (orc ? orc.estabelecimento : ''), aprovacao: _dataTxt_(g(l, 'aprovacao')), inicio: _dataTxt_(g(l, 'inicio')),
+        oficina: estabelecimento || '—', aprovacao: _dataTxt_(g(l, 'aprovacao')), inicio: _dataTxt_(g(l, 'inicio')),
         conclusao: _dataTxt_(g(l, 'conclusao')), valor: valor, tipo: tipo, acidente: acidente,
         pecas: orc ? orc.pecas : null, mo: orc ? orc.mo : null });
       total += valor;
       if (orc) { totalPecas += orc.pecas; totalMo += orc.mo; }
       const soma = (obj, chave) => { const a = obj[chave] || (obj[chave] = { valor: 0, qtd: 0 }); a.valor += valor; a.qtd++; };
-      soma(porTipo, tipo); soma(porUnidade, unidade); soma(porOficina, oficina);
+      soma(porTipo, tipo); soma(porUnidade, unidade); soma(porOficina, estabelecimento || 'Sem estabelecimento informado');
     }
     if (!itens.length) return { ok: false, erro: 'Nenhuma ordem de serviço com aceite na competência ' + comp + '.' +
       (mapa.porNome ? '' : ' (As colunas do AceitesDB não foram reconhecidas pelo nome — rode diagnosticarRelatorios() no editor.)') };
 
     itens.sort((a, b) => a.unidade.localeCompare(b.unidade) || b.valor - a.valor);
-    const dados = { comp: comp, itens: itens, total: total, totalPecas: totalPecas, totalMo: totalMo, porTipo: porTipo, porUnidade: porUnidade, porOficina: porOficina, acidentes: alerta };
+    const dados = { comp: comp, itens: itens, total: total, totalPecas: totalPecas, totalMo: totalMo, semEstabelecimento: semEstabelecimento, duplicadas: duplicadas, porTipo: porTipo, porUnidade: porUnidade, porOficina: porOficina, acidentes: alerta };
     Logger.log('Relatório resumo ' + comp + ': ' + itens.length + ' OS, total ' + total);
     const html = _htmlRelatorioAceites_(dados, p.sessao);
     const nome = 'Relatorio_OS_Resumo_' + comp.replace('/', '-') + '.pdf';
     const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);
     _logAcao_(p.ss, p.sessao.email, 'Relatório de OS (resumo)', '', comp, _moedaBR_(total) + ' | ' + itens.length + ' OS');
     return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '',
-      total: total, ordens: itens.length, pecas: totalPecas, mo: totalMo,
+      total: total, ordens: itens.length, pecas: totalPecas, mo: totalMo, duplicadas: duplicadas.length, semEstabelecimento: semEstabelecimento,
+      competenciaPor: temColunaComp ? 'coluna Competência do AceitesDB' : 'data de conclusão',
       tipos: Object.keys(porTipo).map(k => ({ tipo: k, valor: porTipo[k].valor, qtd: porTipo[k].qtd })),
       acidentes: Object.keys(alerta).map(k => ({ placa: k, processo: alerta[k] })) };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
@@ -3205,7 +3216,9 @@ function _htmlRelatorioAceites_(d, sessao) {
     corpo + '</tbody></table>' +
     '<table class="total"><tr><td>TOTAL GERAL</td><td class="num" style="text-align:right">' + _moedaBR_(d.total) + '</td></tr></table>' +
     '<div class="rodape">Gerado pelo Painel da Frota — 16ª SPRF/CE em ' + agora + ' por ' + _esc_(sessao.email) +
-    '. Fontes: AceitesDB (importação dos aceites) e aba Acidentes da planilha de gestão.</div>' +
+    '. Fontes: AceitesDB (importação dos aceites), OrçamentosDB e aba Acidentes.' +
+    (d.duplicadas && d.duplicadas.length ? ' ' + d.duplicadas.length + ' ordem(ns) repetida(s) na base foram contadas uma única vez: ' + _esc_(d.duplicadas.slice(0, 12).join(', ')) + '.' : '') +
+    (d.semEstabelecimento ? ' ' + d.semEstabelecimento + ' ordem(ns) sem estabelecimento informado na base.' : '') + '</div>' +
     '</body></html>';
 }
 

@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.13.5';
+const VERSAO_PAINEL = '2.14.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2505,7 +2505,8 @@ function gerarAceites() {
         <div class="dado"><div class="k">Ordens de serviço</div><div class="v">${fmtInt(r.ordens)}</div></div>
         ${r.pecas || r.mo ? `<div class="dado"><div class="k">Peças · mão de obra</div><div class="v" style="font-size:14px">${fmtMoeda(r.pecas)} · ${fmtMoeda(r.mo)}</div></div>` : ''}
         ${r.tipos.map(t => `<div class="dado"><div class="k">${esc(t.tipo)}</div><div class="v">${fmtMoeda(t.valor)} <small style="font-weight:500; color:var(--tinta-suave)">${t.qtd} OS</small></div></div>`).join('')}
-      </div>` + (r.acidentes && r.acidentes.length
+      </div>
+      <div class="cartao-dica">Competência lida da ${esc(r.competenciaPor || '')}.${r.duplicadas ? ' ' + r.duplicadas + ' OS repetida(s) na base contada(s) uma vez.' : ''}${r.semEstabelecimento ? ' ' + r.semEstabelecimento + ' OS sem estabelecimento (OrçamentosDB incompleto).' : ''}</div>` + (r.acidentes && r.acidentes.length
         ? `<div class="alerta-item" style="margin-top:10px; cursor:default"><span class="t">PROCESSO DE ACIDENTE EM ABERTO</span><br>
              ${r.acidentes.map(a => `<b style="font-family:var(--fonte-dados)">${esc(a.placa)}</b>${a.processo ? ' — ' + esc(a.processo) : ''}`).join(' · ')}
              <div style="margin-top:4px">Confira se a ordem de serviço é do acidente antes de encaminhar o pagamento.</div></div>`
