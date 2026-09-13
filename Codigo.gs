@@ -90,6 +90,10 @@ function doGet() {
   let pagina = _arquivoHtml_('App');
   pagina = pagina.replace(/<\?=\s*titulo\s*\?>/g, CONFIG.TITULO);
   pagina = pagina.replace(/<\?!=\s*incluir\(\s*'([^']+)'\s*\);?\s*\?>/g, function (m, nome) { return _arquivoHtml_(nome); });
+  // carimbo escrito pelo servidor: aparece mesmo que o JavaScript falhe
+  const v = (pagina.match(/VERSAO_PAINEL\s*=\s*'([^']+)'/) || [])[1] || '?';
+  const origem = (PropertiesService.getScriptProperties().getProperty('HTML_ORIGEM') || HTML_ORIGEM_PADRAO) === 'github' ? 'GitHub' : 'projeto';
+  pagina = pagina.replace(/\{\{VERSAO\}\}/g, 'v' + v + ' — ' + origem);
   return HtmlService.createHtmlOutput(pagina)
     .setTitle(CONFIG.TITULO)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, maximum-scale=1')

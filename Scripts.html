@@ -9,12 +9,25 @@
 function el(id) { const e = document.getElementById(id); if (!e) console.warn('Elemento ausente: #' + id); return e; }
 function htm(id, h) { const e = el(id); if (e) e.innerHTML = h; }
 function txt(id, t) { const e = el(id); if (e) e.textContent = t; }
+
+/* Erro de JavaScript vira aviso visível — sem isso a tela fica muda e parece "não atualizou". */
+window.addEventListener('error', function (ev) {
+  const msg = (ev.message || 'erro') + (ev.filename ? ' — linha ' + ev.lineno : '');
+  let caixa = document.getElementById('aviso-erro');
+  if (!caixa) {
+    caixa = document.createElement('div');
+    caixa.id = 'aviso-erro';
+    caixa.style.cssText = 'position:fixed; left:10px; right:10px; bottom:10px; z-index:9999; background:#B23A2E; color:#fff; padding:10px 14px; border-radius:8px; font:13px/1.4 -apple-system,Segoe UI,Roboto,Arial,sans-serif; box-shadow:0 6px 20px rgba(0,0,0,.3)';
+    document.body.appendChild(caixa);
+  }
+  caixa.textContent = 'Falha no painel: ' + msg;
+});
 function cls(id, c, on) { const e = el(id); if (e) e.classList.toggle(c, !!on); }
 function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.4.4';
+const VERSAO_PAINEL = '2.4.5';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -790,7 +803,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (p && p.classList.contains('aberta') && !e.target.closest('#painel-filtros') && !e.target.closest('#btn-filtros')) p.classList.remove('aberta');
   });
   let ajusteTimer; window.addEventListener('resize', () => { clearTimeout(ajusteTimer); ajusteTimer = setTimeout(ajustarKpis, 150); });
-  txt('login-versao', 'v' + VERSAO_PAINEL + ' — servido via GitHub');
   iniciarSessao();
 });
 
@@ -808,7 +820,6 @@ function iniciarSessao() {
 }
 
 function mostrarTela(qual) {
-  txt('login-versao', 'v' + VERSAO_PAINEL + ' — servido via GitHub');
   cls('tela-login', 'oculto', qual !== 'login');
   cls('tela-carregando', 'oculto', qual !== 'carregando');
   cls('tela-app', 'oculto', qual !== 'app');
