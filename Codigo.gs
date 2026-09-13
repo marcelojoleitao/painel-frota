@@ -91,6 +91,7 @@ function doGet() {
   pagina = pagina.replace(/<\?=\s*titulo\s*\?>/g, CONFIG.TITULO);
   pagina = pagina.replace(/<\?!=\s*incluir\(\s*'([^']+)'\s*\);?\s*\?>/g, function (m, nome) { return _arquivoHtml_(nome); });
   // carimbo escrito pelo servidor: aparece mesmo que o JavaScript falhe
+  Logger.log('doGet: página montada com ' + pagina.length + ' caracteres.');
   const v = (pagina.match(/VERSAO_PAINEL\s*=\s*'([^']+)'/) || [])[1] || '?';
   const origem = (PropertiesService.getScriptProperties().getProperty('HTML_ORIGEM') || HTML_ORIGEM_PADRAO) === 'github' ? 'GitHub' : 'projeto';
   pagina = pagina.replace(/\{\{VERSAO\}\}/g, 'v' + v + ' — ' + origem);
@@ -105,6 +106,12 @@ function incluir(nome) {
 }
 
 function _arquivoHtml_(nome) {
+  const conteudo = _arquivoHtmlInterno_(nome);
+  Logger.log('  ' + nome + ': ' + conteudo.length + ' caracteres servidos');
+  return conteudo;
+}
+
+function _arquivoHtmlInterno_(nome) {
   const origem = PropertiesService.getScriptProperties().getProperty('HTML_ORIGEM') || HTML_ORIGEM_PADRAO;
   if (origem === 'github') {
     const chave = 'html_' + nome;
@@ -122,8 +129,9 @@ function _arquivoHtml_(nome) {
         if (p === undefined || p === null) { completo = false; break; }
         texto += p;
       }
-      if (completo && texto.length) return texto;
-      Logger.log('Cache de ' + nome + ' incompleto — descartado e rebuscado.');
+      const esperado = parseInt(cache.get(chave + '_len'), 10) || 0;
+      if (completo && texto.length && texto.length === esperado) return texto;
+      Logger.log('Cache de ' + nome + ' inválido (tinha ' + texto.length + ' de ' + esperado + ' caracteres) — descartado e rebuscado.');
       cache.removeAll(chaves.concat([chave + '_n']));
     }
 
@@ -136,6 +144,7 @@ function _arquivoHtml_(nome) {
         let n2 = 0;
         for (let i = 0; i < texto.length; i += 30000) cache.put(chave + '_' + (n2++), texto.substring(i, i + 30000), HTML_CACHE_SEG);
         cache.put(chave + '_n', String(n2), HTML_CACHE_SEG);
+        cache.put(chave + '_len', String(texto.length), HTML_CACHE_SEG);
       } catch (e) { Logger.log('Cache do HTML ' + nome + ' não gravado (' + e + ') — servindo direto do GitHub.'); }
       return texto;
     }
@@ -168,7 +177,7 @@ function diagnosticarHtml() {
 function limparCacheHtml() {
   const cache = CacheService.getScriptCache();
   ['App', 'Login', 'Estilos', 'Scripts'].forEach(nome => {
-    const lista = ['html_' + nome + '_n']; for (let i = 0; i < 120; i++) lista.push('html_' + nome + '_' + i);
+    const lista = ['html_' + nome + '_n', 'html_' + nome + '_len']; for (let i = 0; i < 120; i++) lista.push('html_' + nome + '_' + i);
     cache.removeAll(lista);
   });
   return 'Cache de HTML limpo — próximo acesso baixa do GitHub.';
