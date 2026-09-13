@@ -14,7 +14,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.2.2';
+const VERSAO_PAINEL = '2.2.3';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -271,6 +271,7 @@ function renderAba() {
   else if (ESTADO.aba === 'os') renderOS(lista);
   else if (ESTADO.aba === 'pagamentos') renderPagamentos();
   else if (ESTADO.aba === 'patrimonio') renderPatrimonio(lista);
+  ajustarKpis();
 }
 
 /* ============================================================
@@ -325,8 +326,21 @@ function pct(a, b) { return b ? Math.round(a / b * 100) + '% do exibido' : '—'
 function kpi(rotulo, valor, sub, cor, filtro, estatico) {
   const ativo = filtro && ESTADO.filtros[filtro.k] && [].concat(filtro.v).every(x => ESTADO.filtros[filtro.k].has(String(x)));
   return `<div class="kpi ${cor || ''} ${ativo ? 'ativo' : ''} ${estatico ? 'estatico' : ''}" ${filtro ? `data-k="${filtro.k}" data-v='${JSON.stringify([].concat(filtro.v))}'` : ''}>
-    <div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor ${String(valor).length >= 15 ? 'longo' : String(valor).length >= 11 ? 'medio' : ''}">${valor}</div><div class="kpi-sub">${sub}</div></div>`;
+    <div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${valor}</div><div class="kpi-sub">${sub}</div></div>`;
 }
+/** Fonte única por grupo de KPIs: reduz em degraus até o maior valor caber, igual para todos. */
+function ajustarKpis() {
+  document.querySelectorAll('.kpis').forEach(grupo => {
+    const valores = Array.from(grupo.querySelectorAll('.kpi-valor'));
+    if (!valores.length) return;
+    const degraus = [24, 21, 18, 16, 14, 12];
+    for (const t of degraus) {
+      valores.forEach(v => { v.style.fontSize = t + 'px'; });
+      if (!valores.some(v => v.scrollWidth > v.clientWidth + 1)) break;
+    }
+  });
+}
+
 function ligarKpis() {
   document.querySelectorAll('.kpi[data-k]').forEach(k => k.addEventListener('click', () => {
     const vals = JSON.parse(k.dataset.v);
@@ -580,6 +594,7 @@ function renderPatrimonio(lista) {
   }
 
   c.querySelectorAll('tr.linha[data-placa]').forEach(tr => tr.addEventListener('click', () => abrirFicha(tr.dataset.placa)));
+  ajustarKpis();
 }
 
 function chaveData(d) { return String(d || '').split(' ')[0].split('/').reverse().join(''); }
@@ -765,6 +780,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const p = el('painel-filtros');
     if (p && p.classList.contains('aberta') && !e.target.closest('#painel-filtros') && !e.target.closest('#btn-filtros')) p.classList.remove('aberta');
   });
+  let ajusteTimer; window.addEventListener('resize', () => { clearTimeout(ajusteTimer); ajusteTimer = setTimeout(ajustarKpis, 150); });
   iniciarSessao();
 });
 
@@ -996,6 +1012,7 @@ function renderUso(lista) {
   g.appendChild(cartaoAlertas(u.abastAlertas, porPlaca, ini, fim));
   g.appendChild(cartaoConferencia(lista, u));
   if (disponiveisSem.length) g.appendChild(cartaoListaPlacas('Disponíveis sem abastecimento no período', disponiveisSem));
+  ajustarKpis();
 }
 
 /* agregado genérico: soma de valor por chave; clicável quando a chave é uma dimensão */
@@ -1157,6 +1174,7 @@ function renderManut(lista) {
   g.appendChild(cartaoCustoKm('Maior custo de manutenção por km (mín. 1.000 km)', regs, veic, kmPorPlaca));
   g.appendChild(cartaoRetornos(retornos));
   g.appendChild(cartaoTabelaManut(regs, veic));
+  ajustarKpis();
 }
 
 /* gasto médio por viatura dentro do grupo (soma ÷ nº de placas distintas) */
