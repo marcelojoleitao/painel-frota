@@ -70,6 +70,8 @@ const CONFIG = {
   // Demais destinos de importação (herdados do importador da planilha)
   ID_MANUT_DB:    '1WpI_krrzyB65lfN6lYZHr9aD1-x0cSUg_g61xGgvNrk',   // DetalhamentoDB, AceitesDB
   ABA_DETALHE:    'DetalhamentoDB',
+  ABA_ORCAMENTOS: 'OrçamentosDB',
+  ABA_ACIDENTES:  'Acidentes',   // na planilha-mãe: col B = placa, col C vazia = processo em aberto
   ABA_ACEITES:    'AceitesDB',
 
   // Glosa de preços: tudo passa a viver na planilha-mãe (abas criadas pela migração)
@@ -2519,6 +2521,153 @@ function _tituloCombustivel_(c) {
   return c.charAt(0) + c.slice(1).toLowerCase();
 }
 function _decBR3_(n) { return (n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 }); }
+
+
+/* ============================================================
+   RELATÓRIO DE ORDENS DE SERVIÇO — ANALÍTICO (peças)
+   Porte do "Gerar Relatório de Peças" que ficava no menu da
+   planilha de aceites: lê o DetalhamentoDB, agrupa por veículo
+   e família de peça, e sai em PDF em vez de escrever numa aba.
+   ============================================================ */
+
+/** Placas com processo de acidente ainda em aberto (aba Acidentes: col. B preenchida, col. C vazia). */
+function _placasComAcidenteAberto_() {
+  const mapa = {};
+  try {
+    const aba = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_ACIDENTES);
+    if (!aba || aba.getLastRow() < 2) return mapa;
+    aba.getRange(2, 1, aba.getLastRow() - 1, 3).getValues().forEach(l => {
+      const placa = String(l[1] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      const pago = String(l[2] || '').trim();
+      if (placa && !pago) mapa[placa] = String(l[0] || '').trim();   // col. A = referência do processo
+    });
+  } catch (e) { Logger.log('Aba Acidentes: ' + e); }
+  return mapa;
+}
+
+function gerarRelatorioPecas(token, competencia, placa) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const comp = _formatarCompetencia_(competencia || '', true);
+  if (!comp) return { ok: false, erro: 'Informe a competência no formato MM/AAAA.' };
+  const filtroPlaca = String(placa || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+  try {
+    const aba = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB).getSheetByName(CONFIG.ABA_DETALHE);
+    if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_DETALHE + '" não encontrada. Importe o detalhamento primeiro.' };
+    const dados = aba.getDataRange().getValues();
+    if (dados.length < 2) return { ok: false, erro: 'O DetalhamentoDB está vazio.' };
+
+    // índices herdados do relatório antigo (0-based)
+    const C_GESTOR = 0, C_PLACA = 5, C_FAMILIA = 10, C_INI_DADOS = 11, C_FIM_DADOS = 29, C_TOTAL = 27, C_COMP = 29;
+    const registros = dados.slice(1).filter(l => {
+      const compLinha = _competenciaDaCelula_(l[C_COMP]) || _formatarCompetencia_(l[C_COMP], true);
+      if (compLinha !== comp) return false;
+      if (filtroPlaca && String(l[C_PLACA] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase() !== filtroPlaca) return false;
+      return true;
+    });
+    if (!registros.length) return { ok: false, erro: 'Nenhum item no detalhamento para ' + comp + (filtroPlaca ? ' / ' + filtroPlaca : '') + '.' };
+
+    const acidentes = _placasComAcidenteAberto_();
+    const veiculos = [];
+    let atual = null, familia = null, totalGeral = 0, itens = 0;
+    const alertasAcidente = {};
+
+    registros.forEach(l => {
+      const chave = [l[5], l[6], l[7], l[8], l[9]].map(x => String(x || '').trim()).join(' - ');
+      if (!atual || atual.chave !== chave) {
+        atual = { chave: chave, placa: String(l[C_PLACA] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase(),
+                  gestor: String(l[C_GESTOR] || '').trim(), familias: [], total: 0 };
+        veiculos.push(atual); familia = null;
+        if (acidentes[atual.placa] !== undefined) alertasAcidente[atual.placa] = acidentes[atual.placa];
+      }
+      const nomeFamilia = String(l[C_FAMILIA] || '').trim() || '(sem família)';
+      if (!familia || familia.nome !== nomeFamilia) { familia = { nome: nomeFamilia, linhas: [], total: 0 }; atual.familias.push(familia); }
+      const valor = _num_(l[C_TOTAL]) || 0;
+      familia.linhas.push(l.slice(C_INI_DADOS, C_FIM_DADOS).map(x => (x instanceof Date) ? _brDia_(_diaISO_(x)) : (x === null || x === undefined ? '' : x)));
+      familia.total += valor; atual.total += valor; totalGeral += valor; itens++;
+    });
+
+    const html = _htmlRelatorioPecas_({ comp: comp, placa: filtroPlaca, veiculos: veiculos, totalGeral: totalGeral, itens: itens, acidentes: alertasAcidente }, p.sessao);
+    const nome = 'Relatorio_OS_Analitico_' + comp.replace('/', '-') + (filtroPlaca ? '_' + filtroPlaca : '') + '.pdf';
+    const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);
+    _logAcao_(p.ss, p.sessao.email, 'Relatório de OS (analítico)', filtroPlaca, comp, _moedaBR_(totalGeral) + ' | ' + itens + ' itens | ' + veiculos.length + ' veículos');
+    return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '',
+             total: totalGeral, itens: itens, veiculos: veiculos.length,
+             acidentes: Object.keys(alertasAcidente).map(k => ({ placa: k, processo: alertasAcidente[k] })) };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+function _htmlRelatorioPecas_(d, sessao) {
+  const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, "dd/MM/yyyy 'às' HH:mm");
+  const cab1 = ['Ordem de Serviço', 'Conclusão', 'Grupo de Peça', 'Peça', 'Unidade', 'Tipo de Peça', 'Mão de Obra', 'Tipo de Manutenção', 'Garantia', 'Garantia'];
+  const cab2 = ['Peça — MO', 'Peça — Qtd.', 'Peça — Valor unit.', 'MO — Total', 'MO — Qtd.', 'MO — Valor unit.', 'Total'];
+  const numericas = [10, 11, 12, 13, 14, 15, 16];
+
+  const blocos = d.veiculos.map(v => {
+    const marcado = d.acidentes[v.placa] !== undefined;
+    return '<div class="veiculo"><div class="titulo-veiculo' + (marcado ? ' acidente' : '') + '">' + _esc_(v.chave) +
+      (marcado ? '<span class="tag">processo de acidente em aberto</span>' : '') +
+      (v.gestor ? '<span class="gestor">' + _esc_(v.gestor) + '</span>' : '') + '</div>' +
+      v.familias.map(f => '<div class="familia">Família: ' + _esc_(f.nome) + '</div>' +
+        '<table><thead><tr>' + cab1.map(h => '<th>' + h + '</th>').join('') + cab2.map(h => '<th class="num">' + h + '</th>').join('') + '</tr></thead><tbody>' +
+        f.linhas.map(l => '<tr>' + l.map((c, i) => '<td' + (numericas.indexOf(i) >= 0 ? ' class="num"' : '') + '>' +
+          (numericas.indexOf(i) >= 0 && _num_(c) !== null && String(c).trim() !== '' ? (i === 16 || i === 12 || i === 15 ? _moedaBR_(_num_(c)) : _decBR_(_num_(c))) : _esc_(c)) + '</td>').join('') + '</tr>').join('') +
+        '<tr class="subtotal"><td colspan="16">Subtotal ' + _esc_(f.nome) + '</td><td class="num">' + _moedaBR_(f.total) + '</td></tr>' +
+        '</tbody></table>').join('') +
+      '<table class="total-veiculo"><tr><td>TOTAL DO VEÍCULO</td><td class="num">' + _moedaBR_(v.total) + '</td></tr></table></div>';
+  }).join('');
+
+  return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><style>' +
+    '@page { size: A4 landscape; margin: 10mm 8mm; }' +
+    '* { box-sizing: border-box; }' +
+    'body { font-family: Arial, Helvetica, sans-serif; color: #14181F; font-size: 8pt; margin: 0; }' +
+    '.cab { display: table; width: 100%; border-bottom: 4px solid #F2B705; padding-bottom: 8px; margin-bottom: 10px; }' +
+    '.cab > div { display: table-cell; vertical-align: middle; } .cab .marca { width: 70px; }' +
+    '.cab h1 { margin: 0; font-size: 15pt; color: #0B2C5C; } .cab .org { font-size: 9pt; color: #5A6576; }' +
+    '.cab .per { text-align: right; font-size: 10pt; font-weight: bold; color: #0B2C5C; }' +
+    '.resumo { display: table; width: 100%; table-layout: fixed; border-spacing: 5px 0; margin-bottom: 10px; }' +
+    '.resumo > div { display: table-cell; background: #F6F8FC; border-left: 3px solid #0B2C5C; padding: 6px 8px; }' +
+    '.resumo .r { font-size: 7pt; text-transform: uppercase; color: #5A6576; } .resumo .v { font-size: 12pt; font-weight: bold; color: #0B2C5C; }' +
+    '.aviso { background: #FDF3E7; border-left: 3px solid #B23A2E; padding: 8px 10px; font-size: 8.5pt; margin-bottom: 10px; }' +
+    '.aviso b { color: #B23A2E; }' +
+    '.veiculo { margin-bottom: 12px; page-break-inside: avoid; }' +
+    '.titulo-veiculo { background: #0B2C5C; color: #fff; padding: 5px 8px; font-weight: bold; font-size: 9pt; }' +
+    '.titulo-veiculo.acidente { background: #B23A2E; }' +
+    '.titulo-veiculo .tag { background: #F2B705; color: #14181F; border-radius: 8px; padding: 1px 7px; font-size: 7pt; margin-left: 8px; }' +
+    '.titulo-veiculo .gestor { float: right; font-weight: normal; font-size: 7.5pt; opacity: .85; }' +
+    '.familia { background: #E8EEFA; padding: 3px 8px; font-weight: bold; font-size: 8pt; color: #0B2C5C; }' +
+    'table { width: 100%; border-collapse: collapse; margin-bottom: 4px; }' +
+    'th { background: #3A4A63; color: #fff; text-align: left; padding: 3px 4px; font-size: 6.5pt; }' +
+    'td { padding: 2px 4px; border-bottom: 1px solid #E3E8F0; font-size: 7pt; }' +
+    'tbody tr:nth-child(even) td { background: #F9FAFD; }' +
+    '.num { text-align: right; }' +
+    'tr.subtotal td { background: #EFF2F7 !important; font-weight: bold; }' +
+    'table.total-veiculo td { background: #CCCCCC; font-weight: bold; font-size: 9pt; padding: 4px 8px; border: 0; }' +
+    '.total-geral { background: #0B2C5C; color: #fff; }' +
+    '.total-geral td { background: #0B2C5C; color: #fff; font-size: 12pt; font-weight: bold; padding: 9px 12px; border: 0; }' +
+    '.rodape { margin-top: 10px; border-top: 1px solid #E3E8F0; padding-top: 5px; font-size: 7pt; color: #5A6576; }' +
+    '</style></head><body>' +
+    '<div class="cab"><div class="marca">' + _brasaoHtml_() + '</div>' +
+    '<div><h1>Relatório de Ordens de Serviço — Analítico</h1><div class="org">16ª Superintendência da Polícia Rodoviária Federal — Ceará</div></div>' +
+    '<div class="per">Competência<br>' + _esc_(d.comp) + (d.placa ? '<br><span style="font-weight:normal; font-size:8pt">Placa ' + _esc_(d.placa) + '</span>' : '') + '</div></div>' +
+
+    '<div class="resumo">' +
+    '<div><div class="r">Total das peças e serviços</div><div class="v">' + _moedaBR_(d.totalGeral) + '</div></div>' +
+    '<div><div class="r">Veículos</div><div class="v">' + d.veiculos.length + '</div></div>' +
+    '<div><div class="r">Itens detalhados</div><div class="v">' + _fmtInt_(d.itens) + '</div></div>' +
+    '<div><div class="r">Gasto médio por veículo</div><div class="v">' + _moedaBR_(d.totalGeral / Math.max(1, d.veiculos.length)) + '</div></div>' +
+    '</div>' +
+
+    (Object.keys(d.acidentes).length ? '<div class="aviso"><b>Atenção — processo de acidente em aberto:</b> ' +
+      _esc_(Object.keys(d.acidentes).map(k => k + (d.acidentes[k] ? ' (' + d.acidentes[k] + ')' : '')).join(' · ')) +
+      '. O pagamento dessas ordens de serviço recebe tratamento distinto; confira antes de encaminhar.</div>' : '') +
+
+    blocos +
+    '<table class="total-geral"><tr><td>TOTAL GERAL</td><td class="num">' + _moedaBR_(d.totalGeral) + '</td></tr></table>' +
+    '<div class="rodape">Gerado pelo Painel da Frota — 16ª SPRF/CE em ' + agora + ' por ' + _esc_(sessao.email) +
+    '. Fonte: DetalhamentoDB (importação do detalhamento de itens) e aba Acidentes da planilha de gestão.</div>' +
+    '</body></html>';
+}
 
 /* ============================================================
    FILA DE AÇÕES DO DETRAN

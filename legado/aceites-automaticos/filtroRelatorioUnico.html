@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <base target="_top">
+    <style>
+      body{font-family:Arial;padding:15px}
+      label{display:block;margin-top:8px}
+      input,select{width:180px}
+      button{background:#1d2144;color:#ffd102;padding:6px 12px;border:none;border-radius:5px;cursor:pointer;margin-top:14px}
+    </style>
+  </head>
+  <body>
+    <h3>Gerar Relatório de Peças</h3>
+
+    <label>Competência (MM/AAAA):</label>
+    <input id="competencia" type="text" placeholder="09/2025">
+
+    <label>Placa (opcional):</label>
+    <input id="placa" type="text" placeholder="Ex: PME1234">
+
+    <label>Tipo de relatório:</label>
+    <select id="tipo">
+      <option value="normal">Normal (todos)</option>
+      <option value="glosa">Glosa (AE="Glosa")</option>
+    </select>
+
+    <button onclick="gerar()">Gerar Relatório</button>
+
+    <script>
+      function gerar() {
+        const tipo = document.getElementById("tipo").value;
+        const comp = document.getElementById("competencia").value.trim();
+        const placa = document.getElementById("placa").value.trim();
+        if (!comp) { alert("Informe a competência no formato MM/AAAA"); return; }
+        google.script.run
+          .withSuccessHandler(function(){ google.script.host.close(); })      // fecha sem alert
+          .withFailureHandler(function(err){
+            alert("Erro: " + (err && err.message ? err.message : err));       // só alerta em erro
+          })
+          .gerarRelatorioUnico(tipo, comp, placa);
+      }
+    </script>
+  </body>
+</html>
