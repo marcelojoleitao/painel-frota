@@ -188,6 +188,27 @@
 
 <div class="toast" id="toast"></div>
 
-<?!= incluir('Scripts'); ?>
+<script>
+// O código do painel é carregado logo após a página, por uma chamada ao servidor.
+// Motivo: a página entregue pelo Apps Script tem um teto de tamanho (~170 KB) e o
+// script inteiro embutido estourava esse teto, chegando cortado ao navegador.
+(function () {
+  var aviso = function (t) {
+    var m = document.getElementById('carregando-msg');
+    if (m) m.textContent = t;
+  };
+  var injetar = function (js) {
+    if (!js || js.length < 1000) { aviso('Falha ao carregar o painel (resposta vazia). Recarregue a página.'); return; }
+    var s = document.createElement('script');
+    s.textContent = js;
+    document.body.appendChild(s);
+  };
+  if (!window.google || !google.script || !google.script.run) { aviso('Ambiente sem conexão com o servidor.'); return; }
+  google.script.run
+    .withSuccessHandler(injetar)
+    .withFailureHandler(function (e) { aviso('Falha ao carregar o painel: ' + (e && e.message ? e.message : e)); })
+    .obterScriptsJs();
+})();
+</script>
 </body>
 </html>

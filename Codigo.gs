@@ -91,7 +91,7 @@ function doGet() {
   pagina = pagina.replace(/<\?=\s*titulo\s*\?>/g, CONFIG.TITULO);
   pagina = pagina.replace(/<\?!=\s*incluir\(\s*'([^']+)'\s*\);?\s*\?>/g, function (m, nome) { return _arquivoHtml_(nome); });
   // carimbo escrito pelo servidor: aparece mesmo que o JavaScript falhe
-  Logger.log('doGet: ' + pagina.length + ' caracteres servidos.');
+  Logger.log('doGet: ' + pagina.length + ' caracteres servidos (o código do painel vai à parte).');
   const v = (pagina.match(/VERSAO_PAINEL\s*=\s*'([^']+)'/) || [])[1] || '?';
   const origem = (PropertiesService.getScriptProperties().getProperty('HTML_ORIGEM') || HTML_ORIGEM_PADRAO) === 'github' ? 'GitHub' : 'projeto';
   pagina = pagina.replace(/\{\{VERSAO\}\}/g, 'v' + v + ' — ' + origem);
@@ -103,6 +103,20 @@ function doGet() {
 
 function incluir(nome) {
   return _arquivoHtml_(nome);
+}
+
+/**
+ * Devolve o corpo do Scripts.html (sem as marcas <script>) para o navegador injetar.
+ * A página do Apps Script tem um teto de tamanho; mandar o código por aqui evita
+ * que ele chegue cortado — sintoma antigo: "Missing } in template expression".
+ */
+function obterScriptsJs() {
+  const html = _arquivoHtml_('Scripts');
+  const ini = html.indexOf('<script>');
+  const fim = html.lastIndexOf('<\/script>');
+  const js = (ini >= 0 && fim > ini) ? html.substring(ini + 8, fim) : html;
+  Logger.log('obterScriptsJs: ' + js.length + ' caracteres enviados ao navegador.');
+  return js;
 }
 
 function _arquivoHtml_(nome) {
