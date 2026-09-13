@@ -116,16 +116,35 @@ function _arquivoHtml_(nome) {
       // o conteúdo do GitHub mesmo assim — nunca caímos para o arquivo local por isso.
       try {
         if (nome === 'App') limparCacheHtml();   // push novo: derruba os demais para não misturar versões
-        const fatias = {}; let n = 0;
-        // 30.000 caracteres ≈ 60 KB mesmo com acentuação (limite do CacheService: 100 KB por chave)
-        for (let i = 0; i < texto.length; i += 30000) fatias[chave + '_' + (n++)] = texto.substring(i, i + 30000);
-        cache.putAll(fatias, HTML_CACHE_SEG);
+        // uma chamada por fatia: putAll com payload somado acima de 100 KB é recusado
+        let n = 0;
+        for (let i = 0; i < texto.length; i += 30000) cache.put(chave + '_' + (n++), texto.substring(i, i + 30000), HTML_CACHE_SEG);
       } catch (e) { Logger.log('Cache do HTML ' + nome + ' não gravado (' + e + ') — servindo direto do GitHub.'); }
       return texto;
     }
     Logger.log('HTML ' + nome + ' não encontrado no GitHub; usando arquivo local.');
   }
   return HtmlService.createHtmlOutputFromFile(nome).getContent();
+}
+
+/** Diz exatamente o que está sendo servido em cada arquivo — rode no editor. */
+function diagnosticarHtml() {
+  const origem = PropertiesService.getScriptProperties().getProperty('HTML_ORIGEM') || HTML_ORIGEM_PADRAO;
+  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN') || '';
+  Logger.log('Origem: ' + origem + ' | token: ' + (token ? 'presente (' + token.length + ' caracteres)' : 'AUSENTE'));
+  limparCacheHtml();
+  ['App', 'Login', 'Estilos', 'Scripts'].forEach(nome => {
+    let doGitHub = null;
+    try { doGitHub = _baixarDoGitHub_(nome + '.html'); } catch (e) { Logger.log(nome + ': GitHub falhou — ' + e); }
+    const local = HtmlService.createHtmlOutputFromFile(nome).getContent();
+    const servido = _arquivoHtml_(nome);
+    const versao = (servido.match(/VERSAO_PAINEL\s*=\s*'([^']+)'/) || [])[1];
+    Logger.log(nome + ': GitHub ' + (doGitHub === null ? 'INDISPONÍVEL' : doGitHub.length + ' car.') +
+      ' | local ' + local.length + ' car. | servido ' + servido.length + ' car. → ' +
+      (doGitHub !== null && servido.length === doGitHub.length ? 'GITHUB' : 'LOCAL') +
+      (versao ? ' | versão ' + versao : ''));
+  });
+  limparCacheHtml();
 }
 
 /** Depois de um push, rode isto (ou espere até 5 min) para o painel refletir o GitHub. */
