@@ -14,7 +14,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.4.1';
+const VERSAO_PAINEL = '2.4.2';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -808,6 +808,7 @@ function iniciarSessao() {
 }
 
 function mostrarTela(qual) {
+  txt('login-versao', 'v' + VERSAO_PAINEL + ' — servido via GitHub');
   cls('tela-login', 'oculto', qual !== 'login');
   cls('tela-carregando', 'oculto', qual !== 'carregando');
   cls('tela-app', 'oculto', qual !== 'app');
