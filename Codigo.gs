@@ -2563,6 +2563,7 @@ function _brasaoHtml_() {
  * navegador baixar. Assim o relatório sai de qualquer jeito.
  */
 function _entregarPdf_(blob, nome) {
+  Logger.log('Entregando PDF: ' + nome + ' (' + Math.round(blob.getBytes().length / 1024) + ' KB)');
   try {
     const arq = CONFIG.PASTA_RELATORIOS
       ? DriveApp.getFolderById(CONFIG.PASTA_RELATORIOS).createFile(blob)
@@ -2721,6 +2722,7 @@ function gerarRelatorioPecas(token, competencia, placa) {
       familia.total += valor; atual.total += valor; totalGeral += valor; itens++;
     });
 
+    Logger.log('Relatório analítico ' + comp + ': ' + veiculos.length + ' veículos, ' + itens + ' itens, total ' + totalGeral);
     const html = _htmlRelatorioPecas_({ comp: comp, placa: filtroPlaca, veiculos: veiculos, totalGeral: totalGeral, itens: itens, acidentes: alertasAcidente }, p.sessao);
     const nome = 'Relatorio_OS_Analitico_' + comp.replace('/', '-') + (filtroPlaca ? '_' + filtroPlaca : '') + '.pdf';
     const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);
@@ -2905,6 +2907,7 @@ function gerarRelatorioAceites(token, competencia) {
 
     itens.sort((a, b) => a.unidade.localeCompare(b.unidade) || b.valor - a.valor);
     const dados = { comp: comp, itens: itens, total: total, totalPecas: totalPecas, totalMo: totalMo, porTipo: porTipo, porUnidade: porUnidade, porOficina: porOficina, acidentes: alerta };
+    Logger.log('Relatório resumo ' + comp + ': ' + itens.length + ' OS, total ' + total);
     const html = _htmlRelatorioAceites_(dados, p.sessao);
     const nome = 'Relatorio_OS_Resumo_' + comp.replace('/', '-') + '.pdf';
     const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);

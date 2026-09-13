@@ -11,9 +11,13 @@ function htm(id, h) { const e = el(id); if (e) e.innerHTML = h; }
 function txt(id, t) { const e = el(id); if (e) e.textContent = t; }
 
 /** Chama uma função do servidor avisando quando ela ainda não foi implantada. */
-/** Abre o PDF: link do Drive ou download direto quando veio o arquivo. */
+/** Entrega o PDF: botão visível para abrir/baixar (o navegador bloqueia abertura automática). */
 function entregarPdf(r) {
-  if (r.link) { window.open(r.link, '_blank'); return `<a class="pdf-link" href="${escAttr(r.link)}" target="_blank" rel="noopener">${icoPdf()} ${esc(r.nome)}</a>`; }
+  if (r.link) {
+    try { const j = window.open(r.link, '_blank'); if (j) j.opener = null; } catch (e) {}
+    return `<a class="btn amarelo" href="${escAttr(r.link)}" target="_blank" rel="noopener" style="margin-top:8px; text-decoration:none">${icoPdf()} Abrir ${esc(r.nome)}</a>
+            <div class="cartao-dica">Se não abriu sozinho, clique no botão — o navegador pode ter bloqueado a nova aba. O arquivo também ficou salvo no seu Drive.</div>`;
+  }
   if (r.base64) {
     const bytes = atob(r.base64);
     const arr = new Uint8Array(bytes.length);
@@ -21,10 +25,11 @@ function entregarPdf(r) {
     const url = URL.createObjectURL(new Blob([arr], { type: 'application/pdf' }));
     const a = document.createElement('a');
     a.href = url; a.download = r.nome; document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
-    return `${icoPdf()} ${esc(r.nome)} <small style="color:var(--tinta-suave)">baixado${r.aviso ? ' — ' + esc(r.aviso) : ''}</small>`;
+    setTimeout(() => URL.revokeObjectURL(url), 120000);
+    return `<a class="btn amarelo" href="${escAttr(url)}" download="${escAttr(r.nome)}" style="margin-top:8px; text-decoration:none">${icoPdf()} Baixar ${esc(r.nome)}</a>
+            <div class="cartao-dica">Gerado no navegador${r.aviso ? ' — ' + esc(r.aviso) : ''}. Se o download não começou, clique no botão.</div>`;
   }
-  return '';
+  return '<div class="cartao-dica">O servidor não devolveu o arquivo. Veja o Registro em Ações.</div>';
 }
 
 function servidor(nome, aoOk, aoErro) {
@@ -57,7 +62,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.12.2';
+const VERSAO_PAINEL = '2.12.3';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2298,7 +2303,6 @@ function renderExportar(c) {
         if (sessaoExpirou(r)) return;
         if (!r || !r.ok) { if (status) status.textContent = ''; toast((r && r.erro) || 'Falha ao exportar.'); return; }
         if (status) status.innerHTML = `<a class="pdf-link" href="${escAttr(r.link)}" target="_blank" rel="noopener">${icoPdf()} ${esc(r.nome)}</a> ${fmtInt(r.linhas)} linhas`;
-        window.open(r.link, '_blank');
       })
       .withFailureHandler(e => { b.disabled = false; b.textContent = 'Gerar .xlsx'; if (status) status.textContent = ''; toast('Erro: ' + (e && e.message ? e.message : e)); })
       .exportarBase(ESTADO.token, t);
