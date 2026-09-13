@@ -108,19 +108,22 @@ function _arquivoHtml_(nome) {
     const guardadas = [];
     for (let i = 0; ; i++) { const p = cache.get(chave + '_' + i); if (p === null) break; guardadas.push(p); }
     if (guardadas.length) return guardadas.join('');
-    try {
-      const texto = _baixarDoGitHub_(nome + '.html');
-      if (texto !== null) {
-        // um arquivo novo indica push recente: derruba o cache dos demais para
-        // não servir HTMLs de versões diferentes na mesma página
-        if (nome === 'App') limparCacheHtml();
+    let texto = null;
+    try { texto = _baixarDoGitHub_(nome + '.html'); }
+    catch (e) { Logger.log('GitHub indisponível para ' + nome + ' (' + e + '); usando arquivo local.'); }
+    if (texto !== null) {
+      // Guardar em cache é oportunista: se falhar (arquivo grande demais), servimos
+      // o conteúdo do GitHub mesmo assim — nunca caímos para o arquivo local por isso.
+      try {
+        if (nome === 'App') limparCacheHtml();   // push novo: derruba os demais para não misturar versões
         const fatias = {}; let n = 0;
-        for (let i = 0; i < texto.length; i += 90000) fatias[chave + '_' + (n++)] = texto.substring(i, i + 90000);
+        // 30.000 caracteres ≈ 60 KB mesmo com acentuação (limite do CacheService: 100 KB por chave)
+        for (let i = 0; i < texto.length; i += 30000) fatias[chave + '_' + (n++)] = texto.substring(i, i + 30000);
         cache.putAll(fatias, HTML_CACHE_SEG);
-        return texto;
-      }
-      Logger.log('HTML ' + nome + ' não encontrado no GitHub; usando arquivo local.');
-    } catch (e) { Logger.log('GitHub indisponível para ' + nome + ' (' + e + '); usando arquivo local.'); }
+      } catch (e) { Logger.log('Cache do HTML ' + nome + ' não gravado (' + e + ') — servindo direto do GitHub.'); }
+      return texto;
+    }
+    Logger.log('HTML ' + nome + ' não encontrado no GitHub; usando arquivo local.');
   }
   return HtmlService.createHtmlOutputFromFile(nome).getContent();
 }
@@ -129,7 +132,7 @@ function _arquivoHtml_(nome) {
 function limparCacheHtml() {
   const cache = CacheService.getScriptCache();
   ['App', 'Login', 'Estilos', 'Scripts'].forEach(nome => {
-    const lista = []; for (let i = 0; i < 40; i++) lista.push('html_' + nome + '_' + i);
+    const lista = []; for (let i = 0; i < 120; i++) lista.push('html_' + nome + '_' + i);
     cache.removeAll(lista);
   });
   return 'Cache de HTML limpo — próximo acesso baixa do GitHub.';
