@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.13.2';
+const CODIGO_VERSAO = '2.13.3';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -76,6 +76,8 @@ const CONFIG = {
   ID_MANUT_ANTIGA: '1WpI_krrzyB65lfN6lYZHr9aD1-x0cSUg_g61xGgvNrk',
   ABA_DETALHE:    'DetalhamentoDB',
   ABA_ORCAMENTOS: 'OrçamentosDB',
+  // abas auxiliares citadas pelas fórmulas das bases (migram junto)
+  ABAS_AUX_MANUT: ['Glosa'],
   ABA_ACIDENTES:  'Acidentes',   // na planilha-mãe: col B = placa, col C vazia = processo em aberto
   ABA_ACEITES:    'AceitesDB',
 
@@ -2694,7 +2696,7 @@ function analisarMigracaoManutencao() {
   Logger.log('Abas espelho (IMPORTRANGE) na planilha de aceites: ' +
     (Object.keys(espelhos).length ? Object.keys(espelhos).map(k => k + ' → ' + (espelhos[k].id === CONFIG.ID_BASE ? 'planilha-mãe/' + espelhos[k].aba : espelhos[k].id.substring(0, 12) + '…/' + espelhos[k].aba)).join(' | ') : 'nenhuma'));
 
-  [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS].forEach(nome => {
+  [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS].concat(CONFIG.ABAS_AUX_MANUT || []).forEach(nome => {
     const de = origem.getSheetByName(nome);
     if (!de) { Logger.log(nome + ': não existe'); return; }
     const nLin = de.getLastRow(), nCol = de.getLastColumn();
@@ -2705,7 +2707,8 @@ function analisarMigracaoManutencao() {
       if (!f) return;
       (f.match(/'[^']+'!|[A-Za-zÀ-ÿ0-9_.çÇ]+!/g) || []).forEach(r => { refs[r.replace(/['!]/g, '').trim()] = true; });
     }));
-    const externas = Object.keys(refs).filter(r => [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS].indexOf(r) < 0);
+    const proprias = [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS].concat(CONFIG.ABAS_AUX_MANUT || []);
+    const externas = Object.keys(refs).filter(r => proprias.indexOf(r) < 0);
     Logger.log(nome + ': ' + (nLin - 1) + ' linhas, ' + nCol + ' colunas, ' + total + ' células com fórmula.');
     Logger.log('   abas citadas pelas fórmulas: ' + (externas.length ? externas.map(r => {
       const esp = espelhos[r];
@@ -2730,7 +2733,7 @@ function analisarMigracaoManutencao() {
 function migrarDadosManutencao() {
   const origem = SpreadsheetApp.openById(CONFIG.ID_MANUT_ANTIGA);
   const destino = SpreadsheetApp.openById(CONFIG.ID_BASE);
-  const bases = [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS];
+  const bases = [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS].concat(CONFIG.ABAS_AUX_MANUT || []);
   const espelhos = _espelhosImportrange_(origem);
   const nomesDestino = destino.getSheets().map(a => a.getName());
 
@@ -2781,7 +2784,8 @@ function migrarDadosManutencao() {
     for (let c = 1; c <= nCol; c++) { try { para.setColumnWidth(c, de.getColumnWidth(c)); } catch (e) {} }
 
     const comFormula = formulas.reduce((t, l) => t + l.filter(f => f).length, 0);
-    resumo.push(nome + ': ' + (nLin - 1) + ' linhas, ' + comFormula + ' fórmulas preservadas' + (reescritas ? ', ' + reescritas + ' referências reapontadas' : ''));
+    const arrays = formulas.reduce((t, l) => t + l.filter(f => f && /ARRAYFORMULA/i.test(f)).length, 0);
+    resumo.push(nome + ': ' + (nLin - 1) + ' linhas, ' + comFormula + ' fórmulas preservadas' + (arrays ? ' (' + arrays + ' ARRAYFORMULA, que se estendem sozinhas)' : '') + (reescritas ? ', ' + reescritas + ' referências reapontadas' : ''));
   });
 
   limparCache();
