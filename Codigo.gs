@@ -62,6 +62,8 @@ const CONFIG = {
   PASTA_CRLV: '1RAs2cZEE4MzQJHKRiYKZFLefYrQcSAcC',
   // Registro das ações executadas pelo painel (aba criada automaticamente na planilha base)
   ABA_LOG: 'LogAcoes',
+  // Fila de ações que dependem do DETRAN (executadas pelo trabalhador Python local)
+  ABA_FILA: 'FilaAcoes',
   // DETRAN-CE — Central de Serviços
   DETRAN_BASE: 'https://sistemas.detran.ce.gov.br/central',
 
@@ -1181,6 +1183,109 @@ function salvarFotoViatura(token, placa, angulo, base64, tipoMime) {
   } catch (e) {
     return { ok: false, erro: String(e.message || e) };
   } finally { trava.releaseLock(); }
+}
+
+
+/* ============================================================
+   FILA DE AÇÕES DO DETRAN
+   O Apps Script não alcança sistemas.detran.ce.gov.br (o Google sai
+   por IPs que o portal recusa). O painel enfileira aqui e o
+   trabalhador Python (worker_detran.py), rodando na rede local,
+   executa e devolve o resultado nesta mesma aba.
+   ============================================================ */
+
+const ACOES_FILA = { crlv: 'Baixar CRLV', multas: 'Consultar multas', boleto: 'Gerar boleto' };
+
+function _abaFila_(ss) {
+  let aba = ss.getSheetByName(CONFIG.ABA_FILA);
+  if (!aba) {
+    aba = ss.insertSheet(CONFIG.ABA_FILA);
+    aba.appendRow(['ID', 'Criado em', 'Usuário', 'Ação', 'Placa', 'Renavam', 'CRV', 'Código', 'Status', 'Resultado', 'Detalhe', 'Atualizado em']);
+    aba.setFrozenRows(1);
+    aba.setColumnWidth(11, 420);
+  }
+  return aba;
+}
+
+/** Enfileira uma ou várias placas de uma vez. Devolve quantas entraram e quantas já estavam pendentes. */
+function enfileirarAcoes(token, acao, placas) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (!ACOES_FILA[acao]) return { ok: false, erro: 'Ação desconhecida: ' + acao };
+  placas = (placas || []).map(x => String(x || '').trim().toUpperCase()).filter(Boolean);
+  if (!placas.length) return { ok: false, erro: 'Nenhuma placa informada.' };
+
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Fila ocupada. Tente de novo.' }; }
+  try {
+    const aba = _abaFila_(p.ss);
+    const base = p.ss.getSheetByName(CONFIG.ABA_BASE);
+    const cab = base.getRange(1, 1, 1, base.getLastColumn()).getValues()[0].map(v => String(v || '').trim());
+    const idx = _mapearCampos_(cab);
+    const nLin = Math.max(1, base.getLastRow() - 1);
+    const col = campo => idx[campo] !== undefined ? base.getRange(2, idx[campo] + 1, nLin, 1).getValues().map(l => String(l[0] || '').trim()) : [];
+    const colPlacas = col('placa').map(x => x.toUpperCase());
+    const colRenavam = col('renavam'), colCrv = col('crv'), colCod = col('codCrv');
+
+    // o que já está pendente não entra de novo
+    const pendentes = {};
+    if (aba.getLastRow() > 1) {
+      aba.getRange(2, 1, aba.getLastRow() - 1, 9).getValues().forEach(l => {
+        if (String(l[8]).toUpperCase() === 'PENDENTE') pendentes[String(l[3]) + '|' + String(l[4]).toUpperCase()] = true;
+      });
+    }
+
+    const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm:ss');
+    const novas = [], repetidas = [];
+    placas.forEach(placa => {
+      if (pendentes[ACOES_FILA[acao] + '|' + placa]) { repetidas.push(placa); return; }
+      const i = colPlacas.indexOf(placa);
+      novas.push([Utilities.getUuid().substring(0, 8), agora, p.sessao.email, ACOES_FILA[acao], placa,
+        i >= 0 ? (colRenavam[i] || '').replace(/\D/g, '') : '', i >= 0 ? (colCrv[i] || '') : '', i >= 0 ? (colCod[i] || '') : '',
+        'PENDENTE', '', '', '']);
+    });
+    if (novas.length) aba.getRange(aba.getLastRow() + 1, 1, novas.length, 12).setValues(novas);
+    _logAcao_(p.ss, p.sessao.email, ACOES_FILA[acao] + ' (fila)', novas.length + ' placa(s)', 'ENFILEIRADO',
+      novas.slice(0, 30).map(l => l[4]).join(', ') + (repetidas.length ? ' | já pendentes: ' + repetidas.join(', ') : ''));
+    return { ok: true, enfileiradas: novas.length, repetidas: repetidas };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  } finally { trava.releaseLock(); }
+}
+
+/** Situação da fila para a tela (pendentes primeiro, depois as últimas concluídas). */
+function obterFila(token, quantidade) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const aba = _abaFila_(p.ss);
+  if (aba.getLastRow() < 2) return { ok: true, itens: [], pendentes: 0, executando: 0 };
+  const linhas = aba.getRange(2, 1, aba.getLastRow() - 1, 12).getValues().map(l => ({
+    id: String(l[0]), criado: _dataTxt_(l[1]), quem: String(l[2]), acao: String(l[3]), placa: String(l[4]),
+    status: String(l[8]).toUpperCase(), resultado: String(l[9]), detalhe: String(l[10]), atualizado: _dataTxt_(l[11])
+  }));
+  const pendentes = linhas.filter(x => x.status === 'PENDENTE');
+  const executando = linhas.filter(x => x.status === 'EXECUTANDO');
+  const resto = linhas.filter(x => x.status !== 'PENDENTE' && x.status !== 'EXECUTANDO').reverse();
+  const n = Math.min(quantidade || 80, 300);
+  return { ok: true, pendentes: pendentes.length, executando: executando.length,
+    itens: executando.concat(pendentes).concat(resto).slice(0, n) };
+}
+
+/** Remove da fila o que já terminou (mantém pendentes e em execução). */
+function limparFilaConcluidas(token) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Fila ocupada.' }; }
+  try {
+    const aba = _abaFila_(p.ss);
+    if (aba.getLastRow() < 2) return { ok: true, removidas: 0 };
+    const valores = aba.getRange(2, 1, aba.getLastRow() - 1, 12).getValues();
+    const manter = valores.filter(l => ['PENDENTE', 'EXECUTANDO'].indexOf(String(l[8]).toUpperCase()) >= 0);
+    const removidas = valores.length - manter.length;
+    if (removidas) {
+      aba.getRange(2, 1, valores.length, 12).clearContent();
+      if (manter.length) aba.getRange(2, 1, manter.length, 12).setValues(manter);
+    }
+    return { ok: true, removidas: removidas };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
 }
 
 /** Rode no editor: mostra coluna a coluna o que ficou editável e por que as demais bloquearam. */

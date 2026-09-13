@@ -27,14 +27,14 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.5.0';
+const VERSAO_PAINEL = '2.6.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
   uso: null, usoCarregando: false,
   periodoUso: '12m', periodoManut: '12m', periodoPag: 'tudo',
   pdfsPorOS: {}, pdfsPorPlaca: {}, filtroStatusOS: '', filtroStatusAceite: '',
-  subAcoes: 'executar', lote: null,
+  subAcoes: 'executar', lote: null, fila: null,
   dados: null,
   veiculos: [],
   filtros: {},          // chave -> Set de valores selecionados
@@ -1732,16 +1732,17 @@ function enviarFoto(placa, ang, arquivo) {
    CENTRAL DE AÇÕES (administrador)
    ============================================================ */
 const ACOES_DEF = {
-  crlv:   { rotulo: 'Baixar CRLV (DETRAN)',        fn: 'acaoBaixarCrlv',      desc: 'Entra na Central do DETRAN-CE com placa + renavam, baixa o CRLV-e (usa CRV e código de segurança das colunas BA/BB), salva na pasta do Drive, grava o link e ajusta o Ano Exercício lendo o PDF.' },
-  audit:  { rotulo: 'Auditar CRLV',                fn: 'acaoAuditarCrlv',     desc: 'Abre o PDF do link salvo, confere se a placa do documento bate (pega CRLV trocado) e ajusta o Ano Exercício da coluna C conforme o documento.' },
-  multas: { rotulo: 'Consultar multas (DETRAN)',   fn: 'acaoConsultarMultas', desc: 'Consulta a situação de multas no DETRAN e grava o resultado com a data na coluna O — o mesmo texto que alimenta a ficha e os filtros.' },
-  boleto: { rotulo: 'Gerar boleto p/ licenciar',   fn: 'acaoGerarBoleto',     desc: 'Verifica o licenciamento no DETRAN: JÁ LICENCIADO, PENDÊNCIA, ou gera o boleto (PDF salvo na pasta de CRLVs com link no registro).' }
+  crlv:   { rotulo: 'Baixar CRLV (DETRAN)',        fn: 'acaoBaixarCrlv',      fila: true,  desc: 'Entra na Central do DETRAN-CE com placa + renavam, baixa o CRLV-e (usa CRV e código de segurança das colunas BA/BB), salva na pasta do Drive, grava o link e ajusta o Ano Exercício lendo o PDF.' },
+  audit:  { rotulo: 'Auditar CRLV',                fn: 'acaoAuditarCrlv',     fila: false, desc: 'Abre o PDF do link salvo, confere se a placa do documento bate (pega CRLV trocado) e ajusta o Ano Exercício da coluna C conforme o documento.' },
+  multas: { rotulo: 'Consultar multas (DETRAN)',   fn: 'acaoConsultarMultas', fila: true,  desc: 'Consulta a situação de multas no DETRAN e grava o resultado com a data na coluna O — o mesmo texto que alimenta a ficha e os filtros.' },
+  boleto: { rotulo: 'Gerar boleto p/ licenciar',   fn: 'acaoGerarBoleto',     fila: true,  desc: 'Verifica o licenciamento no DETRAN: JÁ LICENCIADO, PENDÊNCIA, ou gera o boleto (PDF salvo na pasta de CRLVs com link no registro).' }
 };
 
 function renderAcoes(lista) {
   if (!ESTADO.admin) return;
   const c = el('acoes-conteudo'); if (!c) return;
   if (ESTADO.subAcoes === 'completude') return renderCompletude(c, lista);
+  if (ESTADO.subAcoes === 'fila') return renderFila(c);
   if (ESTADO.subAcoes === 'registro') return renderRegistroAcoes(c);
   renderExecutarAcoes(c, lista);
 }
@@ -1801,10 +1802,12 @@ function renderExecutarAcoes(c, lista) {
       k === 'multas' ? `<div class="acao-opcoes"><label><input type="checkbox" id="multas-rehoje"> Consultar novamente as já consultadas hoje</label></div>` :
       k === 'boleto' ? `<div class="acao-opcoes"><label><input type="checkbox" id="boleto-todas"> Incluir também as com licenciamento em dia</label></div>` : '';
     return `<div class="acao-cartao"><h4>${a.rotulo}</h4><div class="desc">${a.desc}</div>${op}
-      <button class="btn amarelo" data-acao="${k}" ${lote ? 'disabled' : ''}>Executar nas exibidas</button></div>`;
+      <button class="btn amarelo" data-acao="${k}" ${lote ? 'disabled' : ''}>${a.fila ? 'Enviar exibidas para a fila' : 'Executar nas exibidas'}</button>
+      ${a.fila ? '<div class="cartao-dica" style="margin-top:6px">Depende do DETRAN: entra na fila e o trabalhador local executa.</div>' : ''}</div>`;
   }).join('');
   c.innerHTML = `
     <div class="cartao largo" style="margin-bottom:14px"><div class="cartao-cab"><h3>Central de Ações</h3><small>${lista.length} viaturas na seleção atual</small></div>
+      <div class="cartao-dica" style="margin:0 0 8px"><b>Ações do DETRAN</b> (CRLV, multas, boleto) entram numa fila e são executadas pelo trabalhador <code>worker_detran.py</code> na sua máquina — o Google não alcança o portal do DETRAN. <b>Auditar CRLV</b> e <b>Anexar CRLV</b> rodam direto aqui.</div>
       <div class="cartao-dica" style="margin:0">O lote roda sobre <b>as viaturas exibidas</b> — use os filtros da esquerda para escolher o alvo (unidade, status, placa…). Cada viatura é processada uma a uma no DETRAN, com pausa de 1 s entre elas; tudo fica no Registro. Ações individuais ficam na ficha de cada viatura.</div></div>
     <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">${cartoes}</div>
     <div id="lote-area">${lote ? '' : ''}</div>`;
@@ -1929,6 +1932,19 @@ function renderRegistroAcoes(c) {
 
 /* ---------------- ações individuais na ficha ---------------- */
 function acaoIndividual(acao, placa, botao) {
+  if (ACOES_DEF[acao] && ACOES_DEF[acao].fila) {
+    if (botao) { botao.disabled = true; botao.dataset.txt = botao.textContent; botao.textContent = 'Enfileirando…'; }
+    google.script.run
+      .withSuccessHandler(r => {
+        if (botao) { botao.disabled = false; botao.textContent = botao.dataset.txt; }
+        if (sessaoExpirou(r)) return;
+        if (!r || !r.ok) { toast((r && r.erro) || 'Falha ao enfileirar.'); return; }
+        toast(r.enfileiradas ? placa + ' na fila do DETRAN — rode o trabalhador para processar.' : placa + ' já estava na fila.');
+      })
+      .withFailureHandler(e => { if (botao) { botao.disabled = false; botao.textContent = botao.dataset.txt; } toast('Erro: ' + (e && e.message ? e.message : e)); })
+      .enfileirarAcoes(ESTADO.token, acao, [placa]);
+    return;
+  }
   if (botao) { botao.disabled = true; botao.dataset.txt = botao.textContent; botao.textContent = 'Executando…'; }
   google.script.run
     .withSuccessHandler(r => {
@@ -1961,6 +1977,62 @@ function enviarCrlvManual(placa, arquivo, statusEl) {
       .anexarCrlv(ESTADO.token, placa, base64);
   };
   leitor.readAsDataURL(arquivo);
+}
+
+
+/* ---------------- Fila do DETRAN ---------------- */
+function renderFila(c) {
+  if (!ESTADO.fila) c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Lendo a fila…</div></div>';
+  google.script.run
+    .withSuccessHandler(r => {
+      if (sessaoExpirou(r)) return;
+      if (!r || !r.ok) { c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha ao ler a fila.') + '</div></div>'; return; }
+      ESTADO.fila = r;
+      desenharFila(c, r);
+    })
+    .withFailureHandler(e => { c.innerHTML = '<div class="cartao largo"><div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div></div>'; })
+    .obterFila(ESTADO.token, 120);
+}
+
+function desenharFila(c, r) {
+  const badge = st => st === 'PENDENTE' ? '<span class="badge manutencao">pendente</span>'
+    : st === 'EXECUTANDO' ? '<span class="badge cedido">executando</span>'
+    : st === 'ERRO' ? '<span class="badge indisponivel">erro</span>'
+    : '<span class="badge disponivel">concluído</span>';
+  c.innerHTML = `
+    <div class="kpis">
+      ${kpi('Na fila', r.pendentes, r.pendentes ? 'aguardando o trabalhador' : 'nada a processar', r.pendentes ? 'ambar' : 'verde', null, true)}
+      ${kpi('Executando agora', r.executando, r.executando ? 'trabalhador em atividade' : 'trabalhador parado', r.executando ? 'ciano' : '', null, true)}
+      ${kpi('Últimos resultados', r.itens.filter(i => i.status === 'CONCLUÍDO' || i.status === 'OK').length, 'nesta lista', '', null, true)}
+      ${kpi('Com erro', r.itens.filter(i => i.status === 'ERRO').length, 'conferir detalhe', r.itens.some(i => i.status === 'ERRO') ? 'vermelho' : 'verde', null, true)}
+    </div>
+    <div class="cartao largo">
+      <div class="cartao-cab"><h3>Fila do DETRAN</h3><small>aba FilaAcoes da planilha</small></div>
+      <div class="form-acoes" style="margin-top:0">
+        <button class="btn claro" onclick="renderFila(document.getElementById('acoes-conteudo'))">Atualizar</button>
+        <button class="btn claro" onclick="limparConcluidas()">Limpar concluídas</button>
+        <span class="form-aviso">Rode <code>python worker_detran.py</code> na sua máquina para processar a fila.</span>
+      </div>
+      <div class="mini-tabela" style="max-height:520px"><table class="tabela-simples"><thead><tr><th>Status</th><th>Ação</th><th>Placa</th><th>Pedido em</th><th>Quem</th><th>Resultado</th><th>Detalhe</th></tr></thead><tbody>
+      ${r.itens.map(i => `<tr class="linha" data-placa="${escAttr(i.placa)}"><td>${badge(i.status)}</td><td>${esc(i.acao)}</td><td style="font-family:var(--fonte-dados)"><b>${esc(i.placa)}</b></td><td style="white-space:nowrap">${esc(i.criado)}</td><td>${esc((i.quem || '').split('@')[0])}</td><td>${esc(i.resultado)}</td><td title="${escAttr(i.detalhe)}">${esc((i.detalhe || '').substring(0, 90))}</td></tr>`).join('') || '<tr><td colspan="7"><div class="vazio">Fila vazia</div></td></tr>'}</tbody></table></div>
+    </div>`;
+  c.querySelectorAll('tr.linha').forEach(t => t.addEventListener('click', () => t.dataset.placa && abrirFicha(t.dataset.placa)));
+  ajustarKpis();
+  if (r.pendentes || r.executando) {
+    clearTimeout(ESTADO.filaTimer);
+    ESTADO.filaTimer = setTimeout(() => { if (ESTADO.aba === 'acoes' && ESTADO.subAcoes === 'fila') renderFila(el('acoes-conteudo')); }, 10000);
+  }
+}
+
+function limparConcluidas() {
+  google.script.run
+    .withSuccessHandler(r => {
+      if (sessaoExpirou(r)) return;
+      toast(r && r.ok ? (r.removidas || 0) + ' item(ns) removido(s)' : 'Falha ao limpar.');
+      renderFila(el('acoes-conteudo'));
+    })
+    .withFailureHandler(e => toast('Erro: ' + (e && e.message ? e.message : e)))
+    .limparFilaConcluidas(ESTADO.token);
 }
 
 </script>
