@@ -73,9 +73,9 @@ a { color: var(--azul-claro); }
 
 /* ============================ TOPO ============================ */
 .topo {
-  position: sticky; top: 0; z-index: 30; height: var(--altura-topo);
+  position: sticky; top: 0; z-index: 30; min-height: var(--altura-topo);
   background: var(--azul); color: var(--branco);
-  display: flex; align-items: center; gap: 14px; padding: 0 16px;
+  display: flex; align-items: center; gap: 10px 14px; padding: 4px 16px; flex-wrap: wrap;
   border-bottom: 3px solid var(--amarelo);
 }
 .topo-marca { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -85,7 +85,7 @@ a { color: var(--azul-claro); }
 }
 .topo-titulo { font-weight: 700; font-size: 16px; line-height: 1.1; white-space: nowrap; }
 .topo-sub { font-size: 11.5px; opacity: .8; white-space: nowrap; }
-.topo-abas { display: flex; gap: 4px; margin-left: 12px; }
+.topo-abas { display: flex; gap: 4px; margin-left: 12px; flex: 1 1 auto; flex-wrap: wrap; min-width: 0; }
 .topo-aba {
   background: transparent; border: 0; color: rgba(255,255,255,.75); padding: 8px 12px;
   border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
@@ -103,6 +103,7 @@ a { color: var(--azul-claro); }
 
 /* ============================ ESTRUTURA ============================ */
 .corpo { display: grid; grid-template-columns: var(--largura-filtros) 1fr; min-height: calc(100vh - var(--altura-topo)); }
+.topo-aba { position: relative; }
 .corpo.sem-filtros { grid-template-columns: 0 1fr; }
 .corpo.sem-filtros .filtros { display: none; }
 .principal { padding: 18px 22px 40px; min-width: 0; }
@@ -472,9 +473,27 @@ table.tabela td.acoes { text-align: right; }
 .prazo { font-family: var(--fonte-dados); font-weight: 700; white-space: nowrap; }
 .prazo.vencido { color: var(--vermelho); } .prazo.urgente { color: var(--ambar); } .prazo.ok { color: var(--verde); }
 .filtro-status { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-.topo-abas { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-.topo-abas::-webkit-scrollbar { display: none; }
-@media (max-width: 1250px) { .topo-aba .txt { display: none; } .topo-aba { font-size: 16px; padding: 6px 9px; } }
+/* Barra superior: nenhuma aba pode ficar inacessível.
+   Passo 1 (<1400px): esconde o subtítulo da marca para ganhar espaço.
+   Passo 2 (<1150px): abas só com ícone, com dica no toque/hover.
+   Passo 3 (<820px): as abas passam para a própria linha, ocupando a largura toda.
+   Em nenhum momento há corte ou rolagem escondida. */
+@media (max-width: 1400px) {
+  .topo-sub { display: none; }
+  .topo-titulo { font-size: 15px; }
+}
+@media (max-width: 1150px) {
+  .topo-aba .txt { display: none; }
+  .topo-aba { font-size: 17px; padding: 6px 10px; }
+  .topo-abas { gap: 2px; }
+}
+@media (max-width: 820px) {
+  .topo { padding: 6px 12px 0; }
+  .topo-abas { order: 3; flex: 1 0 100%; margin: 2px 0 0; justify-content: space-between;
+               border-top: 1px solid rgba(255,255,255,.14); padding-top: 4px; }
+  .topo-marca { flex: 1 1 auto; }
+  .topo-direita { order: 2; }
+}
 
 /* ============================ FORMULÁRIO DE EDIÇÃO ============================ */
 .form-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px 14px; }
