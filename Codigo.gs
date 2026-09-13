@@ -67,6 +67,15 @@ const CONFIG = {
   // Importação (arquivos .xlsx do GoodManager/Ticket Log)
   DEST_COLS: 40,          // AbastBD e ManutBD gravam A:AN
 
+  // Demais destinos de importação (herdados do importador da planilha)
+  ID_MANUT_DB:    '1WpI_krrzyB65lfN6lYZHr9aD1-x0cSUg_g61xGgvNrk',   // DetalhamentoDB, AceitesDB
+  ID_ANP:         '1VRF3ulO6Z0c0WwyPCwN5dLGWjPiSuTEmEQ7eqXwEaNc',   // Histórico ANP
+  ABA_DETALHE:    'DetalhamentoDB',
+  ABA_ACEITES:    'AceitesDB',
+  ABA_ANP:        'Histórico ANP',
+  URL_GLOSA_ANP:  'https://www.gov.br/anp/pt-br/assuntos/precos-e-defesa-da-concorrencia/precos/precos-revenda-e-de-distribuicao-combustiveis/shlp/mensal/mensal-estados-desde-jan2013.xlsx',
+  CHAVE_NF:       'nacional',   // 'nacional' ou 'municipal'
+
   // DETRAN-CE — Central de Serviços
   DETRAN_BASE: 'https://sistemas.detran.ce.gov.br/central',
 
@@ -1354,6 +1363,394 @@ function exportarBase(token, tipo) {
   }
 }
 
+
+
+/* ------------------------------------------------------------ */
+/*  Importações de títulos, detalhamento, aceites e glosa ANP    */
+/*  (portadas do importador que ficava no menu da planilha)      */
+/* ------------------------------------------------------------ */
+
+/** PDF da NF de abastecimento → aba "Títulos Abast." (A:G + R). */
+function importarTituloAbast(token, arquivo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (!arquivo || !arquivo.base64) return { ok: false, erro: 'Selecione o PDF da NF.' };
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(60000); } catch (e) { return { ok: false, erro: 'Outra importação em andamento.' }; }
+  try {
+    const texto = _textoDoPdf_(arquivo);
+    if (!texto || texto.replace(/\s/g, '').length < 30) return { ok: false, erro: 'Não consegui ler o texto do PDF.' };
+    const c = _camposNf_(texto);
+    if (!c.titulo) return { ok: false, erro: 'Não localizei o Nº do Título (TITULO NRO.) no PDF.' };
+    const aba = SpreadsheetApp.openById(CONFIG.ID_TITULOS).getSheetByName(CONFIG.ABA_TIT_ABAST);
+    if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_TIT_ABAST + '" não encontrada.' };
+    const linha = _primeiraLinhaVaziaNaColuna_(aba, 1, 3);
+    aba.getRange(linha, 1, 1, 7).setValues([[c.titulo, c.numeroNfse, _parseNumeroBR_(c.valorTotal), '',
+      _parseDataBR_(c.dataEmissao), _parseDataBR_(c.vencimento), _formatarCompetencia_(c.competencia, false)]]);
+    aba.getRange(linha, 18).setValue(String(c.chave || ''));
+    SpreadsheetApp.flush(); limparCache();
+    _logAcao_(p.ss, p.sessao.email, 'Importar título abastecimento', '', 'Título ' + c.titulo, 'NF ' + c.numeroNfse + ' | ' + c.valorTotal + ' | comp. ' + c.competencia);
+    return { ok: true, linha: linha, campos: c };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/** PDF da NF de manutenção → aba "Títulos Manut." (A:E, H:K + S). */
+function importarTituloManut(token, arquivo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (!arquivo || !arquivo.base64) return { ok: false, erro: 'Selecione o PDF da NF.' };
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(60000); } catch (e) { return { ok: false, erro: 'Outra importação em andamento.' }; }
+  try {
+    const texto = _textoDoPdf_(arquivo);
+    if (!texto || texto.replace(/\s/g, '').length < 30) return { ok: false, erro: 'Não consegui ler o texto do PDF.' };
+    const c = _camposNf_(texto);
+    if (!c.titulo) return { ok: false, erro: 'Não localizei o Nº do Título (TITULO NRO.) no PDF.' };
+    const aba = SpreadsheetApp.openById(CONFIG.ID_TITULOS).getSheetByName(CONFIG.ABA_TIT_MANUT);
+    if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_TIT_MANUT + '" não encontrada.' };
+    const linha = _primeiraLinhaVaziaNaColuna_(aba, 1, 3);
+    aba.getRange(linha, 1, 1, 5).setValues([[c.titulo, c.numeroNfse, _parseNumeroBR_(c.valorTotal),
+      _parseNumeroBR_(c.reembolsoPecas), _parseNumeroBR_(c.reembolsoMaoObra)]]);   // F e G são fórmulas
+    aba.getRange(linha, 8, 1, 4).setValues([['', _parseDataBR_(c.dataEmissao), _parseDataBR_(c.vencimento), _formatarCompetencia_(c.competencia, false)]]);
+    aba.getRange(linha, 19).setValue(String(c.chave || ''));
+    SpreadsheetApp.flush(); limparCache();
+    _logAcao_(p.ss, p.sessao.email, 'Importar título manutenção', '', 'Título ' + c.titulo, 'NF ' + c.numeroNfse + ' | peças ' + c.reembolsoPecas + ' | MO ' + c.reembolsoMaoObra);
+    return { ok: true, linha: linha, campos: c };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/** Lê o PDF sem gravar nada — confere o que seria importado. */
+function conferirNf(token, arquivo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (!arquivo || !arquivo.base64) return { ok: false, erro: 'Selecione o PDF.' };
+  try {
+    const texto = _textoDoPdf_(arquivo);
+    return { ok: true, campos: _camposNf_(texto), trecho: String(texto).substring(0, 1500) };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Detalhamento de itens (HTML ou Excel) → DetalhamentoDB F:AB, título em AC e competência em AD. */
+function importarDetalhamento(token, arquivo, titulo, competencia) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (!arquivo || !arquivo.base64) return { ok: false, erro: 'Selecione o arquivo de detalhamento.' };
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(60000); } catch (e) { return { ok: false, erro: 'Outra importação em andamento.' }; }
+  try {
+    const aba = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB).getSheetByName(CONFIG.ABA_DETALHE);
+    if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_DETALHE + '" não encontrada.' };
+    const grid = _lerTabelaArquivo_(arquivo);
+    if (!grid || grid.length <= 2) return { ok: false, erro: 'Não encontrei linhas de dados no arquivo.' };
+    const comp = _formatarCompetencia_(competencia || '', false);
+    const tit = String(titulo || '').trim();
+    const linhas = [];
+    grid.slice(2).forEach(linha => {
+      if (!linha.some(c => String(c).trim() !== '')) return;
+      const saida = new Array(23).fill('');
+      for (let i = 0; i < 23; i++) saida[i] = linha[i] !== undefined ? linha[i] : '';
+      linhas.push(saida);
+    });
+    if (!linhas.length) return { ok: false, erro: 'Nenhuma linha aproveitável.' };
+    const inicio = _proximaLinhaAppend_(aba, 6, 3);
+    aba.getRange(inicio, 6, linhas.length, 23).setValues(linhas);
+    if (tit) aba.getRange(inicio, 29, linhas.length, 1).setValues(linhas.map(() => [tit]));
+    if (comp) aba.getRange(inicio, 30, linhas.length, 1).setValues(linhas.map(() => [comp]));
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, p.sessao.email, 'Importar detalhamento', '', linhas.length + ' linhas', 'título ' + tit + ' | comp. ' + comp);
+    return { ok: true, inseridos: linhas.length, titulo: tit, competencia: comp };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/** Aceites (HTML ou Excel) → AceitesDB A:G, tipo em H. Duplicidade pela OS na coluna A. */
+function importarAceites(token, arquivo, tipo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (!arquivo || !arquivo.base64) return { ok: false, erro: 'Selecione o arquivo de aceites.' };
+  if (tipo !== 'Gestor' && tipo !== 'Automático') return { ok: false, erro: 'Tipo de aceite inválido.' };
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(60000); } catch (e) { return { ok: false, erro: 'Outra importação em andamento.' }; }
+  try {
+    const aba = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB).getSheetByName(CONFIG.ABA_ACEITES);
+    if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_ACEITES + '" não encontrada.' };
+    const grid = _lerTabelaArquivo_(arquivo);
+    if (!grid || grid.length <= 8) return { ok: false, erro: 'Não encontrei linhas de dados (o arquivo tem cabeçalho de 8 linhas).' };
+    const existentes = _obterValoresColuna_(aba, 1, 2);
+    const novos = {}, linhas = [];
+    let lidos = 0, duplicados = 0;
+    grid.slice(8).forEach(linha => {
+      const texto = _removerAcentos_(linha.map(c => String(c)).join(' ').toUpperCase());
+      if (/QTDE\.?\s*DE\s*OS/.test(texto) || /TOTAL\s+GERAL/.test(texto) || /TOTAL\s+ACEITE/.test(texto)) return;
+      if (!linha.some(c => String(c).trim() !== '')) return;
+      const os = _normalizarCodigo_(linha[0]);
+      if (!os) return;
+      lidos++;
+      if (existentes.has(os) || novos[os]) { duplicados++; return; }
+      const saida = new Array(7).fill('');
+      for (let i = 0; i < 7; i++) saida[i] = linha[i] !== undefined ? linha[i] : '';
+      linhas.push(saida); novos[os] = true;
+    });
+    if (linhas.length) {
+      const inicio = _proximaLinhaAppend_(aba, 1, 2);
+      aba.getRange(inicio, 1, linhas.length, 7).setValues(linhas);
+      aba.getRange(inicio, 8, linhas.length, 1).setValues(linhas.map(() => [tipo]));
+    }
+    SpreadsheetApp.flush(); limparCache();
+    _logAcao_(p.ss, p.sessao.email, 'Importar aceites (' + tipo + ')', '', linhas.length + ' inseridos', 'lidos: ' + lidos + ' | duplicados: ' + duplicados);
+    return { ok: true, lidos: lidos, inseridos: linhas.length, duplicados: duplicados };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/** Glosa ANP: arquivo enviado (origem='arquivo') ou baixado do site da ANP (origem='site'). */
+function importarGlosaAnp(token, competencia, origem, arquivo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const comp = _formatarCompetencia_(competencia || '', true);
+  if (!comp) return { ok: false, erro: 'Informe a competência (MM/AAAA).' };
+  const partes = comp.split('/'), mm = parseInt(partes[0], 10), yyyy = parseInt(partes[1], 10);
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(120000); } catch (e) { return { ok: false, erro: 'Outra importação em andamento.' }; }
+  let temporario = null;
+  try {
+    const aba = SpreadsheetApp.openById(CONFIG.ID_ANP).getSheetByName(CONFIG.ABA_ANP);
+    if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_ANP + '" não encontrada.' };
+    const jaTem = _contarCompetenciaAnp_(aba, mm, yyyy);
+    if (jaTem > 0) return { ok: false, erro: 'A competência ' + comp + ' já tem ' + jaTem + ' linha(s) no Histórico ANP. Remova antes de reimportar.' };
+
+    let blob;
+    if (origem === 'site') {
+      const r = UrlFetchApp.fetch(CONFIG.URL_GLOSA_ANP, { muteHttpExceptions: true, followRedirects: true,
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppsScript' } });
+      if (r.getResponseCode() !== 200) return { ok: false, erro: 'O site da ANP respondeu HTTP ' + r.getResponseCode() + '.' };
+      blob = r.getBlob().setName('glosa-anp.xlsx').setContentType(MimeType.MICROSOFT_EXCEL);
+      if (blob.getBytes().length < 1000) return { ok: false, erro: 'O arquivo baixado da ANP veio vazio.' };
+    } else {
+      if (!arquivo || !arquivo.base64) return { ok: false, erro: 'Selecione o arquivo da ANP.' };
+      blob = Utilities.newBlob(Utilities.base64Decode(arquivo.base64), arquivo.mimeType || MimeType.MICROSOFT_EXCEL, arquivo.nome || 'anp.xlsx');
+    }
+    temporario = Drive.Files.create({ name: '[TEMP ANP painel]', mimeType: MimeType.GOOGLE_SHEETS }, blob);
+    const dados = SpreadsheetApp.openById(temporario.id).getSheets()[0].getDataRange().getValues();   // tipado: datas reais
+    const dataComp = new Date(yyyy, mm - 1, 1);
+    const linhas = [];
+    dados.forEach(linha => {
+      const c = _parseCompetenciaCelula_(linha[0]);
+      if (!c || c.mm !== mm || c.yyyy !== yyyy) return;
+      const saida = new Array(10).fill('');
+      saida[0] = dataComp;
+      for (let i = 1; i < 10; i++) saida[i] = (linha[i] !== undefined && linha[i] !== null) ? linha[i] : '';
+      linhas.push(saida);
+    });
+    if (!linhas.length) return { ok: false, erro: 'Nenhuma linha da competência ' + comp + ' foi encontrada no arquivo.' };
+    const inicio = _proximaLinhaAppend_(aba, 1, 2);
+    aba.getRange(inicio, 1, linhas.length, 10).setValues(linhas);
+    aba.getRange(inicio, 1, linhas.length, 1).setNumberFormat('MM/yyyy');
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, p.sessao.email, 'Importar glosa ANP', '', linhas.length + ' linhas', 'competência ' + comp + ' | origem: ' + (origem === 'site' ? 'site da ANP' : 'arquivo'));
+    return { ok: true, inseridos: linhas.length, competencia: comp };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  } finally {
+    if (temporario && temporario.id) { try { Drive.Files.remove(temporario.id); } catch (e) {} }
+    trava.releaseLock();
+  }
+}
+
+function _contarCompetenciaAnp_(aba, mm, yyyy) {
+  const n = aba.getLastRow(); if (n < 1) return 0;
+  let total = 0;
+  aba.getRange(1, 1, n, 1).getValues().forEach(l => { const c = _parseCompetenciaCelula_(l[0]); if (c && c.mm === mm && c.yyyy === yyyy) total++; });
+  return total;
+}
+
+/** Texto do PDF: usa a camada de texto e, se não houver, cai para OCR em português. */
+function _textoDoPdf_(arquivo) {
+  const blob = Utilities.newBlob(Utilities.base64Decode(arquivo.base64), arquivo.mimeType || 'application/pdf', arquivo.nome || 'nf.pdf');
+  let texto = _pdfComoTexto_(blob, null);
+  if (texto && texto.replace(/\s/g, '').length > 50) return texto;
+  return _pdfComoTexto_(blob, 'pt-BR');
+}
+function _pdfComoTexto_(blob, ocr) {
+  let doc = null;
+  try {
+    doc = Drive.Files.create({ name: '[TEMP NF painel] ' + Date.now(), mimeType: MimeType.GOOGLE_DOCS }, blob, ocr ? { ocrLanguage: ocr } : {});
+    return DocumentApp.openById(doc.id).getBody().getText();
+  } catch (e) {
+    return '';
+  } finally {
+    if (doc && doc.id) { try { Drive.Files.remove(doc.id); } catch (e) {} }
+  }
+}
+
+/** Campos da NFS-e (Ticket Log). Mesma extração do importador antigo. */
+function _camposNf_(texto) {
+  const T = _removerAcentos_(String(texto || '')).replace(/\s+/g, ' ').trim().toUpperCase();
+  const g = re => { const x = T.match(re); return x ? x[1].trim() : ''; };
+  const compRaw = g(/DATA COMPETENCIA:?\s*(\d{2}\/\d{2}\/\d{4})/);
+  let competencia = '';
+  if (compRaw) { const c = _parseCompetenciaCelula_(compRaw); if (c) competencia = ('0' + c.mm).slice(-2) + '/' + c.yyyy; }
+  const venc = T.match(/\d{7,}\s+(\d{2}\/\d{2}\/\d{4})/) || T.match(/VENCIMENTO[\s\S]{0,40}?(\d{2}\/\d{2}\/\d{4})/);
+  const chaveNacional = g(/CHAVE DE ACESSO NFS-?E NACIONAL:?\s*([0-9]+)/);
+  const chaveMunicipal = g(/CHAVE DE ACESSO:?\s*([0-9][0-9\-\/]+)/);
+  const valorTotal = g(/VALOR TOTAL DA NOTA FISCAL:?\s*R?\$?\s*([\d.]+,\d{2})/);
+  const valorLiquido = g(/VALOR LIQUIDO DA NOTA FISCAL:?\s*R?\$?\s*([\d.]+,\d{2})/);
+  const desconto = g(/DESCONTO CONDICIONAL\s*:?\s*([\d.]+,\d{2})/);
+  const reembolsos = _reembolsosNf_(T, _parseNumeroBR_(valorTotal), _parseNumeroBR_(valorLiquido), _parseNumeroBR_(desconto));
+  return {
+    titulo: g(/TITULO NRO\.?\s*:?\s*(\d+)/),
+    numeroNfse: g(/NUMERO NFS-?E NACIONAL\s*:?\s*(\d+)/),
+    valorTotal: valorTotal, valorLiquido: valorLiquido, desconto: desconto,
+    reembolsoPecas: reembolsos.pecas, reembolsoMaoObra: reembolsos.mao,
+    dataEmissao: g(/DATA DE EMISSAO:?\s*(\d{2}\/\d{2}\/\d{4})/),
+    vencimento: venc ? venc[1] : '', competencia: competencia,
+    chave: (CONFIG.CHAVE_NF === 'municipal' && chaveMunicipal) ? chaveMunicipal : (chaveNacional || chaveMunicipal)
+  };
+}
+
+/** Peças e mão de obra: procura o par de valores que soma o total da nota. */
+function _reembolsosNf_(T, total, liquido, desconto) {
+  const RE = /\d[\d.]*,\d{2}/g;
+  const todas = (T.match(RE) || []).map(s => ({ s: s, n: _parseNumeroBR_(s) }));
+  const ultimoReembolso = () => {
+    const i = T.lastIndexOf('REEMBOLSO');
+    if (i < 0) return { pecas: '', mao: '' };
+    const ms = (T.slice(i).match(RE) || []).filter(x => _parseNumeroBR_(x) > 0);
+    return ms.length >= 2 ? { pecas: ms[0], mao: ms[1] } : { pecas: '', mao: '' };
+  };
+  if (!total) return ultimoReembolso();
+  const excluir = [total, liquido, desconto].filter(x => x > 0);
+  const candidatas = todas.filter(m => m.n > 0 && !excluir.some(x => Math.abs(x - m.n) < 0.005));
+  for (let i = 0; i < candidatas.length; i++) {
+    for (let j = i + 1; j < candidatas.length; j++) {
+      if (Math.abs(candidatas[i].n + candidatas[j].n - total) < 0.005) return { pecas: candidatas[i].s, mao: candidatas[j].s };
+    }
+  }
+  return ultimoReembolso();
+}
+
+/** Arquivo enviado: tabela HTML (com rowspan) ou Excel convertido pelo Drive. */
+function _lerTabelaArquivo_(arquivo) {
+  const bytes = Utilities.base64Decode(arquivo.base64);
+  const ehZip = bytes.length > 1 && bytes[0] === 80 && bytes[1] === 75;   // "PK" = xlsx
+  if (!ehZip) {
+    const txt = Utilities.newBlob(bytes).getDataAsString('UTF-8');
+    if (/<table[\s>]/i.test(txt) || /<tr[\s>]/i.test(txt)) return _parseHtmlTable_(txt);
+  }
+  let temporario = null;
+  try {
+    const blob = Utilities.newBlob(bytes, arquivo.mimeType || MimeType.MICROSOFT_EXCEL, arquivo.nome || 'arquivo.xlsx');
+    temporario = Drive.Files.create({ name: '[TEMP tabela painel]', mimeType: MimeType.GOOGLE_SHEETS }, blob);
+    return SpreadsheetApp.openById(temporario.id).getSheets()[0].getDataRange().getDisplayValues();
+  } finally {
+    if (temporario && temporario.id) { try { Drive.Files.remove(temporario.id); } catch (e) {} }
+  }
+}
+
+function __parseNumeroBR_(v) {
+  if (v === null || v === undefined) return '';
+  let s = String(v).trim().replace(/r\$/gi, '').replace(/\s/g, '');
+  if (!s) return '';
+  if (s.indexOf(',') > -1) s = s.replace(/\./g, '').replace(',', '.');
+  const n = parseFloat(s);
+  return isNaN(n) ? '' : n;
+}
+
+function __parseDataBR_(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v).trim();
+  if (!s) return '';
+  const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (!m) return s;
+  const d = new Date(normalizarAno_(m[3]), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+  return isNaN(d.getTime()) ? s : d;
+}
+
+function __formatarCompetencia_(s, obrigatorio) {
+  let t = (s === null || s === undefined) ? '' : String(s).trim();
+  if (!t) { if (obrigatorio) throw new Error('Informe a competência no formato MM/YYYY (ex.: 05/2026).'); return ''; }
+  const p = _parseCompetenciaCelula_(t);
+  if (!p) throw new Error('Competência inválida: "' + t + '". Use MM/YYYY (ex.: 05/2026).');
+  return String(p.mm).padStart(2, '0') + '/' + p.yyyy;
+}
+
+function __parseCompetenciaCelula_(v) {
+  if (v === null || v === undefined) return null;
+  if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v)) {
+    return { mm: v.getMonth() + 1, yyyy: v.getFullYear() };
+  }
+  let s = _removerAcentos_(String(v).trim().toLowerCase()).replace(/\s+/g, '');
+  if (!s) return null;
+  let m = s.match(/^([a-z]{3,})[\/\-.]?(\d{2,4})$/);            // mai/26
+  if (m) { const mes = MESES_PT[m[1].substring(0, 3)]; return mes ? { mm: mes, yyyy: normalizarAno_(m[2]) } : null; }
+  m = s.match(/^\d{1,2}[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);     // dd/mm/aaaa
+  if (m) { const mes = parseInt(m[1], 10); return (mes >= 1 && mes <= 12) ? { mm: mes, yyyy: normalizarAno_(m[2]) } : null; }
+  m = s.match(/^(\d{1,2})[\/\-.](\d{2,4})$/);                   // mm/aaaa
+  if (m) { const mes = parseInt(m[1], 10); return (mes >= 1 && mes <= 12) ? { mm: mes, yyyy: normalizarAno_(m[2]) } : null; }
+  return null;
+}
+
+function __primeiraLinhaVaziaNaColuna_(aba, col, startRow) {
+  const maxRows = aba.getMaxRows();
+  if (startRow > maxRows) return startRow;
+  const vals = aba.getRange(startRow, col, maxRows - startRow + 1, 1).getDisplayValues();
+  for (let i = 0; i < vals.length; i++) if (String(vals[i][0]).trim() === '') return startRow + i;
+  return maxRows + 1;
+}
+
+function __proximaLinhaAppend_(aba, col, floor) {
+  const maxRows = aba.getMaxRows();
+  const vals = aba.getRange(1, col, maxRows, 1).getDisplayValues();
+  let last = 0;
+  for (let i = 0; i < vals.length; i++) if (String(vals[i][0]).trim() !== '') last = i + 1;
+  return Math.max(last + 1, floor);
+}
+
+function __obterValoresColuna_(aba, col, startRow) {
+  const set = new Set();
+  const maxRows = aba.getMaxRows();
+  if (maxRows < startRow) return set;
+  const vals = aba.getRange(startRow, col, maxRows - startRow + 1, 1).getDisplayValues();
+  vals.forEach(r => { const v = _normalizarCodigo_(r[0]); if (v) set.add(v); });
+  return set;
+}
+
+function __parseHtmlTable_(html) {
+  const tabelas = html.match(/<table[\s\S]*?<\/table>/gi) || [];
+  if (!tabelas.length) return [];
+  const tableHtml = tabelas.sort((a, b) => b.length - a.length)[0];
+  const trs = tableHtml.match(/<tr[\s\S]*?<\/tr>/gi) || [];
+  const grid = [];
+  const carry = {}; // col -> { value, remaining } (rowspan pendente)
+
+  trs.forEach(tr => {
+    const cells = tr.match(/<t[dh][\s\S]*?<\/t[dh]>/gi) || [];
+    const rowOut = [];
+    let col = 0;
+    const aplicarCarry = () => {
+      while (carry[col] && carry[col].remaining > 0) {
+        rowOut[col] = carry[col].value;
+        carry[col].remaining--;
+        if (carry[col].remaining === 0) delete carry[col];
+        col++;
+      }
+    };
+    cells.forEach(cell => {
+      aplicarCarry();
+      const colspan = parseInt((cell.match(/colspan\s*=\s*"?(\d+)/i) || [])[1] || '1', 10);
+      const rowspan = parseInt((cell.match(/rowspan\s*=\s*"?(\d+)/i) || [])[1] || '1', 10);
+      const val = limparCelulaHtml_(cell);
+      for (let k = 0; k < colspan; k++) {
+        rowOut[col] = val;
+        if (rowspan > 1) carry[col] = { value: val, remaining: rowspan - 1 };
+        col++;
+      }
+    });
+    aplicarCarry();
+    grid.push(rowOut);
+  });
+
+  const width = grid.reduce((m, r) => Math.max(m, r.length), 0);
+  return grid.map(r => { const o = new Array(width).fill(''); for (let i = 0; i < width; i++) o[i] = (r[i] !== undefined ? r[i] : ''); return o; });
+}
+
+function __removerAcentos_(s) {
+  return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function __normalizarCodigo_(v) { return String(v || '').trim(); }
 
 /* ============================================================
    RELATÓRIO DE ABASTECIMENTO (PDF, paisagem)

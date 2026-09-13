@@ -27,7 +27,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.7.0';
+const VERSAO_PAINEL = '2.8.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2055,59 +2055,149 @@ function renderDados() {
 
 function renderImportar(c) {
   const u = ESTADO.uso && ESTADO.uso.meta;
-  const cartao = (tipo, titulo, aba, descricao, periodo) => `
+  const hoje = new Date();
+  const compPadrao = ('0' + (hoje.getMonth() + 1)).slice(-2) + '/' + hoje.getFullYear();
+  const cartao = (id, titulo, destino, descricao, extra, aceita) => `
     <div class="acao-cartao">
       <h4>${titulo}</h4>
       <div class="desc">${descricao}</div>
-      ${periodo ? `<div class="cartao-dica" style="margin:0 0 10px">Base atual: ${periodo}</div>` : ''}
-      <label class="btn amarelo" style="cursor:pointer; display:inline-flex">Escolher arquivo .xlsx
-        <input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="oculto" data-imp="${tipo}">
+      <div class="cartao-dica" style="margin:0 0 10px">Destino: <b>${destino}</b></div>
+      ${extra || ''}
+      <label class="btn amarelo" style="cursor:pointer; display:inline-flex">Escolher arquivo
+        <input type="file" accept="${aceita || '.xlsx,.xls'}" class="oculto" data-imp="${id}">
       </label>
-      <div class="foto-data" id="imp-status-${tipo}"></div>
-      <div id="imp-result-${tipo}"></div>
+      <div class="foto-data" id="imp-status-${id}"></div>
+      <div id="imp-result-${id}"></div>
     </div>`;
+
   c.innerHTML = `
     <div class="cartao largo" style="margin-bottom:14px">
-      <div class="cartao-cab"><h3>Importar do Ticket Log / GoodManager</h3><small>arquivos .xlsx</small></div>
-      <div class="cartao-dica" style="margin:0">Pode importar qualquer período — quinze dias, um mês, dois meses. Cada transação é identificada pelo código da coluna A, então o que já está na base é ignorado e nada duplica. Períodos sobrepostos são seguros.</div>
+      <div class="cartao-cab"><h3>Importações</h3><small>tudo que antes era feito pelo menu da planilha</small></div>
+      <div class="cartao-dica" style="margin:0">Período livre: importe quinze dias, um mês ou dois. Abastecimento, manutenção e aceites conferem duplicidade (código da transação / número da OS), então reimportar período sobreposto é seguro.</div>
     </div>
+
+    <h2 class="secao-titulo">Bases de transações</h2>
     <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
-      ${cartao('abast', 'Abastecimento → AbastBD', 'AbastBD', 'Relatório de abastecimento exportado do sistema da Ticket Log.', u ? fmtInt(u.abastLinhas) + ' transações, ' + brDia(u.abastDe) + ' a ' + brDia(u.abastAte) : '')}
-      ${cartao('manut', 'Manutenção → ManutBD', 'ManutBD', 'Relatório de manutenção. As colunas são reconhecidas pelo nome do cabeçalho, mesmo fora de ordem.', u ? fmtInt(u.manutLinhas) + ' transações, ' + brDia(u.manutDe) + ' a ' + brDia(u.manutAte) : '')}
+      ${cartao('abast', 'Abastecimento', 'AbastBD', 'Relatório de abastecimento do Ticket Log (.xlsx).',
+        u ? `<div class="cartao-dica" style="margin:0 0 10px">Base atual: ${fmtInt(u.abastLinhas)} transações, ${brDia(u.abastDe)} a ${brDia(u.abastAte)}</div>` : '')}
+      ${cartao('manut', 'Manutenção', 'ManutBD', 'Relatório de manutenção (.xlsx). Colunas reconhecidas pelo nome, mesmo fora de ordem.',
+        u ? `<div class="cartao-dica" style="margin:0 0 10px">Base atual: ${fmtInt(u.manutLinhas)} transações, ${brDia(u.manutDe)} a ${brDia(u.manutAte)}</div>` : '')}
+    </div>
+
+    <h2 class="secao-titulo">Notas fiscais e pagamentos</h2>
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+      ${cartao('titAbast', 'Título de abastecimento', 'Títulos Abast.', 'PDF da NFS-e. O painel lê título, NF, valor, datas, competência e chave de acesso — com OCR quando o PDF não tem camada de texto.', '', '.pdf')}
+      ${cartao('titManut', 'Título de manutenção', 'Títulos Manut.', 'PDF da NFS-e, incluindo a separação entre peças e mão de obra (o par de valores que soma o total da nota).', '', '.pdf')}
+      ${cartao('detalhe', 'Detalhamento de itens', 'DetalhamentoDB (F:AB)', 'Tabela HTML ou Excel do detalhamento. Título e competência são gravados em AC e AD.',
+        `<div class="form-grade" style="grid-template-columns:1fr 1fr; margin-bottom:10px">
+           <div class="form-campo"><label>Título (AC)</label><input type="text" id="det-titulo" placeholder="opcional"></div>
+           <div class="form-campo"><label>Competência (AD)</label><input type="text" id="det-comp" placeholder="MM/AAAA"></div>
+         </div>`, '.html,.htm,.xls,.xlsx')}
+    </div>
+
+    <h2 class="secao-titulo">Aceites de ordens de serviço</h2>
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+      ${cartao('aceiteGestor', 'Aceite pelo gestor', 'AceitesDB (H = Gestor)', 'Arquivo de aceites realizados por gestor. Ignora OS já registradas.', '', '.html,.htm,.xls,.xlsx')}
+      ${cartao('aceiteAuto', 'Aceite automático', 'AceitesDB (H = Automático)', 'Arquivo de aceites automáticos (prazo esgotado). Ignora OS já registradas.', '', '.html,.htm,.xls,.xlsx')}
+    </div>
+
+    <h2 class="secao-titulo">Glosa de preços (ANP)</h2>
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+      ${cartao('glosa', 'Série da ANP por arquivo', 'Histórico ANP (A:J)', 'Planilha mensal de preços da ANP. Só entram as linhas da competência informada.',
+        `<div class="form-campo" style="margin-bottom:10px"><label>Competência</label><input type="text" id="glosa-comp" value="${compPadrao}" placeholder="MM/AAAA"></div>`)}
+      <div class="acao-cartao">
+        <h4>Série da ANP direto do site</h4>
+        <div class="desc">Baixa a série histórica publicada pela ANP e importa a competência escolhida, sem precisar do arquivo.</div>
+        <div class="cartao-dica" style="margin:0 0 10px">Destino: <b>Histórico ANP (A:J)</b></div>
+        <div class="form-campo" style="margin-bottom:10px"><label>Competência</label><input type="text" id="glosa-site-comp" value="${compPadrao}" placeholder="MM/AAAA"></div>
+        <button class="btn amarelo" id="btn-glosa-site">Baixar da ANP e importar</button>
+        <div class="foto-data" id="imp-status-glosaSite"></div>
+        <div id="imp-result-glosaSite"></div>
+      </div>
     </div>`;
+
   c.querySelectorAll('input[data-imp]').forEach(inp => inp.addEventListener('change', () => {
     if (inp.files && inp.files[0]) enviarImportacao(inp.dataset.imp, inp.files[0]);
     inp.value = '';
   }));
+  ouvir('btn-glosa-site', 'click', () => {
+    const comp = val('glosa-site-comp');
+    if (!comp) { toast('Informe a competência.'); return; }
+    const btn = el('btn-glosa-site');
+    btn.disabled = true; btn.textContent = 'Baixando da ANP…';
+    chamarImportacao('glosaSite', r => { btn.disabled = false; btn.textContent = 'Baixar da ANP e importar'; return r; },
+      run => run.importarGlosaAnp(ESTADO.token, comp, 'site', null));
+  });
 }
 
-function enviarImportacao(tipo, arquivo) {
-  const status = el('imp-status-' + tipo), resultado = el('imp-result-' + tipo);
-  const diga = t => { if (status) status.textContent = t; };
-  if (arquivo.size > 25 * 1024 * 1024) { toast('Arquivo acima de 25 MB — divida o período.'); return; }
-  diga('Lendo ' + arquivo.name + ' (' + Math.round(arquivo.size / 1024) + ' KB)…');
+/** Executa a chamada ao servidor e desenha o resultado no cartão. */
+function chamarImportacao(id, aoTerminar, executar) {
+  const status = el('imp-status-' + id), resultado = el('imp-result-' + id);
+  if (status) status.textContent = 'Processando…';
   if (resultado) resultado.innerHTML = '';
+  const run = google.script.run
+    .withSuccessHandler(r => {
+      if (aoTerminar) aoTerminar(r);
+      if (sessaoExpirou(r)) return;
+      if (!r || !r.ok) { if (status) status.textContent = ''; toast((r && r.erro) || 'Falha na importação.'); return; }
+      if (status) status.textContent = '';
+      desenharResultadoImportacao(id, r);
+    })
+    .withFailureHandler(e => {
+      if (aoTerminar) aoTerminar(null);
+      if (status) status.textContent = '';
+      toast('Erro: ' + (e && e.message ? e.message : e));
+    });
+  executar(run);
+}
+
+function desenharResultadoImportacao(id, r) {
+  const resultado = el('imp-result-' + id);
+  const dado = (k, v, classe) => `<div class="dado"><div class="k">${k}</div><div class="v ${classe || ''}" style="font-size:14px">${v}</div></div>`;
+  let html = '';
+  if (r.campos) {
+    const c = r.campos;
+    html = `<div class="grade-dados" style="margin-top:10px">
+      ${dado('Título', esc(c.titulo || '—'))}${dado('NF', esc(c.numeroNfse || '—'))}
+      ${dado('Valor total', esc(c.valorTotal || '—'))}${c.reembolsoPecas ? dado('Peças', esc(c.reembolsoPecas)) : ''}
+      ${c.reembolsoMaoObra ? dado('Mão de obra', esc(c.reembolsoMaoObra)) : ''}
+      ${dado('Emissão', esc(c.dataEmissao || '—'))}${dado('Vencimento', esc(c.vencimento || '—'))}
+      ${dado('Competência', esc(c.competencia || '—'))}${r.linha ? dado('Linha gravada', r.linha, 'ok-txt') : ''}</div>`;
+    toast('Título ' + (c.titulo || '') + ' gravado.');
+  } else {
+    html = `<div class="grade-dados" style="margin-top:10px">
+      ${r.lidos !== undefined ? dado('Lidos', fmtInt(r.lidos)) : ''}
+      ${dado('Inseridos', fmtInt(r.inseridos || 0), 'ok-txt')}
+      ${r.duplicados !== undefined ? dado('Já existiam', fmtInt(r.duplicados)) : ''}
+      ${r.periodo ? dado('Período', esc(r.periodo)) : ''}
+      ${r.competencia ? dado('Competência', esc(r.competencia)) : ''}</div>`;
+    toast(fmtInt(r.inseridos || 0) + ' linha(s) inserida(s)' + (r.destino ? ' em ' + r.destino : ''));
+    ESTADO.uso = null;
+  }
+  if (resultado) resultado.innerHTML = html;
+}
+
+function enviarImportacao(id, arquivo) {
+  const limite = id === 'titAbast' || id === 'titManut' ? 15 : 25;
+  if (arquivo.size > limite * 1024 * 1024) { toast('Arquivo acima de ' + limite + ' MB.'); return; }
+  const status = el('imp-status-' + id);
+  if (status) status.textContent = 'Lendo ' + arquivo.name + ' (' + Math.round(arquivo.size / 1024) + ' KB)…';
   const leitor = new FileReader();
-  leitor.onerror = () => diga('Falha ao ler o arquivo.');
+  leitor.onerror = () => { if (status) status.textContent = 'Falha ao ler o arquivo.'; };
   leitor.onload = () => {
     const base64 = String(leitor.result).substring(String(leitor.result).indexOf(',') + 1);
-    diga('Enviando e conferindo duplicidades… (pode levar um minuto)');
-    google.script.run
-      .withSuccessHandler(r => {
-        if (sessaoExpirou(r)) return;
-        if (!r || !r.ok) { diga(''); toast((r && r.erro) || 'Falha na importação.'); return; }
-        diga('');
-        if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
-          <div class="dado"><div class="k">Lidos no arquivo</div><div class="v">${fmtInt(r.lidos)}</div></div>
-          <div class="dado"><div class="k">Inseridos</div><div class="v ok-txt">${fmtInt(r.inseridos)}</div></div>
-          <div class="dado"><div class="k">Já existiam</div><div class="v">${fmtInt(r.duplicados)}</div></div>
-          ${r.periodo ? `<div class="dado"><div class="k">Período inserido</div><div class="v" style="font-size:13px">${esc(r.periodo)}</div></div>` : ''}
-        </div>`;
-        toast(r.inseridos + ' transação(ões) inserida(s) em ' + r.destino);
-        ESTADO.uso = null;
-      })
-      .withFailureHandler(e => { diga(''); toast('Erro: ' + (e && e.message ? e.message : e)); })
-      .importarBase(ESTADO.token, tipo, { nome: arquivo.name, mimeType: arquivo.type, base64: base64 });
+    const pacote = { nome: arquivo.name, mimeType: arquivo.type, base64: base64 };
+    if (status) status.textContent = 'Enviando…' + (id === 'titAbast' || id === 'titManut' ? ' (leitura do PDF pode levar até um minuto)' : '');
+    chamarImportacao(id, null, run => {
+      if (id === 'abast' || id === 'manut') return run.importarBase(ESTADO.token, id, pacote);
+      if (id === 'titAbast') return run.importarTituloAbast(ESTADO.token, pacote);
+      if (id === 'titManut') return run.importarTituloManut(ESTADO.token, pacote);
+      if (id === 'detalhe') return run.importarDetalhamento(ESTADO.token, pacote, val('det-titulo'), val('det-comp'));
+      if (id === 'aceiteGestor') return run.importarAceites(ESTADO.token, pacote, 'Gestor');
+      if (id === 'aceiteAuto') return run.importarAceites(ESTADO.token, pacote, 'Automático');
+      if (id === 'glosa') return run.importarGlosaAnp(ESTADO.token, val('glosa-comp'), 'arquivo', pacote);
+      toast('Tipo de importação desconhecido.');
+    });
   };
   leitor.readAsDataURL(arquivo);
 }
