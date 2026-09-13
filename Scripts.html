@@ -62,7 +62,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.12.5';
+const VERSAO_PAINEL = '2.12.6';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2513,14 +2513,17 @@ function verificarServidor() {
   const run = servidor('infoServidor',
     r => {
       if (!r || !r.ok) { caixa.textContent = 'Não consegui verificar o servidor.'; return; }
-      const desatualizado = r.versao !== VERSAO_PAINEL || (r.faltando && r.faltando.length);
-      const abas = Object.keys(r.abas || {}).filter(k => k !== 'erro')
+      const abas = Object.keys(r.abas || {})
         .map(k => `${esc(k)}: ${r.abas[k] ? fmtInt(r.abas[k]) + ' linhas' : '<b style="color:var(--vermelho)">ausente</b>'}`).join(' · ');
-      caixa.innerHTML = (desatualizado
-        ? `<b style="color:var(--vermelho)">Servidor desatualizado (Codigo.gs v${esc(r.versao)}, interface v${esc(VERSAO_PAINEL)}).</b>
-           ${r.faltando.length ? 'Funções ausentes: <b>' + esc(r.faltando.join(', ')) + '</b>. ' : ''}
-           Cole o Codigo.gs no editor e faça Implantar → Gerenciar implantações → Nova versão.<br>`
-        : `Servidor v${esc(r.versao)} em dia. `) + (abas ? 'Bases: ' + abas : '');
+      const partes = [];
+      if (r.faltando && r.faltando.length) {
+        partes.push(`<b style="color:var(--vermelho)">Faltam funções no servidor: ${esc(r.faltando.join(', '))}.</b> Cole o Codigo.gs e faça Nova versão.`);
+      } else {
+        partes.push(`Servidor v${esc(r.versao)}${r.versao !== VERSAO_PAINEL ? ' (interface v' + esc(VERSAO_PAINEL) + ')' : ''} — funções completas.`);
+      }
+      if (r.erros && r.erros.length) partes.push(`<b style="color:var(--vermelho)">Sem acesso a ${esc(r.erros.join(' | '))}</b>${r.conta ? ' — o app executa como <b>' + esc(r.conta) + '</b>; compartilhe a planilha com essa conta.' : ''}`);
+      if (abas) partes.push('Bases: ' + abas);
+      caixa.innerHTML = partes.join('<br>');
     },
     () => { caixa.innerHTML = '<b style="color:var(--vermelho)">O servidor não respondeu à verificação.</b> Cole o Codigo.gs mais recente e faça Nova versão.'; });
   if (run) run.infoServidor(ESTADO.token);

@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.12.4';
+const CODIGO_VERSAO = '2.12.6';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3029,21 +3029,22 @@ function infoServidor(token) {
   const esperadas = ['gerarRelatorioAbastecimento', 'gerarRelatorioGlosa', 'gerarRelatorioPecas', 'gerarRelatorioAceites',
                      'importarBase', 'importarTituloAbast', 'importarDetalhamento', 'importarAceites', 'importarGlosaAnp',
                      'enfileirarAcoes', 'obterFila', 'salvarViatura', 'criarViatura'];
-  const faltando = esperadas.filter(n => typeof this[n] !== 'function');
-  const abas = {};
+  const faltando = esperadas.filter(n => typeof globalThis[n] !== 'function');
+  const abas = {}, erros = [];
   try {
     const ss = SpreadsheetApp.openById(CONFIG.ID_MANUT_DB);
     [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS].forEach(n => {
       const a = ss.getSheetByName(n); abas[n] = a ? a.getLastRow() : 0;
     });
-  } catch (e) { abas.erro = String(e.message || e); }
+  } catch (e) { erros.push('planilha de aceites/detalhamento (' + CONFIG.ID_MANUT_DB.substring(0, 12) + '…): ' + String(e.message || e)); }
   try {
     const b = SpreadsheetApp.openById(CONFIG.ID_BASE);
     [CONFIG.ABA_ANP, CONFIG.ABA_RESUMO_GLOSA, CONFIG.ABA_ACIDENTES].forEach(n => {
       const a = b.getSheetByName(n); abas[n] = a ? a.getLastRow() : 0;
     });
-  } catch (e) {}
-  return { ok: true, versao: CODIGO_VERSAO, faltando: faltando, abas: abas };
+  } catch (e) { erros.push('planilha de gestão: ' + String(e.message || e)); }
+  return { ok: true, versao: CODIGO_VERSAO, faltando: faltando, abas: abas, erros: erros,
+           conta: Session.getEffectiveUser().getEmail() };
 }
 
 /** Competências disponíveis em cada base — o painel usa para oferecer só o que existe. */
