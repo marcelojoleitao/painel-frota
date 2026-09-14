@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.14.0';
+const CODIGO_VERSAO = '2.15.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1354,6 +1354,68 @@ function _resolverColuna_(mapa, desejada) {
   const nomes = alt[desejada] || [desejada];
   for (let i = 0; i < nomes.length; i++) { const k = _normCab_(nomes[i]); if (mapa[k] !== undefined) return mapa[k]; }
   return -1;
+}
+
+
+/**
+ * Importa o relatório de Orçamentos colado como texto (separado por tabulação).
+ * Colunas do relatório: Ordem Serviço | Placa | Data Conclusão | Código Estabelecimento |
+ * Estabelecimento | Mão de Obra | NF Serviço | Peças | NF Peça | Total O.S.
+ * Na planilha elas ocupam A:D e F:K (a coluna E fica vazia), a competência vai para L
+ * (informada por você, porque o relatório não a traz) e M é a fórmula do tipo de aceite.
+ */
+function importarOrcamentos(token, texto, competencia) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const comp = _formatarCompetencia_(competencia || '', true);
+  if (!texto || String(texto).trim().length < 20) return { ok: false, erro: 'Cole o relatório de orçamentos.' };
+
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(45000); } catch (e) { return { ok: false, erro: 'Outra importação em andamento.' }; }
+  try {
+    const aba = _ssManut_().getSheetByName(CONFIG.ABA_ORCAMENTOS);
+    if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_ORCAMENTOS + '" não encontrada na planilha-mãe. Rode migrarDadosManutencao() antes.' };
+
+    const existentes = {};
+    if (aba.getLastRow() > 2) {
+      aba.getRange(1, 1, aba.getLastRow(), 1).getDisplayValues().forEach(l => {
+        const os = String(l[0] || '').replace(/\D/g, ''); if (os) existentes[os] = true;
+      });
+    }
+
+    const linhas = [], repetidas = [];
+    let lidas = 0, somaTotal = 0, somaPecas = 0, somaMo = 0;
+    String(texto).split(/\r?\n/).forEach(linha => {
+      if (!linha.trim()) return;
+      const campos = linha.split('\t').map(c => c.trim());
+      if (campos.length < 8) return;
+      const os = campos[0].replace(/\D/g, '');
+      if (!os || !/^\d{6,}$/.test(os)) return;            // pula cabeçalho e o rodapé "Qtde. de OS"
+      lidas++;
+      if (existentes[os]) { repetidas.push(campos[0].trim()); return; }
+      const num = i => _num_(campos[i]) || 0;
+      const mo = num(5), pecas = num(7), totalOs = num(9);
+      somaMo += mo; somaPecas += pecas; somaTotal += totalOs;
+      linhas.push({
+        os: os, placa: campos[1].toUpperCase(), conclusao: campos[2], codEstab: campos[3],
+        estab: campos[4], mo: mo, nfServico: campos[6], pecas: pecas, nfPeca: campos[8], total: totalOs
+      });
+      existentes[os] = true;
+    });
+    if (!linhas.length) return { ok: false, erro: lidas ? 'Todas as ' + lidas + ' ordens já estavam na base.' : 'Não reconheci nenhuma linha. Cole incluindo as colunas separadas por tabulação.' };
+
+    const inicio = _proximaLinhaAppend_(aba, 1, 3);
+    const bloco = linhas.map(l => [l.os, l.placa, l.conclusao, l.codEstab, '', l.estab, l.mo, l.nfServico, l.pecas, l.nfPeca, l.total, comp]);
+    aba.getRange(inicio, 1, bloco.length, 12).setValues(bloco);
+    const replicadas = _replicarFormulas_(aba, inicio, bloco.length, 12);   // M em diante = fórmula do tipo de aceite
+    SpreadsheetApp.flush();
+    limparCache();
+    _logAcao_(p.ss, p.sessao.email, 'Importar orçamentos', '', bloco.length + ' OS', 'competência ' + comp + ' | total ' + _moedaBR_(somaTotal) + ' | repetidas: ' + repetidas.length);
+    return { ok: true, lidos: lidas, inseridos: bloco.length, duplicados: repetidas.length, competencia: comp,
+             total: somaTotal, pecas: somaPecas, mo: somaMo, formulas: replicadas,
+             aviso: replicadas ? '' : 'A coluna do tipo de aceite (M) não tinha fórmula para replicar — importe os aceites para preenchê-la.' };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  } finally { trava.releaseLock(); }
 }
 
 /** Exporta AbastBD ou ManutBD como .xlsx e devolve o link do Drive. */
@@ -3057,65 +3119,84 @@ function _orcamentosPorOs_(ss) {
 function gerarRelatorioAceites(token, competencia) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
   const comp = _formatarCompetencia_(competencia || '', true);
-  if (!comp) return { ok: false, erro: 'Informe a competência no formato MM/AAAA.' };
   try {
-    const aba = _ssManut_().getSheetByName(CONFIG.ABA_ACEITES);
-    if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_ACEITES + '" não encontrada. Importe os aceites primeiro.' };
+    const ss = _ssManut_();
+    const aba = ss.getSheetByName(CONFIG.ABA_ORCAMENTOS);
+    if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_ORCAMENTOS + '" não encontrada. Rode migrarDadosManutencao() e importe os orçamentos.' };
     const valores = aba.getDataRange().getValues();
-    if (valores.length < 2) return { ok: false, erro: 'O AceitesDB está vazio.' };
-    const mapa = _mapaAceitesDb_(valores);
-    const g = (l, k) => mapa.idx[k] >= 0 ? l[mapa.idx[k]] : '';
+    if (valores.length < 3) return { ok: false, erro: 'O OrçamentosDB está vazio.' };
+
+    // cabeçalho real (a primeira linha traz instruções de colagem)
+    let cab = 0;
+    for (let i = 0; i < Math.min(6, valores.length); i++) {
+      if (valores[i].some(c => /ORDEM\s*SERVI/i.test(String(c)))) { cab = i; break; }
+    }
+    const nomes = valores[cab].map(c => _normCab_(c));
+    const col = re => nomes.findIndex(x => re.test(x));
+    const iOs = col(/ORDEM SERVICO|^OS$/), iPlaca = col(/PLACA/), iConc = col(/DATA CONCLUS/),
+          iEstab = col(/^ESTABELECIMENTO$/), iMo = col(/MAO DE OBRA/), iPec = col(/^PECAS$/),
+          iTotal = col(/TOTAL O ?S|TOTAL OS|^TOTAL/), iComp = col(/COMPET/);
+    let iTipo = col(/^GESTOR$|TIPO|ACEITE/);
+    if (iTipo < 0) iTipo = nomes.length - 1;
+    if (iOs < 0 || iTotal < 0 || iComp < 0) return { ok: false, erro: 'Não reconheci as colunas do OrçamentosDB (esperado Ordem Serviço, Total O.S. e Competência).' };
+
+    // aceites: complementa unidade e modelo pela OS
+    const porOs = {};
+    try {
+      const abaAce = ss.getSheetByName(CONFIG.ABA_ACEITES);
+      if (abaAce && abaAce.getLastRow() > 2) {
+        const va = abaAce.getDataRange().getValues();
+        const m = _mapaAceitesDb_(va);
+        for (let r = m.linhaCab + 1; r < va.length; r++) {
+          const os = String(m.idx.os >= 0 ? va[r][m.idx.os] : '').replace(/\D/g, '');
+          if (!os) continue;
+          porOs[os] = { unidade: m.idx.unidade >= 0 ? String(va[r][m.idx.unidade] || '').trim() : '',
+                        modelo: m.idx.modelo >= 0 ? String(va[r][m.idx.modelo] || '').trim() : '',
+                        tipo: m.idx.tipo >= 0 ? String(va[r][m.idx.tipo] || '').trim() : '',
+                        aprovacao: m.idx.aprovacao >= 0 ? _dataTxt_(va[r][m.idx.aprovacao]) : '' };
+        }
+      }
+    } catch (e) { Logger.log('AceitesDB (complemento): ' + e); }
 
     const acidentes = _placasComAcidenteAberto_();
-    const orcamentos = _orcamentosPorOs_(_ssManut_());
-    const itens = [], porTipo = {}, porUnidade = {}, porOficina = {}, alerta = {}, vistos = {}, duplicadas = [];
-    const temColunaComp = mapa.idx.competencia >= 0;
-    let total = 0, totalPecas = 0, totalMo = 0, semEstabelecimento = 0;
-    for (let r = mapa.linhaCab + 1; r < valores.length; r++) {
+    const itens = [], porTipo = {}, porUnidade = {}, porOficina = {}, alerta = {}, vistos = {};
+    let total = 0, totalPecas = 0, totalMo = 0, semTipo = 0;
+    for (let r = cab + 1; r < valores.length; r++) {
       const l = valores[r];
-      const os = String(g(l, 'os') || '').trim();
+      const os = String(l[iOs] || '').replace(/\D/g, '');
       if (!os) continue;
-      // A competência é a da coluna própria do AceitesDB. Só quando ela não
-      // existe na base é que caímos na data de conclusão — assim o total bate
-      // com a aba Aceites Mensal, que usa exatamente essa coluna.
-      const compLinha = temColunaComp ? _compSegura_(g(l, 'competencia'))
-                                      : (_compSegura_(g(l, 'conclusao')) || _compSegura_(g(l, 'aprovacao')));
-      if (compLinha !== comp) continue;
-      const chaveOs = String(os).replace(/\D/g, '');
-      if (vistos[chaveOs]) { duplicadas.push(os); continue; }
-      vistos[chaveOs] = true;
-      const placa = String(g(l, 'placa') || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-      const valor = _num_(g(l, 'valor')) || 0;
-      const tipo = String(g(l, 'tipo') || '').trim() || 'Não informado';
-      const unidade = String(g(l, 'unidade') || '').trim() || 'Sem unidade';
-
+      if (_compSegura_(l[iComp]) !== comp) continue;
+      if (vistos[os]) continue;
+      vistos[os] = true;
+      const placa = String(l[iPlaca] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      const compl = porOs[os] || {};
+      const tipo = String(l[iTipo] || '').trim() || compl.tipo || '';
+      if (!tipo) semTipo++;
+      const valor = _num_(l[iTotal]) || 0, pecas = _num_(l[iPec]) || 0, mo = _num_(l[iMo]) || 0;
+      const unidade = compl.unidade || 'Sem unidade';
+      const oficina = String(l[iEstab] || '').trim() || 'Sem estabelecimento';
       const acidente = acidentes[placa] !== undefined;
       if (acidente) alerta[placa] = acidentes[placa];
-      const orc = orcamentos[chaveOs] || null;
-      const estabelecimento = (String(g(l, 'estabelecimento') || '').trim()) || (orc ? orc.estabelecimento : '') || '';
-      if (!estabelecimento) semEstabelecimento++;
-      itens.push({ unidade: unidade, os: os, placa: placa, modelo: String(g(l, 'modelo') || '').trim(),
-        oficina: estabelecimento || '—', aprovacao: _dataTxt_(g(l, 'aprovacao')), inicio: _dataTxt_(g(l, 'inicio')),
-        conclusao: _dataTxt_(g(l, 'conclusao')), valor: valor, tipo: tipo, acidente: acidente,
-        pecas: orc ? orc.pecas : null, mo: orc ? orc.mo : null });
-      total += valor;
-      if (orc) { totalPecas += orc.pecas; totalMo += orc.mo; }
+      itens.push({ unidade: unidade, os: String(l[iOs] || '').trim(), placa: placa, modelo: compl.modelo || '',
+        oficina: oficina, aprovacao: compl.aprovacao || '', conclusao: _dataTxt_(l[iConc]),
+        pecas: pecas, mo: mo, valor: valor, tipo: tipo || 'Não informado', acidente: acidente });
+      total += valor; totalPecas += pecas; totalMo += mo;
       const soma = (obj, chave) => { const a = obj[chave] || (obj[chave] = { valor: 0, qtd: 0 }); a.valor += valor; a.qtd++; };
-      soma(porTipo, tipo); soma(porUnidade, unidade); soma(porOficina, estabelecimento || 'Sem estabelecimento informado');
+      soma(porTipo, tipo || 'Não informado'); soma(porUnidade, unidade); soma(porOficina, oficina);
     }
-    if (!itens.length) return { ok: false, erro: 'Nenhuma ordem de serviço com aceite na competência ' + comp + '.' +
-      (mapa.porNome ? '' : ' (As colunas do AceitesDB não foram reconhecidas pelo nome — rode diagnosticarRelatorios() no editor.)') };
+    if (!itens.length) return { ok: false, erro: 'Nenhuma ordem de serviço no OrçamentosDB para a competência ' + comp + '. Importe o relatório de orçamentos dessa competência.' };
 
     itens.sort((a, b) => a.unidade.localeCompare(b.unidade) || b.valor - a.valor);
-    const dados = { comp: comp, itens: itens, total: total, totalPecas: totalPecas, totalMo: totalMo, semEstabelecimento: semEstabelecimento, duplicadas: duplicadas, porTipo: porTipo, porUnidade: porUnidade, porOficina: porOficina, acidentes: alerta };
-    Logger.log('Relatório resumo ' + comp + ': ' + itens.length + ' OS, total ' + total);
+    const dados = { comp: comp, itens: itens, total: total, totalPecas: totalPecas, totalMo: totalMo,
+      semEstabelecimento: itens.filter(i => i.oficina === 'Sem estabelecimento').length, semTipo: semTipo,
+      porTipo: porTipo, porUnidade: porUnidade, porOficina: porOficina, acidentes: alerta, duplicadas: [] };
     const html = _htmlRelatorioAceites_(dados, p.sessao);
     const nome = 'Relatorio_OS_Resumo_' + comp.replace('/', '-') + '.pdf';
     const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);
     _logAcao_(p.ss, p.sessao.email, 'Relatório de OS (resumo)', '', comp, _moedaBR_(total) + ' | ' + itens.length + ' OS');
     return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '',
-      total: total, ordens: itens.length, pecas: totalPecas, mo: totalMo, duplicadas: duplicadas.length, semEstabelecimento: semEstabelecimento,
-      competenciaPor: temColunaComp ? 'coluna Competência do AceitesDB' : 'data de conclusão',
+      total: total, ordens: itens.length, pecas: totalPecas, mo: totalMo, semTipo: semTipo,
+      semEstabelecimento: dados.semEstabelecimento, competenciaPor: 'coluna Competência do OrçamentosDB',
       tipos: Object.keys(porTipo).map(k => ({ tipo: k, valor: porTipo[k].valor, qtd: porTipo[k].qtd })),
       acidentes: Object.keys(alerta).map(k => ({ placa: k, processo: alerta[k] })) };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
@@ -3216,9 +3297,10 @@ function _htmlRelatorioAceites_(d, sessao) {
     corpo + '</tbody></table>' +
     '<table class="total"><tr><td>TOTAL GERAL</td><td class="num" style="text-align:right">' + _moedaBR_(d.total) + '</td></tr></table>' +
     '<div class="rodape">Gerado pelo Painel da Frota — 16ª SPRF/CE em ' + agora + ' por ' + _esc_(sessao.email) +
-    '. Fontes: AceitesDB (importação dos aceites), OrçamentosDB e aba Acidentes.' +
+    '. Fontes: OrçamentosDB (peças, mão de obra e total), AceitesDB (unidade, modelo e tipo de aceite) e aba Acidentes.' +
     (d.duplicadas && d.duplicadas.length ? ' ' + d.duplicadas.length + ' ordem(ns) repetida(s) na base foram contadas uma única vez: ' + _esc_(d.duplicadas.slice(0, 12).join(', ')) + '.' : '') +
-    (d.semEstabelecimento ? ' ' + d.semEstabelecimento + ' ordem(ns) sem estabelecimento informado na base.' : '') + '</div>' +
+    (d.semEstabelecimento ? ' ' + d.semEstabelecimento + ' ordem(ns) sem estabelecimento.' : '') +
+    (d.semTipo ? ' ' + d.semTipo + ' ordem(ns) sem tipo de aceite (importe os aceites da competência).' : '') + '</div>' +
     '</body></html>';
 }
 

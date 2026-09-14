@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.14.0';
+const VERSAO_PAINEL = '2.15.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2184,6 +2184,20 @@ function renderImportar(c) {
          </div>`, '.html,.htm,.xls,.xlsx')}
     </div>
 
+    <h2 class="secao-titulo">Orçamentos (peças e mão de obra)</h2>
+    <div class="grade" style="grid-template-columns:1fr">
+      <div class="acao-cartao">
+        <h4>Relatório de Orçamentos → OrçamentosDB</h4>
+        <div class="desc">Cole o relatório direto do sistema (com as colunas separadas por tabulação, incluindo o cabeçalho). O painel identifica as ordens, ignora o rodapé de totais e as que já estão na base. A competência não vem no relatório — informe abaixo. A coluna do tipo de aceite é preenchida pela fórmula da planilha, que usa os aceites importados.</div>
+        <div class="form-campo" style="margin-bottom:8px"><label>Competência</label><input type="text" id="orc-comp" placeholder="MM/AAAA" style="max-width:160px"></div>
+        <div class="form-campo" style="margin-bottom:10px"><label>Dados colados</label>
+          <textarea id="orc-texto" rows="6" placeholder="Ordem Serviço	Placa	Data Conclusão	Código Estabelecimento	Estabelecimento	Mão de Obra	NF Serviço	Peças	NF Peça	Total O.S."></textarea></div>
+        <button class="btn amarelo" id="btn-imp-orc">Importar orçamentos</button>
+        <div class="foto-data" id="imp-status-orc"></div>
+        <div id="imp-result-orc"></div>
+      </div>
+    </div>
+
     <h2 class="secao-titulo">Aceites de ordens de serviço</h2>
     <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
       ${cartao('aceiteGestor', 'Aceite pelo gestor', 'AceitesDB (H = Gestor)', 'Arquivo de aceites realizados por gestor. Ignora OS já registradas.', '', '.html,.htm,.xls,.xlsx')}
@@ -2209,6 +2223,15 @@ function renderImportar(c) {
     if (inp.files && inp.files[0]) enviarImportacao(inp.dataset.imp, inp.files[0]);
     inp.value = '';
   }));
+  ouvir('btn-imp-orc', 'click', () => {
+    const comp = val('orc-comp'), texto = (el('orc-texto') || {}).value || '';
+    if (!comp) { toast('Informe a competência (MM/AAAA).'); return; }
+    if (!texto.trim()) { toast('Cole o relatório de orçamentos.'); return; }
+    const btn = el('btn-imp-orc');
+    btn.disabled = true; btn.textContent = 'Importando…';
+    chamarImportacao('orc', () => { btn.disabled = false; btn.textContent = 'Importar orçamentos'; },
+      run => run.importarOrcamentos(ESTADO.token, texto, comp));
+  });
   ouvir('btn-glosa-site', 'click', () => {
     const comp = val('glosa-site-comp');
     if (!comp) { toast('Informe a competência.'); return; }
@@ -2259,7 +2282,10 @@ function desenharResultadoImportacao(id, r) {
       ${dado('Inseridos', fmtInt(r.inseridos || 0), 'ok-txt')}
       ${r.duplicados !== undefined ? dado('Já existiam', fmtInt(r.duplicados)) : ''}
       ${r.periodo ? dado('Período', esc(r.periodo)) : ''}
-      ${r.competencia ? dado('Competência', esc(r.competencia)) : ''}</div>`;
+      ${r.competencia ? dado('Competência', esc(r.competencia)) : ''}
+      ${r.total !== undefined ? dado('Total das OS', fmtMoeda(r.total)) : ''}
+      ${r.pecas !== undefined ? dado('Peças · mão de obra', fmtMoeda(r.pecas) + ' · ' + fmtMoeda(r.mo)) : ''}</div>` +
+      (r.aviso ? `<div class="cartao-dica">${esc(r.aviso)}</div>` : '');
     toast(fmtInt(r.inseridos || 0) + ' linha(s) inserida(s)' + (r.destino ? ' em ' + r.destino : ''));
     ESTADO.uso = null;
   }
