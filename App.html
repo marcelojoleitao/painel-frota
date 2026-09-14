@@ -152,9 +152,17 @@
 
     <!-- PAGAMENTOS -->
     <section id="aba-pagamentos" class="oculto">
-      <div class="periodo-barra" id="periodo-pag"></div>
-      <div class="kpis" id="kpis-pag"></div>
-      <div class="grade" id="graficos-pag"></div>
+      <div class="subabas" id="subabas-pag">
+        <button class="subaba ativa" data-sub="panorama">Panorama</button>
+        <button class="subaba so-admin oculto" data-sub="abast">Processo — Abastecimento</button>
+        <button class="subaba so-admin oculto" data-sub="manut">Processo — Manutenção</button>
+      </div>
+      <div id="pag-panorama">
+        <div class="periodo-barra" id="periodo-pag"></div>
+        <div class="kpis" id="kpis-pag"></div>
+        <div class="grade" id="graficos-pag"></div>
+      </div>
+      <div id="pag-processo" class="oculto"></div>
     </section>
 
     <!-- CENTRAL DE AÇÕES (admin) -->

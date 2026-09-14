@@ -49,6 +49,21 @@ const CONFIG = {
   ABA_TIT_MANUT:  'Títulos Manut.',
   COLS_TIT_ABAST: 18,   // A:R (até Chave de Acesso)
   COLS_TIT_MANUT: 19,   // A:S (até Chave de Acesso)
+  // Processo de pagamento
+  ABA_CONTROLE_PROC: 'ControleProcesso',        // criada na planilha de títulos
+  PASTA_DOCS_PAGAMENTO: '1eyLGfer7R58-Usw54gTUTWyvoE8WCtiQ',
+  MODELOS_PAGAMENTO: {
+    Abastecimento: {
+      'Despacho Abastecimento':       '1efYsQ04Em9qQsZiDvmkifnQ6bpjhoJTnzKepUTHzIpc',
+      'Relatório Abastecimento':      '1BWOogwcClGUCA8sSmBS-W4Zpe8IPwwHzgg_wwEXyBCQ',
+      'Termo de Atesto Abastecimento':'1NpsEL3SeZVRBjUYHkKZkH74xElanm0J-pwmvyXIHfQk'
+    },
+    'Manutenção': {
+      'Despacho Manutenção':        '13eUxk7pFbhYlJrML_KQjX0C1pe3hiUnfMmQIVtNl52Q',
+      'Relatório Manutenção':       '1kzhNdkapDvPZuO40VB6wqt5qkMl-MU66qsz1oGshfTA',
+      'Termo de Atesto Manutenção': '1PjtECC-WhtBeWrYnHhfVRc5OmrHYEwCbB0zUf5SzyAI'
+    }
+  },
 
   STATUS_OCULTOS_PADRAO: ['ALIENADO'],
   CACHE_SEG: 3600,        // 1 h (máximo do CacheService: 6 h). Use instalarGatilho() para manter aquecido.
@@ -3655,6 +3670,390 @@ function diagnosticarRelatorios() {
   }
   const acid = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_ACIDENTES);
   Logger.log('Acidentes: ' + (acid ? acid.getLastRow() + ' linhas | placas em aberto: ' + Object.keys(_placasComAcidenteAberto_()).join(', ') : 'aba não encontrada'));
+}
+
+/* ============================================================
+   PROCESSO DE PAGAMENTO (Ticket Log)
+   Traz para o painel o que era feito na planilha "Frota 16ª SPRF -
+   Pagamentos": os dados do título da competência, o roteiro de
+   providências, o controle do que já foi feito e a geração do
+   despacho, do relatório e do termo de atesto a partir dos modelos.
+   ============================================================ */
+
+const PROC = {
+  Abastecimento: {
+    aba: 'Títulos Abast.', cols: 18,
+    // campo curto → rótulo da coluna
+    campos: {
+      titulo: 'Título', nf: 'Nota Fiscal', bruto: 'Valor Bruto', juros: 'Juros',
+      emissao: 'Data de Emissão', vencimento: 'Data de Vencimento', competencia: 'Competência',
+      notaPagamento: 'Nota de Pagamento', sei: 'Processo SEI', desconto: 'Desconto Contratual 4,67%',
+      glosaIMR: 'Glosa IMR', glosaPrecos: 'Glosa Preços Abusivos',
+      seiAtesto: 'SEI Atesto Abastecimento', seiRelatorio: 'SEI Relatório Abastecimento',
+      seiNF: 'SEI NF', seiRelGlosa: 'SEI Relatório Glosa', seiIMR: 'SEI IMR Abastecimento',
+      chave: 'Chave de Acesso'
+    },
+    // colunas com fórmula na planilha — o painel nunca grava nelas
+    somenteLeitura: ['desconto', 'glosaPrecos'],
+    roteiroCols: { numero: 25, rotulo: 26, valor: 27 }   // Z, AA, AB (1-based)
+  },
+  'Manutenção': {
+    aba: 'Títulos Manut.', cols: 19,
+    campos: {
+      titulo: 'Título', nf: 'Nota Fiscal', bruto: 'Valor Bruto', pecas: 'Valor em Peças',
+      mo: 'Valor Mão de Obra', pecasAcid: 'Valor em Peças (Acidente)', moAcid: 'Valor Mão de Obra (Acidente)',
+      juros: 'Juros', emissao: 'Data de Emissão', vencimento: 'Data de Vencimento',
+      competencia: 'Competência', notaPagamento: 'Nota de Pagamento', glosaIMR: 'Glosa IMR',
+      sei: 'Processo SEI', seiNF: 'SEI NF', seiIMR: 'SEI IMR Manutenção',
+      seiAtesto: 'SEI Atesto Manutenção', seiRelatorio: 'SEI Relatório Manutenção', chave: 'Chave de Acesso'
+    },
+    somenteLeitura: [],
+    roteiroCols: { numero: 27, rotulo: 28, valor: 29 }   // AA, AB, AC
+  }
+};
+
+function _abaTitulos_(tipo) {
+  const def = PROC[tipo];
+  if (!def) throw new Error('Tipo inválido: ' + tipo);
+  const aba = SpreadsheetApp.openById(CONFIG.ID_TITULOS).getSheetByName(def.aba);
+  if (!aba) throw new Error('Aba "' + def.aba + '" não encontrada na planilha de pagamentos.');
+  return { def: def, aba: aba };
+}
+
+/** Linha de cabeçalho (é a 2 nas duas abas, mas procuramos por segurança). */
+function _cabTitulos_(aba, def) {
+  const valores = aba.getRange(1, 1, Math.min(6, aba.getLastRow()), def.cols).getValues();
+  for (let i = 0; i < valores.length; i++) {
+    if (valores[i].some(c => String(c).trim() === 'Título')) {
+      const cab = valores[i].map(c => String(c || '').trim());
+      const col = {};
+      Object.keys(def.campos).forEach(k => { col[k] = cab.indexOf(def.campos[k]); });
+      return { linha: i + 1, cab: cab, col: col };
+    }
+  }
+  throw new Error('Cabeçalho não encontrado na aba ' + aba.getName());
+}
+
+/** Lê o roteiro que fica nas colunas laterais da aba (Ação / Método / Nome do arquivo / links). */
+function _lerRoteiro_(aba, def) {
+  const c = def.roteiroCols;
+  const nLin = aba.getLastRow();
+  if (nLin < 2) return [];
+  const bloco = aba.getRange(1, c.numero, nLin, 3).getValues();
+  const etapas = [];
+  let atual = null;
+  bloco.forEach(linha => {
+    const numero = String(linha[0] || '').trim();
+    const rotulo = String(linha[1] || '').trim();
+    const valor = String(linha[2] || '').trim();
+    if (/^\d+$/.test(numero)) { atual = { numero: parseInt(numero, 10), acao: '', itens: [] }; etapas.push(atual); }
+    if (!atual) return;
+    if (/^A[çc][ãa]o/i.test(rotulo)) atual.acao = valor;
+    else if (rotulo || valor) atual.itens.push({ rotulo: rotulo.replace(/:$/, ''), valor: valor, link: /^https?:\/\//i.test(valor) });
+  });
+  return etapas.filter(e => e.acao || e.itens.length);
+}
+
+/** Dados do título de uma competência + roteiro + tabelas + controle. */
+function lerProcessoPagamento(token, tipo, competencia) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const { def, aba } = _abaTitulos_(tipo);
+    const cab = _cabTitulos_(aba, def);
+    const nLin = aba.getLastRow();
+    const valores = aba.getRange(cab.linha + 1, 1, Math.max(1, nLin - cab.linha), def.cols).getValues();
+    const comps = [];
+    let linhaAlvo = -1, dados = null;
+
+    valores.forEach((l, i) => {
+      const comp = _compSegura_(l[cab.col.competencia]);
+      if (!comp) return;
+      comps.push(comp);
+      if (competencia && comp === competencia) { linhaAlvo = cab.linha + 1 + i; dados = l; }
+    });
+    const disponiveis = comps.filter((c, i) => comps.indexOf(c) === i).sort().reverse();
+    if (!competencia) return { ok: true, competencias: disponiveis, roteiro: _lerRoteiro_(aba, def) };
+    if (!dados) return { ok: false, erro: 'Competência ' + competencia + ' não encontrada em ' + def.aba + '.', competencias: disponiveis };
+
+    const titulo = {};
+    Object.keys(def.campos).forEach(k => {
+      const c = cab.col[k];
+      if (c < 0) { titulo[k] = ''; return; }
+      const v = dados[c];
+      titulo[k] = (v instanceof Date) ? _dataTxt_(v) : (typeof v === 'number' ? v : String(v === null || v === undefined ? '' : v).trim());
+    });
+    titulo._linha = linhaAlvo;
+
+    return { ok: true, tipo: tipo, competencia: competencia, competencias: disponiveis,
+      titulo: titulo, somenteLeitura: def.somenteLeitura, rotulos: def.campos,
+      roteiro: _lerRoteiro_(aba, def), etapasFeitas: _etapasFeitas_(tipo, competencia),
+      resumo: _resumoProcesso_(tipo, titulo), serie: _serieContratual_(tipo, cab, valores) };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Composição do valor e os textos por extenso, como no termo de atesto. */
+function _resumoProcesso_(tipo, t) {
+  const n = x => _num_(x) || 0;
+  if (tipo === 'Abastecimento') {
+    const bruto = n(t.bruto), desconto = n(t.desconto), imr = n(t.glosaIMR), precos = n(t.glosaPrecos);
+    const liquido = Math.round((bruto - desconto - imr - precos) * 100) / 100;
+    return { bruto: bruto, desconto: desconto, glosaIMR: imr, glosaPrecos: precos, liquido: liquido,
+      linhas: [['(+) Valor bruto da Nota Fiscal', bruto], ['(-) Desconto contratual (4,67%)', desconto],
+               ['(-) Glosa do IMR', imr], ['(-) Glosa de preços abusivos', precos],
+               ['(=) Valor líquido após desconto e glosas', liquido]] };
+  }
+  const pecas = n(t.pecas), mo = n(t.mo), pecasAcid = n(t.pecasAcid), moAcid = n(t.moAcid);
+  const bruto = n(t.bruto) || Math.round((pecas + mo + pecasAcid + moAcid) * 100) / 100;
+  const imr = n(t.glosaIMR);
+  const liquido = Math.round((bruto - imr) * 100) / 100;
+  return { bruto: bruto, pecas: pecas, mo: mo, pecasAcid: pecasAcid, moAcid: moAcid, glosaIMR: imr, liquido: liquido,
+    linhas: [['(+) Peças (Manutenção)', pecas], ['(+) Mão de obra/Serviços (Manutenção)', mo],
+             ['(+) Peças (Acidente)', pecasAcid], ['(+) Mão de obra/Serviços (Acidente)', moAcid],
+             ['(=) Valor bruto da NF', bruto], ['(-) Glosa (IMR)', imr], ['(=) Valor líquido após glosa', liquido]] };
+}
+
+/** Série usada na tabela de execução contratual do relatório (12 competências). */
+function _serieContratual_(tipo, cab, valores) {
+  const linhas = [];
+  valores.forEach(l => {
+    const comp = _compSegura_(l[cab.col.competencia]);
+    if (!comp) return;
+    linhas.push({ comp: comp, nf: String(l[cab.col.nf] || '').trim(),
+      notaPagamento: String(l[cab.col.notaPagamento] || '').trim(), bruto: _num_(l[cab.col.bruto]) || 0 });
+  });
+  linhas.sort((a, b) => (a.comp.substring(3) + a.comp.substring(0, 2)).localeCompare(b.comp.substring(3) + b.comp.substring(0, 2)));
+  const total = linhas.reduce((s, x) => s + x.bruto, 0);
+  return { linhas: linhas.slice(-12), totalAcumulado: Math.round(total * 100) / 100 };
+}
+
+/** Grava alterações no título. Colunas com fórmula são recusadas. */
+function salvarTituloPagamento(token, tipo, competencia, campos) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Planilha ocupada.' }; }
+  try {
+    const { def, aba } = _abaTitulos_(tipo);
+    const cab = _cabTitulos_(aba, def);
+    const nLin = aba.getLastRow();
+    const valores = aba.getRange(cab.linha + 1, 1, Math.max(1, nLin - cab.linha), def.cols).getValues();
+    let linha = -1;
+    valores.forEach((l, i) => { if (_compSegura_(l[cab.col.competencia]) === competencia) linha = cab.linha + 1 + i; });
+    if (linha < 0) return { ok: false, erro: 'Competência não encontrada.' };
+
+    const gravados = [], recusados = [];
+    Object.keys(campos || {}).forEach(k => {
+      const col = cab.col[k];
+      if (col === undefined || col < 0) { recusados.push(k); return; }
+      if (def.somenteLeitura.indexOf(k) >= 0) { recusados.push(def.campos[k] + ' (fórmula)'); return; }
+      const celula = aba.getRange(linha, col + 1);
+      if (celula.getFormula()) { recusados.push(def.campos[k] + ' (fórmula)'); return; }
+      const bruto = campos[k];
+      const numerico = ['bruto', 'juros', 'glosaIMR', 'pecas', 'mo', 'pecasAcid', 'moAcid'].indexOf(k) >= 0;
+      celula.setValue(numerico ? (bruto === '' ? '' : _num_(bruto)) : String(bruto === null || bruto === undefined ? '' : bruto));
+      gravados.push(def.campos[k]);
+    });
+    SpreadsheetApp.flush();
+    if (gravados.length) { limparCache(); _logAcao_(p.ss, p.sessao.email, 'Editar título ' + tipo, competencia, gravados.join(', '), ''); }
+    return { ok: true, gravados: gravados, recusados: recusados };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/* ---------------- controle das etapas ---------------- */
+function _abaControle_() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_TITULOS);
+  let aba = ss.getSheetByName(CONFIG.ABA_CONTROLE_PROC);
+  if (!aba) {
+    aba = ss.insertSheet(CONFIG.ABA_CONTROLE_PROC);
+    aba.appendRow(['Tipo', 'Competência', 'Etapa', 'Concluída em', 'Por']);
+    aba.setFrozenRows(1);
+  }
+  return aba;
+}
+function _etapasFeitas_(tipo, competencia) {
+  const aba = _abaControle_();
+  if (aba.getLastRow() < 2) return {};
+  const mapa = {};
+  aba.getRange(2, 1, aba.getLastRow() - 1, 5).getValues().forEach(l => {
+    if (String(l[0]) === tipo && _compSegura_(l[1]) === competencia) mapa[String(l[2])] = { em: _dataTxt_(l[3]), por: String(l[4]) };
+  });
+  return mapa;
+}
+function marcarEtapaProcesso(token, tipo, competencia, etapa, feito) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(15000); } catch (e) { return { ok: false, erro: 'Controle ocupado.' }; }
+  try {
+    const aba = _abaControle_();
+    const n = aba.getLastRow();
+    let linha = -1;
+    if (n > 1) {
+      const v = aba.getRange(2, 1, n - 1, 3).getValues();
+      v.forEach((l, i) => { if (String(l[0]) === tipo && _compSegura_(l[1]) === competencia && String(l[2]) === String(etapa)) linha = i + 2; });
+    }
+    if (feito) {
+      const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm');
+      if (linha > 0) aba.getRange(linha, 4, 1, 2).setValues([[agora, p.sessao.email]]);
+      else aba.appendRow([tipo, competencia, String(etapa), agora, p.sessao.email]);
+    } else if (linha > 0) aba.deleteRow(linha);
+    SpreadsheetApp.flush();
+    return { ok: true, etapasFeitas: _etapasFeitas_(tipo, competencia) };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/* ---------------- geração dos documentos ---------------- */
+
+/** Parâmetros {{chave}} calculados a partir do título — substituem a aba Parâmetros. */
+function _parametrosPagamento_(tipo, t, resumo, competencia) {
+  const moeda = v => _decBR_(v);
+  const extenso = v => reaisPorExtenso(Number(v) || 0);
+  const par = { '{{competencia}}': competencia };
+  if (tipo === 'Abastecimento') {
+    Object.assign(par, {
+      '{{notafiscalabastecimento}}': String(t.nf || ''),
+      '{{datadaemissaoabastecimento}}': String(t.emissao || ''),
+      '{{valodanotaabastecimento}}': moeda(resumo.bruto),
+      '{{valordanotaextensoabastecimento}}': extenso(resumo.bruto),
+      '{{vencimentoabastecimento}}': String(t.vencimento || ''),
+      '{{notadepagamentoabastecimento}}': String(t.notaPagamento || ''),
+      '{{valorglosaabastecimento}}': moeda(resumo.glosaPrecos),
+      '{{valorextensoglosaabastecimento}}': extenso(resumo.glosaPrecos),
+      '{{valorglosaimrabastecimento}}': moeda(resumo.glosaIMR),
+      '{{valorglosaprecoabusivoabastecimento}}': moeda(resumo.glosaPrecos),
+      '{{percentualdescontoabastecimento}}': '4,67%',
+      '{{valordescontoabastecimento}}': moeda(resumo.desconto),
+      '{{valorliquidoabastecimento}}': moeda(resumo.liquido),
+      '{{valorextensoliquidoabastecimento}}': extenso(resumo.liquido),
+      '{{houveglosaabastecimento}}': resumo.glosaPrecos > 0 ? 'Sim' : 'Não',
+      '{{seiatestoabastecimento}}': String(t.seiAtesto || ''),
+      '{{seirelatorioabastecimento}}': String(t.seiRelatorio || ''),
+      '{{seinotafiscalabastecimentol}}': String(t.seiNF || ''),
+      '{{seinotafiscalabastecimento}}': String(t.seiNF || ''),
+      '{{seirelatorioglosaabastecimento}}': String(t.seiRelGlosa || ''),
+      '{{seiticketimrabastecimento}}': String(t.seiIMR || '')
+    });
+  } else {
+    Object.assign(par, {
+      '{{notafiscalmanutencao}}': String(t.nf || ''),
+      '{{datadaemissaomanutencao}}': String(t.emissao || ''),
+      '{{valodanotamanutencao}}': moeda(resumo.bruto),
+      '{{valordanotaextensomanutencao}}': extenso(resumo.bruto),
+      '{{notadepagamentomanutencao}}': String(t.notaPagamento || ''),
+      '{{vencimentomanutencao}}': String(t.vencimento || ''),
+      '{{valorpecasmanutencao}}': moeda(resumo.pecas),
+      '{{valormaodeobramanutencao}}': moeda(resumo.mo),
+      '{{valorglosaimrmanutencao}}': moeda(resumo.glosaIMR),
+      '{{valorliquidomanutencao}}': moeda(resumo.liquido),
+      '{{valorextensoliquidomanutencao}}': extenso(resumo.liquido),
+      '{{seiatestomanutencao}}': String(t.seiAtesto || ''),
+      '{{seirelatoriomanutencao}}': String(t.seiRelatorio || ''),
+      '{{seinotafiscalmanutencao}}': String(t.seiNF || ''),
+      '{{seiticketimrmanutencao}}': String(t.seiIMR || '')
+    });
+  }
+  return par;
+}
+
+/** Preenche as tabelas do documento casando pelo rótulo da primeira coluna. */
+function _preencherTabelas_(corpo, resumo, serie) {
+  let ajustadas = 0;
+  const normaliza = t => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+  const porRotulo = {};
+  resumo.linhas.forEach(l => { porRotulo[normaliza(l[0])] = l[1]; });
+
+  const tabelas = corpo.getTables();
+  for (let t = 0; t < tabelas.length; t++) {
+    const tab = tabelas[t];
+    for (let r = 0; r < tab.getNumRows(); r++) {
+      const linha = tab.getRow(r);
+      if (linha.getNumCells() < 2) continue;
+      const rotulo = normaliza(linha.getCell(0).getText());
+      if (porRotulo[rotulo] === undefined) continue;
+      const celula = linha.getCell(linha.getNumCells() - 1);
+      const texto = celula.getText();
+      const formatado = (texto.indexOf('R$') >= 0 ? 'R$ ' : '') + _decBR_(porRotulo[rotulo]);
+      celula.editAsText().setText(formatado);
+      ajustadas++;
+    }
+    // tabela de execução contratual: cabeçalho com "MÊS DE REFERÊNCIA"
+    const cabecalho = normaliza(tab.getRow(0).getCell(0).getText());
+    if (serie && serie.linhas.length && /mes de referencia/.test(cabecalho) && tab.getNumRows() > 2) {
+      const total = serie.linhas.reduce((s, x) => s + x.bruto, 0) || 1;
+      for (let r = 1; r < tab.getNumRows(); r++) {
+        const linha = tab.getRow(r);
+        const item = serie.linhas[r - 1];
+        if (!item || linha.getNumCells() < 4) continue;
+        const primeiro = normaliza(linha.getCell(0).getText());
+        if (/saldo|valor do contrato/.test(primeiro)) continue;
+        linha.getCell(0).editAsText().setText(item.comp);
+        linha.getCell(1).editAsText().setText(item.nf);
+        linha.getCell(2).editAsText().setText(item.notaPagamento);
+        linha.getCell(3).editAsText().setText('R$ ' + _decBR_(item.bruto));
+        if (linha.getNumCells() > 4) linha.getCell(4).editAsText().setText(_decBR_(item.bruto / total * 100) + '%');
+        ajustadas++;
+      }
+    }
+  }
+  return ajustadas;
+}
+
+function gerarDocumentosPagamento(token, tipo, competencia, quais) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const leitura = lerProcessoPagamento(token, tipo, competencia);
+    if (!leitura.ok) return leitura;
+    const modelos = CONFIG.MODELOS_PAGAMENTO[tipo];
+    if (!modelos) return { ok: false, erro: 'Modelos não configurados para ' + tipo + '.' };
+    const escolhidos = Object.keys(modelos).filter(n => !quais || !quais.length || quais.indexOf(n) >= 0);
+    if (!escolhidos.length) return { ok: false, erro: 'Escolha ao menos um documento.' };
+
+    const parametros = _parametrosPagamento_(tipo, leitura.titulo, leitura.resumo, competencia);
+    const pasta = DriveApp.getFolderById(CONFIG.PASTA_DOCS_PAGAMENTO);
+    const gerados = [];
+
+    escolhidos.forEach(nomeModelo => {
+      const novoNome = nomeModelo + ' - ' + competencia;
+      const antigos = pasta.getFilesByName(novoNome);
+      while (antigos.hasNext()) { try { antigos.next().setTrashed(true); } catch (e) {} }
+      const copia = DriveApp.getFileById(modelos[nomeModelo]).makeCopy(novoNome, pasta);
+      const doc = DocumentApp.openById(copia.getId());
+      const corpo = doc.getBody();
+      Object.keys(parametros).forEach(chave => { corpo.replaceText(chave.replace(/[{}]/g, '\\$&'), parametros[chave]); });
+      const ajustadas = _preencherTabelas_(corpo, leitura.resumo, leitura.serie);
+      doc.saveAndClose();
+      try { copia.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+      gerados.push({ nome: novoNome, url: copia.getUrl(), celulas: ajustadas });
+    });
+
+    _logAcao_(p.ss, p.sessao.email, 'Gerar documentos ' + tipo, '', competencia, gerados.map(g => g.nome).join(' | '));
+    return { ok: true, gerados: gerados, parametros: Object.keys(parametros).length };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Valor por extenso em reais (portado da planilha de pagamentos). */
+function reaisPorExtenso(valor) {
+  const unidades = ['', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove'];
+  const especiais = ['dez', 'onze', 'doze', 'treze', 'quatorze', 'quinze', 'dezesseis', 'dezessete', 'dezoito', 'dezenove'];
+  const dezenas = ['', '', 'vinte', 'trinta', 'quarenta', 'cinquenta', 'sessenta', 'setenta', 'oitenta', 'noventa'];
+  const centenas = ['', 'cento', 'duzentos', 'trezentos', 'quatrocentos', 'quinhentos', 'seiscentos', 'setecentos', 'oitocentos', 'novecentos'];
+  const partes = (Number(valor) || 0).toFixed(2).split('.');
+  const reais = parseInt(partes[0], 10), centavos = parseInt(partes[1], 10);
+  function porExtenso(n) {
+    if (n === 0) return '';
+    if (n === 100) return 'cem';
+    if (n < 10) return unidades[n];
+    if (n < 20) return especiais[n - 10];
+    if (n < 100) return dezenas[Math.floor(n / 10)] + (n % 10 !== 0 ? ' e ' + unidades[n % 10] : '');
+    if (n < 1000) return centenas[Math.floor(n / 100)] + (n % 100 !== 0 ? ' e ' + porExtenso(n % 100) : '');
+    if (n < 1000000) {
+      const milhar = Math.floor(n / 1000), resto = n % 1000;
+      return (milhar > 1 ? porExtenso(milhar) + ' mil' : 'mil') + (resto !== 0 ? ' e ' + porExtenso(resto) : '');
+    }
+    const milhao = Math.floor(n / 1000000), resto = n % 1000000;
+    return (milhao > 1 ? porExtenso(milhao) + ' milhões' : 'um milhão') + (resto !== 0 ? ' e ' + porExtenso(resto) : '');
+  }
+  const r = reais === 0 ? '' : porExtenso(reais) + (reais === 1 ? ' real' : ' reais');
+  const c = centavos === 0 ? '' : porExtenso(centavos) + (centavos === 1 ? ' centavo' : ' centavos');
+  return r + (c ? (r ? ' e ' : '') + c : '');
 }
 
 /* ============================================================

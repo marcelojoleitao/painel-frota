@@ -72,14 +72,15 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.20.1';
+const VERSAO_PAINEL = '2.21.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
   uso: null, usoCarregando: false,
   periodoUso: '12m', periodoManut: '12m', periodoPag: 'tudo',
   pdfsPorOS: {}, pdfsPorPlaca: {}, filtroStatusOS: '', filtroStatusAceite: '',
-  subAcoes: 'executar', lote: null, fila: null, subDados: 'importar', subOS: 'acompanhar', nivelOS: 'n2', osEditadas: {},
+  subAcoes: 'executar', lote: null, fila: null, subDados: 'importar', subOS: 'panorama', nivelOS: 'n2', osEditadas: {},
+  subPag: 'panorama', processo: null, compProcesso: {}, tituloEditado: {},
   dados: null,
   veiculos: [],
   filtros: {},          // chave -> Set de valores selecionados
@@ -330,7 +331,12 @@ function renderAba() {
   else if (ESTADO.aba === 'uso') renderUso(lista);
   else if (ESTADO.aba === 'manut') renderManut(lista);
   else if (ESTADO.aba === 'os') renderOS(lista);
-  else if (ESTADO.aba === 'pagamentos') renderPagamentos();
+  else if (ESTADO.aba === 'pagamentos') {
+    const ehProcesso = ESTADO.subPag !== 'panorama' && ESTADO.admin;
+    cls('pag-panorama', 'oculto', ehProcesso);
+    cls('pag-processo', 'oculto', !ehProcesso);
+    if (ehProcesso) renderProcessoPagamento(); else renderPagamentos();
+  }
   else if (ESTADO.aba === 'patrimonio') renderPatrimonio(lista);
   else if (ESTADO.aba === 'acoes') renderAcoes(lista);
   else if (ESTADO.aba === 'dados') renderDados();
@@ -827,6 +833,11 @@ function debounce(fn, ms) { let t; return function () { clearTimeout(t); t = set
 
 function iniciarApp() {
   document.querySelectorAll('#abas .topo-aba').forEach(b => b.addEventListener('click', () => mudarAba(b.dataset.aba)));
+  document.querySelectorAll('#subabas-pag .subaba').forEach(b => b.addEventListener('click', () => {
+    ESTADO.subPag = b.dataset.sub;
+    document.querySelectorAll('#subabas-pag .subaba').forEach(x => x.classList.toggle('ativa', x === b));
+    renderAba();
+  }));
   document.querySelectorAll('#subabas-os .subaba').forEach(b => b.addEventListener('click', () => {
     ESTADO.subOS = b.dataset.sub;
     document.querySelectorAll('#subabas-os .subaba').forEach(x => x.classList.toggle('ativa', x === b));
@@ -1409,7 +1420,7 @@ function prazoHtml(iso, texto) {
    ============================================================ */
 function renderOS(lista) {
   const c = el('os-conteudo');
-  if (c) { if (ESTADO.subOS === 'panorama') { c.innerHTML = '<div class="kpis" id="kpis-os"></div><div class="grade" id="graficos-os"></div>'; renderOSPanorama(lista); } else renderOSAcompanhar(lista); return; }
+  if (c) { if (ESTADO.subOS === 'acompanhar') renderOSAcompanhar(lista); else { c.innerHTML = '<div class="kpis" id="kpis-os"></div><div class="grade" id="graficos-os"></div>'; renderOSPanorama(lista); } return; }
   renderOSPanorama(lista);
 }
 
@@ -2872,6 +2883,207 @@ function enviarDocumento(placa, tipo, arquivo) {
     if (run) run.anexarDocumento(ESTADO.token, placa, tipo, base64, arquivo.name);
   };
   leitor.readAsDataURL(arquivo);
+}
+
+
+/* ============================================================
+   PROCESSO DE PAGAMENTO — abastecimento e manutenção
+   ============================================================ */
+const TIPO_PROC = { abast: 'Abastecimento', manut: 'Manutenção' };
+
+function renderProcessoPagamento() {
+  const c = el('pag-processo'); if (!c) return;
+  const tipo = TIPO_PROC[ESTADO.subPag];
+  const comp = ESTADO.compProcesso[tipo] || '';
+  if (!ESTADO.processo || ESTADO.processo.tipo !== tipo || ESTADO.processo.competencia !== comp) {
+    c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Lendo os títulos de ' + esc(tipo) + '…</div></div>';
+    const run = servidor('lerProcessoPagamento',
+      r => {
+        if (!r || !r.ok) {
+          if (r && r.competencias) { ESTADO.compProcesso[tipo] = r.competencias[0]; ESTADO.processo = null; renderProcessoPagamento(); return; }
+          c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha ao ler.') + '</div></div>'; return;
+        }
+        if (!r.competencia) { ESTADO.compProcesso[tipo] = r.competencias[0]; ESTADO.processo = null; renderProcessoPagamento(); return; }
+        ESTADO.processo = r; ESTADO.tituloEditado = {};
+        desenharProcesso(c, r);
+      },
+      e => { c.innerHTML = '<div class="cartao largo"><div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div></div>'; });
+    if (run) run.lerProcessoPagamento(ESTADO.token, tipo, comp);
+    return;
+  }
+  desenharProcesso(c, ESTADO.processo);
+}
+
+function desenharProcesso(c, r) {
+  const t = r.titulo, res = r.resumo;
+  const somenteLeitura = r.somenteLeitura || [];
+  const campo = (chave, largo) => {
+    const rotulo = r.rotulos[chave];
+    if (!rotulo) return '';
+    const bloqueado = somenteLeitura.indexOf(chave) >= 0;
+    const valor = t[chave] === null || t[chave] === undefined ? '' : (typeof t[chave] === 'number' ? fmtDec(t[chave]) : t[chave]);
+    return `<div class="form-campo ${largo ? 'largo' : ''}" data-campo="${escAttr(chave)}" data-original="${escAttr(valor)}">
+      <label>${esc(rotulo)}${bloqueado ? ' <span style="color:var(--tinta-suave)">(fórmula)</span>' : ''}</label>
+      <input type="text" value="${escAttr(valor)}" ${bloqueado ? 'disabled' : 'data-t'}></div>`;
+  };
+  const ordem = Object.keys(r.rotulos);
+  const etapas = (r.roteiro || []).map(e => {
+    const feito = r.etapasFeitas[e.numero];
+    return `<div class="etapa ${feito ? 'feita' : ''}">
+      <label class="etapa-cab"><input type="checkbox" data-etapa="${e.numero}" ${feito ? 'checked' : ''}>
+        <b>${e.numero}. ${esc(e.acao)}</b>${feito ? `<span class="badge disponivel">feito em ${esc(feito.em)}</span>` : ''}</label>
+      <div class="etapa-itens">${e.itens.map(i => `<div class="etapa-item"><span class="rot">${esc(i.rotulo)}</span>
+        ${i.link ? `<a href="${escAttr(i.valor)}" target="_blank" rel="noopener" class="pdf-link">abrir</a>`
+                 : `<span class="val">${esc(i.valor)}</span>${i.valor.length > 3 ? `<button class="link-btn" onclick="copiar(this.previousElementSibling.textContent)">copiar</button>` : ''}`}
+      </div>`).join('')}</div></div>`;
+  }).join('');
+
+  const feitas = Object.keys(r.etapasFeitas || {}).length;
+  const totalEtapas = (r.roteiro || []).length;
+
+  c.innerHTML = `
+    <div class="cartao largo" style="margin-bottom:14px">
+      <div class="cartao-cab"><h3>Processo de pagamento — ${esc(r.tipo)}</h3><small>título ${esc(t.titulo || '—')} • NF ${esc(t.nf || '—')}</small></div>
+      <div class="os-barra-acoes">
+        <div class="form-campo" style="margin:0"><label>Competência</label>
+          <select id="proc-comp">${(r.competencias || []).map(x => `<option value="${escAttr(x)}" ${x === r.competencia ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div>
+        <span class="form-aviso">Roteiro: ${feitas} de ${totalEtapas} etapas concluídas.</span>
+      </div>
+    </div>
+
+    <div class="kpis">
+      ${kpi('Valor bruto', fmtMoeda(res.bruto), 'NF ' + esc(t.nf || ''), '', null, true)}
+      ${r.tipo === 'Abastecimento'
+        ? kpi('Desconto contratual', fmtMoeda(res.desconto), '4,67%', 'verde', null, true) + kpi('Glosas', fmtMoeda(res.glosaIMR + res.glosaPrecos), 'IMR ' + fmtMoeda(res.glosaIMR) + ' • preços ' + fmtMoeda(res.glosaPrecos), res.glosaPrecos ? 'ambar' : '', null, true)
+        : kpi('Peças · mão de obra', fmtMoeda(res.pecas) + ' · ' + fmtMoeda(res.mo), 'acidente ' + fmtMoeda(res.pecasAcid + res.moAcid), '', null, true) + kpi('Glosa IMR', fmtMoeda(res.glosaIMR), '', res.glosaIMR ? 'ambar' : '', null, true)}
+      ${kpi('Valor líquido', fmtMoeda(res.liquido), 'a liquidar', 'ciano', null, true)}
+      ${kpi('Nota de pagamento', esc(t.notaPagamento || '—'), 'SEI ' + esc(t.sei || '—'), t.notaPagamento ? 'verde' : 'vermelho', null, true)}
+    </div>
+
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">
+      <div class="cartao largo" style="grid-column:1/-1">
+        <div class="cartao-cab"><h3>Dados do título</h3><small>edite e salve — grava direto na planilha de pagamentos</small></div>
+        <div class="form-grade">${ordem.map(k => campo(k, k === 'chave')).join('')}</div>
+        <div class="form-acoes">
+          <button class="btn amarelo" id="btn-salvar-titulo" disabled>Salvar alterações</button>
+          <span class="form-aviso" id="titulo-pendentes">Nenhuma alteração pendente.</span>
+        </div>
+      </div>
+
+      <div class="cartao">
+        <div class="cartao-cab"><h3>Composição do valor</h3><small>como vai no termo de atesto</small></div>
+        <table class="tabela-simples">${res.linhas.map(l => `<tr><td>${esc(l[0])}</td><td class="num forte">${fmtMoeda(l[1])}</td></tr>`).join('')}</table>
+        <div class="cartao-dica">Por extenso: ${esc(extensoLocal(res.liquido))}</div>
+      </div>
+
+      <div class="cartao">
+        <div class="cartao-cab"><h3>Documentos do processo</h3><small>gerados a partir dos modelos</small></div>
+        <div class="acao-opcoes" id="proc-docs"></div>
+        <button class="btn amarelo" id="btn-gerar-docs">Gerar documentos</button>
+        <div class="foto-data" id="docs-status"></div>
+        <div id="docs-result"></div>
+      </div>
+    </div>
+
+    <div class="cartao largo" style="margin-top:14px">
+      <div class="cartao-cab"><h3>Roteiro do processo</h3><small>marque conforme for concluindo — fica registrado por competência</small></div>
+      <div class="roteiro">${etapas || '<div class="vazio">Roteiro não encontrado nesta aba</div>'}</div>
+    </div>`;
+
+  // documentos disponíveis para o tipo
+  const docs = r.tipo === 'Abastecimento'
+    ? ['Despacho Abastecimento', 'Relatório Abastecimento', 'Termo de Atesto Abastecimento']
+    : ['Despacho Manutenção', 'Relatório Manutenção', 'Termo de Atesto Manutenção'];
+  htm('proc-docs', docs.map(d => `<label><input type="checkbox" value="${escAttr(d)}" checked> ${esc(d)}</label>`).join(''));
+
+  ouvir('proc-comp', 'change', () => {
+    ESTADO.compProcesso[r.tipo] = val('proc-comp');
+    ESTADO.processo = null;
+    renderProcessoPagamento();
+  });
+  c.querySelectorAll('.form-campo[data-campo] input[data-t]').forEach(i => {
+    i.addEventListener('input', () => {
+      const fc = i.closest('.form-campo');
+      const mudou = i.value !== fc.dataset.original;
+      fc.classList.toggle('mudou', mudou);
+      if (mudou) ESTADO.tituloEditado[fc.dataset.campo] = i.value;
+      else delete ESTADO.tituloEditado[fc.dataset.campo];
+      const n = Object.keys(ESTADO.tituloEditado).length;
+      const btn = el('btn-salvar-titulo'), aviso = el('titulo-pendentes');
+      if (btn) btn.disabled = !n;
+      if (aviso) aviso.textContent = n ? n + ' campo(s) alterado(s).' : 'Nenhuma alteração pendente.';
+    });
+  });
+  c.querySelectorAll('input[data-etapa]').forEach(chk => chk.addEventListener('change', () => {
+    const run = servidor('marcarEtapaProcesso',
+      resp => { if (resp && resp.ok) { ESTADO.processo.etapasFeitas = resp.etapasFeitas; renderProcessoPagamento(); } },
+      e => toast('Erro ao marcar etapa: ' + (e && e.message ? e.message : e), true));
+    if (run) run.marcarEtapaProcesso(ESTADO.token, r.tipo, r.competencia, chk.dataset.etapa, chk.checked);
+  }));
+  ouvir('btn-salvar-titulo', 'click', () => salvarTituloProcesso(r.tipo, r.competencia));
+  ouvir('btn-gerar-docs', 'click', () => gerarDocsProcesso(r.tipo, r.competencia));
+  ajustarKpis();
+}
+
+function salvarTituloProcesso(tipo, competencia) {
+  const campos = ESTADO.tituloEditado;
+  if (!Object.keys(campos).length) return;
+  const btn = el('btn-salvar-titulo');
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvando…'; }
+  const run = servidor('salvarTituloPagamento',
+    r => {
+      if (btn) btn.textContent = 'Salvar alterações';
+      if (!r || !r.ok) { toast((r && r.erro) || 'Falha ao salvar.', true); return; }
+      toast(r.gravados.length + ' campo(s) gravado(s)' + (r.recusados.length ? ' • recusados: ' + r.recusados.join(', ') : ''));
+      ESTADO.tituloEditado = {}; ESTADO.processo = null; renderProcessoPagamento();
+    },
+    e => { if (btn) { btn.disabled = false; btn.textContent = 'Salvar alterações'; } toast('Erro: ' + (e && e.message ? e.message : e), true); });
+  if (run) run.salvarTituloPagamento(ESTADO.token, tipo, competencia, campos);
+}
+
+function gerarDocsProcesso(tipo, competencia) {
+  const quais = Array.from(document.querySelectorAll('#proc-docs input:checked')).map(i => i.value);
+  if (!quais.length) { toast('Escolha ao menos um documento.'); return; }
+  const btn = el('btn-gerar-docs'), status = el('docs-status'), resultado = el('docs-result');
+  btn.disabled = true; btn.textContent = 'Gerando…';
+  if (status) status.textContent = 'Copiando os modelos e preenchendo os parâmetros…';
+  if (resultado) resultado.innerHTML = '';
+  const run = servidor('gerarDocumentosPagamento',
+    r => {
+      btn.disabled = false; btn.textContent = 'Gerar documentos';
+      if (!r || !r.ok) { if (status) status.textContent = ''; falhaNoCartao('docs-result', (r && r.erro) || 'Falha ao gerar.'); return; }
+      if (status) status.textContent = r.parametros + ' parâmetros aplicados.';
+      if (resultado) resultado.innerHTML = r.gerados.map(g => `<div style="margin-top:8px">
+        <a class="btn claro" href="${escAttr(g.url)}" target="_blank" rel="noopener" style="text-decoration:none; width:100%; justify-content:flex-start">${icoPdf()} ${esc(g.nome)}</a>
+        <div class="cartao-dica" style="margin:2px 0 0">${g.celulas} célula(s) de tabela preenchida(s)</div></div>`).join('');
+      toast(r.gerados.length + ' documento(s) gerado(s) na pasta do Drive.');
+    },
+    e => { btn.disabled = false; btn.textContent = 'Gerar documentos'; if (status) status.textContent = ''; falhaNoCartao('docs-result', e); });
+  if (run) run.gerarDocumentosPagamento(ESTADO.token, tipo, competencia, quais);
+}
+
+/** Valor por extenso (mesma regra do servidor) para exibir na tela. */
+function extensoLocal(valor) {
+  const u = ['', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove'];
+  const e = ['dez', 'onze', 'doze', 'treze', 'quatorze', 'quinze', 'dezesseis', 'dezessete', 'dezoito', 'dezenove'];
+  const d = ['', '', 'vinte', 'trinta', 'quarenta', 'cinquenta', 'sessenta', 'setenta', 'oitenta', 'noventa'];
+  const ce = ['', 'cento', 'duzentos', 'trezentos', 'quatrocentos', 'quinhentos', 'seiscentos', 'setecentos', 'oitocentos', 'novecentos'];
+  const p = (Number(valor) || 0).toFixed(2).split('.');
+  const reais = parseInt(p[0], 10), cent = parseInt(p[1], 10);
+  const f = n => {
+    if (n === 0) return '';
+    if (n === 100) return 'cem';
+    if (n < 10) return u[n];
+    if (n < 20) return e[n - 10];
+    if (n < 100) return d[Math.floor(n / 10)] + (n % 10 ? ' e ' + u[n % 10] : '');
+    if (n < 1000) return ce[Math.floor(n / 100)] + (n % 100 ? ' e ' + f(n % 100) : '');
+    if (n < 1000000) { const m = Math.floor(n / 1000), r = n % 1000; return (m > 1 ? f(m) + ' mil' : 'mil') + (r ? ' e ' + f(r) : ''); }
+    const mi = Math.floor(n / 1000000), r = n % 1000000;
+    return (mi > 1 ? f(mi) + ' milhões' : 'um milhão') + (r ? ' e ' + f(r) : '');
+  };
+  const a = reais ? f(reais) + (reais === 1 ? ' real' : ' reais') : '';
+  const b = cent ? f(cent) + (cent === 1 ? ' centavo' : ' centavos') : '';
+  return a + (b ? (a ? ' e ' : '') + b : '');
 }
 
 </script>

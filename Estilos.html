@@ -589,4 +589,16 @@ table.tabela td.acoes { text-align: right; }
 .doc-slot { border: 1.5px solid var(--borda); border-radius: var(--raio-p); padding: 10px 12px; background: #FBFCFE; }
 .doc-cab { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 13.5px; }
 .doc-status { min-height: 15px; margin-top: 4px; }
+
+/* ============ PROCESSO DE PAGAMENTO ============ */
+.roteiro { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 10px; }
+.etapa { border: 1.5px solid var(--borda); border-radius: var(--raio-p); padding: 10px 12px; background: #fff; }
+.etapa.feita { border-color: var(--verde); background: #F6FCF8; }
+.etapa-cab { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13.5px; flex-wrap: wrap; }
+.etapa-cab input { width: 16px; height: 16px; accent-color: var(--verde); }
+.etapa-itens { margin-top: 6px; }
+.etapa-item { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; padding: 3px 0; border-top: 1px solid #F1F4F9; }
+.etapa-item .rot { color: var(--tinta-suave); min-width: 110px; }
+.etapa-item .val { flex: 1; overflow-wrap: anywhere; font-family: var(--fonte-dados); font-size: 11.5px; }
+.tabela-simples td { padding: 4px 6px; border-bottom: 1px solid var(--borda); font-size: 12.5px; }
 </style>
