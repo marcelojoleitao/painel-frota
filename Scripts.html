@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.18.1';
+const VERSAO_PAINEL = '2.18.2';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2620,7 +2620,7 @@ const NIVEIS_OS = [
 ];
 function classeAprovacao(v) {
   const t = String(v || '').toLowerCase();
-  if (/aprovad/.test(t)) return 'ok';
+  if (/aprovar|aprovad/.test(t)) return 'ok';
   if (/diligen/.test(t)) return 'atencao';
   if (/revis/.test(t)) return 'revisar';
   return '';
@@ -2737,7 +2737,7 @@ function renderOSAcompanhar(lista) {
         </table>
       </div>
       ${selecionadas.length > 400 ? '<div class="cartao-dica">Exibindo 400 de ' + selecionadas.length + '. Use os filtros da esquerda para reduzir.</div>' : ''}
-      <div class="cartao-dica">Marca/modelo e unidade vêm da ConsultaBD, cruzando pela placa — não do que está fixo na aba OS. As três colunas de texto são gravadas na planilha.</div>
+      <div class="cartao-dica">Marca/modelo e unidade vêm da ConsultaBD, cruzando pela placa. As colunas Observações, Relato e Justificativa são gravadas na planilha; Aprovação e Relatório da Análise são só leitura.${ESTADO.dados.meta && ESTADO.dados.meta.doCache ? ' <b>Dados do cache de ' + esc(ESTADO.dados.meta.atualizadoEm) + ' — use o ⟳ no topo para reler a planilha.</b>' : ''}</div>
     </div>`;
 
   c.querySelectorAll('button[data-nivel]').forEach(b => b.addEventListener('click', () => { ESTADO.nivelOS = b.dataset.nivel; renderOSAcompanhar(ESTADO.filtrado); }));
