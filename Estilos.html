@@ -558,7 +558,8 @@ table.tabela td.acoes { text-align: right; }
 .tabela-os td { word-wrap: break-word; overflow-wrap: anywhere; }
 .tabela-os .campo-os { width: 100%; border: 1px solid transparent; border-radius: 5px; padding: 4px 6px; font: inherit; font-size: 12px;
   background: transparent; resize: vertical; min-height: 28px; line-height: 1.35; overflow: hidden; }
-.tabela-os textarea.campo-os { max-height: 190px; }
+.tabela-os textarea.campo-os { max-height: 200px; white-space: pre-wrap; word-break: break-word; }
+.tabela-os textarea.campo-os:focus { overflow: auto; }
 .etiqueta-aprov { display: inline-block; border-radius: 6px; padding: 3px 8px; font-size: 11.5px; font-weight: 700; line-height: 1.3; border: 1px solid; }
 .etiqueta-aprov.ok { background: #E9F7EF; border-color: var(--verde); color: #1E7A4D; }
 .etiqueta-aprov.atencao { background: #FFF6E5; border-color: var(--ambar); color: #8A6200; }
