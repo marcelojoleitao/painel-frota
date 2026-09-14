@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.18.4';
+const VERSAO_PAINEL = '2.18.5';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2727,7 +2727,7 @@ function renderOSAcompanhar(lista) {
         <button class="btn amarelo" id="btn-salvar-os" disabled>Salvar alterações</button>
         <span class="form-aviso" id="os-pendentes">Nenhuma alteração pendente.</span>
       </div>
-      <div class="tabela-rol" style="max-height:620px">
+      <div class="tabela-rol os-rol" style="max-height:620px">
         <table class="tabela-os">
           <colgroup>
             <col style="width:132px"><col style="width:74px"><col style="width:104px"><col style="width:86px">
