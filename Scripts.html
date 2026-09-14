@@ -72,14 +72,14 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.16.0';
+const VERSAO_PAINEL = '2.17.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
   uso: null, usoCarregando: false,
   periodoUso: '12m', periodoManut: '12m', periodoPag: 'tudo',
   pdfsPorOS: {}, pdfsPorPlaca: {}, filtroStatusOS: '', filtroStatusAceite: '',
-  subAcoes: 'executar', lote: null, fila: null, subDados: 'importar',
+  subAcoes: 'executar', lote: null, fila: null, subDados: 'importar', subOS: 'acompanhar', nivelOS: 'n2', osEditadas: {},
   dados: null,
   veiculos: [],
   filtros: {},          // chave -> Set de valores selecionados
@@ -826,6 +826,11 @@ function debounce(fn, ms) { let t; return function () { clearTimeout(t); t = set
 
 function iniciarApp() {
   document.querySelectorAll('#abas .topo-aba').forEach(b => b.addEventListener('click', () => mudarAba(b.dataset.aba)));
+  document.querySelectorAll('#subabas-os .subaba').forEach(b => b.addEventListener('click', () => {
+    ESTADO.subOS = b.dataset.sub;
+    document.querySelectorAll('#subabas-os .subaba').forEach(x => x.classList.toggle('ativa', x === b));
+    renderOS(ESTADO.filtrado);
+  }));
   document.querySelectorAll('#subabas-dados .subaba').forEach(b => b.addEventListener('click', () => {
     ESTADO.subDados = b.dataset.sub;
     document.querySelectorAll('#subabas-dados .subaba').forEach(x => x.classList.toggle('ativa', x === b));
@@ -1402,6 +1407,12 @@ function prazoHtml(iso, texto) {
    ORDENS DE SERVIÇO
    ============================================================ */
 function renderOS(lista) {
+  const c = el('os-conteudo');
+  if (c) { if (ESTADO.subOS === 'panorama') { c.innerHTML = '<div class="kpis" id="kpis-os"></div><div class="grade" id="graficos-os"></div>'; renderOSPanorama(lista); } else renderOSAcompanhar(lista); return; }
+  renderOSPanorama(lista);
+}
+
+function renderOSPanorama(lista) {
   const porPlaca = {}; ESTADO.veiculos.forEach(v => { porPlaca[v.placa] = v; if (v.placaMerc) porPlaca[v.placaMerc] = v; });
   const filtroAtivo = Object.values(ESTADO.filtros).some(s => s.size) || ESTADO.busca || ESTADO.odoMin !== null || ESTADO.odoMax !== null;
   const exib = new Set(lista.map(v => v.placa));
@@ -2589,6 +2600,179 @@ function carregarCompetencias() {
       ['pecas-disp', 'aceites-disp'].forEach(id => { const c = el(id); if (c) c.innerHTML = '<span style="color:var(--vermelho)">não consegui listar as competências</span>'; });
     });
   if (run) run.competenciasDisponiveis(ESTADO.token);
+}
+
+
+/* ============================================================
+   ACOMPANHAMENTO DE ORDENS DE SERVIÇO
+   Tela de trabalho: o que está com o gestor (nível 2) em primeiro
+   plano, com edição de observações, relato e justificativa.
+   ============================================================ */
+const NIVEIS_OS = [
+  { k: 'n2',   rotulo: 'Aguardando gestor — nível 2', re: /CLIENTE\s*N[ÍI]VEL\s*2|CLIENTE\s*NIVEL\s*2/i },
+  { k: 'n1',   rotulo: 'Aguardando gestor — nível 1', re: /CLIENTE\s*N[ÍI]VEL\s*1|CLIENTE\s*NIVEL\s*1/i },
+  { k: 'vist', rotulo: 'Aguardando vistoriador',      re: /VISTORIADOR/i },
+  { k: 'rev',  rotulo: 'Pedidos de revisão',          re: /REVIS/i },
+  { k: 'env',  rotulo: 'Não enviadas ao cliente',     re: /N[ÃA]O ENVIADAS/i },
+  { k: 'apr',  rotulo: 'Aprovadas e não iniciadas',   re: /APROVADAS/i },
+  { k: 'conc', rotulo: 'Concluídas e não cobradas',   re: /CONCLU/i },
+  { k: 'cob',  rotulo: 'Cobradas',                    re: /^COBRADAS$/i }
+];
+function nivelDaOS(status) {
+  const t = String(status || '').trim();
+  for (let i = 0; i < NIVEIS_OS.length; i++) if (NIVEIS_OS[i].re.test(t)) return NIVEIS_OS[i].k;
+  return 'outros';
+}
+function pesoNivel(k) { const i = NIVEIS_OS.findIndex(n => n.k === k); return i < 0 ? 99 : i; }
+
+/** Junta a OS com o cadastro da viatura: modelo e unidade vêm da ConsultaBD, não da aba OS. */
+function osComViatura(o) {
+  const v = ESTADO.veiculos.find(x => x.placa === o.placa || x.placaMerc === o.placa || x.placaRes === o.placa);
+  return {
+    o: o, v: v || null,
+    modelo: v ? (v.modeloCurto || v.modelo) : (o.modelo || ''),
+    modeloCompleto: v ? v.modelo : (o.modelo || ''),
+    unidade: v ? (v.unidadeCurta || v.unidade) : (o.unidade || ''),
+    nivel: nivelDaOS(o.status)
+  };
+}
+
+function renderOSAcompanhar(lista) {
+  const c = el('os-conteudo'); if (!c) return;
+  const exib = new Set(lista.map(v => v.placa));
+  const filtroAtivo = Object.values(ESTADO.filtros).some(s => s.size) || ESTADO.busca || ESTADO.odoMin !== null || ESTADO.odoMax !== null;
+  const todas = (ESTADO.dados.os || []).filter(o => o.origem === 'PENDENTE')
+    .map(osComViatura)
+    .filter(x => !filtroAtivo || !x.v || exib.has(x.v.placa));
+
+  const contagem = {};
+  todas.forEach(x => { contagem[x.nivel] = (contagem[x.nivel] || 0) + 1; });
+  const nivel = ESTADO.nivelOS;
+  const selecionadas = (nivel === 'todas' ? todas : todas.filter(x => x.nivel === nivel))
+    .sort((a, b) => pesoNivel(a.nivel) - pesoNivel(b.nivel) || (b.o.valor || 0) - (a.o.valor || 0));
+
+  const soma = arr => arr.reduce((s, x) => s + (x.o.valor || 0), 0);
+  const n2 = todas.filter(x => x.nivel === 'n2');
+  const porUnidade = new Map(), porOficina = new Map();
+  selecionadas.forEach(x => {
+    porUnidade.set(x.unidade || '—', (porUnidade.get(x.unidade || '—') || 0) + (x.o.valor || 0));
+    porOficina.set(x.o.oficina || '—', (porOficina.get(x.o.oficina || '—') || 0) + (x.o.valor || 0));
+  });
+  const barras = (mapa, cor) => {
+    const itens = Array.from(mapa.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    const maximo = Math.max(1, ...itens.map(i => i[1]));
+    return itens.map(([k, v]) => `<button class="barra" style="cursor:default"><span class="rotulo">${esc(k)}</span>
+      <span class="trilha"><span class="preench" style="width:${Math.round(v / maximo * 100)}%; background:${cor}"></span></span>
+      <span class="valor">${fmtMoeda(v)}</span></button>`).join('') || '<div class="vazio">Sem dados</div>';
+  };
+
+  const rotuloNivel = nivel === 'todas' ? 'todas as situações' : (NIVEIS_OS.find(n => n.k === nivel) || {}).rotulo || nivel;
+
+  c.innerHTML = `
+    <div class="kpis">
+      ${kpi('Aguardando você (nível 2)', n2.length, fmtMoeda(soma(n2)) + ' orçado', n2.length ? 'vermelho' : 'verde', null, true)}
+      ${kpi('Na seleção atual', selecionadas.length, esc(rotuloNivel), '', null, true)}
+      ${kpi('Valor orçado', fmtMoeda(soma(selecionadas)), 'ticket médio ' + fmtMoeda(selecionadas.length ? soma(selecionadas) / selecionadas.length : 0), 'ambar', null, true)}
+      ${kpi('Viaturas', new Set(selecionadas.map(x => x.o.placa)).size, 'distintas na seleção', '', null, true)}
+      ${kpi('Unidades', porUnidade.size, 'com OS na seleção', 'ciano', null, true)}
+    </div>
+
+    <div class="os-nivel">
+      ${NIVEIS_OS.filter(n => contagem[n.k]).map(n => `<button class="subaba ${nivel === n.k ? 'ativa' : ''}" data-nivel="${n.k}">${esc(n.rotulo)}<span class="n">${contagem[n.k]}</span></button>`).join('')}
+      ${contagem['outros'] ? `<button class="subaba ${nivel === 'outros' ? 'ativa' : ''}" data-nivel="outros">Outros<span class="n">${contagem['outros']}</span></button>` : ''}
+      <button class="subaba ${nivel === 'todas' ? 'ativa' : ''}" data-nivel="todas">Todas<span class="n">${todas.length}</span></button>
+    </div>
+
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); margin-bottom:14px">
+      <div class="cartao"><div class="cartao-cab"><h3>Orçado por unidade</h3><small>${esc(rotuloNivel)}</small></div><div class="barras compacto">${barras(porUnidade, 'var(--azul)')}</div></div>
+      <div class="cartao"><div class="cartao-cab"><h3>Orçado por oficina</h3><small>${esc(rotuloNivel)}</small></div><div class="barras compacto">${barras(porOficina, 'var(--ambar)')}</div></div>
+    </div>
+
+    <div class="cartao largo">
+      <div class="cartao-cab"><h3>${esc(rotuloNivel)}</h3><small>${selecionadas.length} ordem(ns) — edite e salve direto aqui</small></div>
+      <div class="os-barra-acoes">
+        <button class="btn amarelo" id="btn-salvar-os" disabled>Salvar alterações</button>
+        <span class="form-aviso" id="os-pendentes">Nenhuma alteração pendente.</span>
+      </div>
+      <div class="tabela-rol" style="max-height:620px">
+        <table class="tabela-os">
+          <thead><tr><th>OS</th><th>Placa</th><th>Marca/Modelo</th><th>Unidade</th><th>Oficina</th><th>Data</th>
+            <th style="text-align:right">Orçado</th><th>Situação</th><th style="min-width:180px">Observações</th>
+            <th style="min-width:180px">Relato</th><th style="min-width:180px">Justificativa</th></tr></thead>
+          <tbody>
+          ${selecionadas.slice(0, 400).map(x => `<tr class="${x.nivel === 'n2' ? 'n2' : ''}">
+            <td style="white-space:nowrap"><b style="font-family:var(--fonte-dados)">${esc(x.o.os)}</b> ${pdfLinkHtml(x.o.os)}</td>
+            <td style="font-family:var(--fonte-dados); cursor:pointer" onclick="abrirFicha('${escAttr(x.v ? x.v.placa : x.o.placa)}')">${esc(x.o.placa)}</td>
+            <td title="${escAttr(x.modeloCompleto)}">${esc(x.modelo || '—')}${x.v ? '' : ' <small style="color:var(--vermelho)">sem cadastro</small>'}</td>
+            <td>${esc(x.unidade || '—')}</td>
+            <td title="${escAttr(x.o.oficina)}">${esc((x.o.oficina || '').substring(0, 26))}</td>
+            <td style="white-space:nowrap">${esc((x.o.data || '').substring(0, 10))}</td>
+            <td class="num" style="text-align:right; white-space:nowrap">${fmtMoeda(x.o.valor || 0)}</td>
+            <td>${badgeStatusOS(x.o.status)}</td>
+            <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="obs" rows="1">${esc(x.o.obs || '')}</textarea></td>
+            <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="relato" rows="1">${esc(x.o.relato || '')}</textarea></td>
+            <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="justificativa" rows="1">${esc(x.o.justificativa || '')}</textarea></td>
+          </tr>`).join('') || '<tr><td colspan="11"><div class="vazio">Nenhuma ordem de serviço nesta situação</div></td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      ${selecionadas.length > 400 ? '<div class="cartao-dica">Exibindo 400 de ' + selecionadas.length + '. Use os filtros da esquerda para reduzir.</div>' : ''}
+      <div class="cartao-dica">Marca/modelo e unidade vêm da ConsultaBD, cruzando pela placa — não do que está fixo na aba OS. As três colunas de texto são gravadas na planilha.</div>
+    </div>`;
+
+  c.querySelectorAll('button[data-nivel]').forEach(b => b.addEventListener('click', () => { ESTADO.nivelOS = b.dataset.nivel; renderOSAcompanhar(ESTADO.filtrado); }));
+  c.querySelectorAll('.campo-os').forEach(t => {
+    t.dataset.original = t.value;
+    t.addEventListener('input', () => {
+      const mudou = t.value !== t.dataset.original;
+      t.classList.toggle('sujo', mudou);
+      const chave = t.dataset.os + '|' + t.dataset.campo;
+      if (mudou) ESTADO.osEditadas[chave] = { os: t.dataset.os, campo: t.dataset.campo, valor: t.value };
+      else delete ESTADO.osEditadas[chave];
+      atualizarBotaoSalvarOS();
+    });
+  });
+  ouvir('btn-salvar-os', 'click', salvarAlteracoesOS);
+  atualizarBotaoSalvarOS();
+  ajustarKpis();
+}
+
+function atualizarBotaoSalvarOS() {
+  const n = Object.keys(ESTADO.osEditadas).length;
+  const btn = el('btn-salvar-os'), aviso = el('os-pendentes');
+  if (btn) btn.disabled = !n;
+  if (aviso) aviso.textContent = n ? n + ' alteração(ões) pendente(s) em ' + new Set(Object.values(ESTADO.osEditadas).map(x => x.os)).size + ' OS.' : 'Nenhuma alteração pendente.';
+}
+
+function salvarAlteracoesOS() {
+  const porOs = {};
+  Object.values(ESTADO.osEditadas).forEach(x => { (porOs[x.os] = porOs[x.os] || {})[x.campo] = x.valor; });
+  const ordens = Object.keys(porOs);
+  if (!ordens.length) return;
+  const btn = el('btn-salvar-os'), aviso = el('os-pendentes');
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvando…'; }
+  let feitas = 0, erros = 0;
+  const proxima = () => {
+    if (!ordens.length) {
+      if (btn) { btn.textContent = 'Salvar alterações'; }
+      toast(feitas + ' OS gravada(s)' + (erros ? ' • ' + erros + ' com erro' : ''));
+      ESTADO.osEditadas = {};
+      recarregarAposEdicao(null);
+      return;
+    }
+    const os = ordens.shift();
+    if (aviso) aviso.textContent = 'Gravando OS ' + os + '…';
+    const run = servidor('salvarCamposOS',
+      r => {
+        if (r && r.ok) { feitas++; if (r.recusados && r.recusados.length) toast('OS ' + os + ': ' + r.recusados.join(', ') + ' não gravado(s).', true); }
+        else { erros++; toast('OS ' + os + ': ' + ((r && r.erro) || 'falha'), true); }
+        proxima();
+      },
+      e => { erros++; toast('OS ' + os + ': ' + (e && e.message ? e.message : e), true); proxima(); });
+    if (run) run.salvarCamposOS(ESTADO.token, os, porOs[os]);
+    else { erros++; proxima(); }
+  };
+  proxima();
 }
 
 </script>

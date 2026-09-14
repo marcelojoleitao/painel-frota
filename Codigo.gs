@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.16.0';
+const CODIGO_VERSAO = '2.17.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1041,6 +1041,58 @@ function instalarGatilho() {
   else gatilho.everyMinutes(30).create();
   aquecerCache();
   return 'Gatilho instalado.';
+}
+
+
+/* ------------------------------------------------------------ */
+/*  Edição de campos da aba OS (observações, relato, justificativa) */
+/* ------------------------------------------------------------ */
+
+const CAMPOS_OS_EDITAVEIS = { obs: 'Observações', relato: 'Relato', justificativa: 'Justificativa' };
+
+function salvarCamposOS(token, os, campos) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const numero = String(os || '').replace(/\D/g, '');
+  if (!numero) return { ok: false, erro: 'OS não informada.' };
+
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Planilha ocupada. Tente de novo.' }; }
+  try {
+    const aba = p.ss.getSheetByName(CONFIG.ABA_OS_PENDENTES);
+    if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_OS_PENDENTES + '" não encontrada.' };
+    const valores = aba.getDataRange().getValues();
+    let linhaCab = -1;
+    for (let i = 0; i < Math.min(5, valores.length); i++) {
+      if (valores[i].some(c => String(c).trim().toUpperCase() === 'OS')) { linhaCab = i; break; }
+    }
+    if (linhaCab < 0) return { ok: false, erro: 'Não encontrei o cabeçalho da aba OS.' };
+    const cab = valores[linhaCab].map(c => String(c || '').trim());
+    const colOs = cab.findIndex(c => c.toUpperCase() === 'OS');
+    if (colOs < 0) return { ok: false, erro: 'Coluna OS não encontrada.' };
+
+    let linha = -1;
+    for (let r = linhaCab + 1; r < valores.length; r++) {
+      if (String(valores[r][colOs] || '').replace(/\D/g, '') === numero) { linha = r + 1; break; }
+    }
+    if (linha < 0) return { ok: false, erro: 'OS ' + numero + ' não encontrada na planilha.' };
+
+    const gravados = [], recusados = [];
+    Object.keys(campos || {}).forEach(chave => {
+      const rotulo = CAMPOS_OS_EDITAVEIS[chave];
+      if (!rotulo) { recusados.push(chave); return; }
+      const col = cab.findIndex(c => c.toUpperCase() === rotulo.toUpperCase());
+      if (col < 0) { recusados.push(rotulo + ' (coluna inexistente)'); return; }
+      const celula = aba.getRange(linha, col + 1);
+      if (celula.getFormula()) { recusados.push(rotulo + ' (coluna com fórmula)'); return; }
+      celula.setValue(String(campos[chave] === null || campos[chave] === undefined ? '' : campos[chave]));
+      gravados.push(rotulo);
+    });
+    SpreadsheetApp.flush();
+    if (gravados.length) { limparCache(); _logAcao_(p.ss, p.sessao.email, 'Editar OS', numero, gravados.join(', '), JSON.stringify(campos).substring(0, 400)); }
+    return { ok: true, gravados: gravados, recusados: recusados, linha: linha };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  } finally { trava.releaseLock(); }
 }
 
 /* ------------------------------------------------------------ */
@@ -3792,9 +3844,10 @@ function _lerGestores_(ss) {
 
 function _lerOS_(ss) {
   const pend = _abaPorCabecalho_(ss, CONFIG.ABA_OS_PENDENTES, ['OS', 'Placa', 'Orçado', 'Status']);
+  const linhaDe = {};
   const ace  = _abaPorCabecalho_(ss, CONFIG.ABA_OS_ACEITES,   ['OS', 'Placa', 'Data Aprovação', 'Status']);
   const lista = [];
-  if (pend) _linhasComoObjetos_(pend).forEach(o => lista.push({ origem: 'PENDENTE', os: _txt_(o['OS']), placa: _txt_(o['Placa']).toUpperCase(),
+  if (pend) _linhasComoObjetos_(pend).forEach((o, i) => lista.push({ origem: 'PENDENTE', linha: pend.linhaCab + 2 + i, os: _txt_(o['OS']), placa: _txt_(o['Placa']).toUpperCase(),
     valor: _num_(o['Orçado']), aprovado: _num_(o['Aprovado']), data: _dataTxt_(o['Data']), oficina: _txt_(o['Oficina']), status: _txt_(o['Status']),
     unidade: _txt_(o['Unidade SIPAC']), obs: _txt_(o['Observações']), relato: _txt_(o['Relato']), justificativa: _txt_(o['Justificativa']), modelo: _txt_(o['Marca/Modelo']) }));
   if (ace) _linhasComoObjetos_(ace).forEach(o => lista.push({ origem: 'ACEITE', os: _txt_(o['OS']), placa: _txt_(o['Placa']).toUpperCase(),
