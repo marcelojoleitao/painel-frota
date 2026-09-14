@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.17.0';
+const VERSAO_PAINEL = '2.18.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2618,6 +2618,20 @@ const NIVEIS_OS = [
   { k: 'conc', rotulo: 'Concluídas e não cobradas',   re: /CONCLU/i },
   { k: 'cob',  rotulo: 'Cobradas',                    re: /^COBRADAS$/i }
 ];
+const OPCOES_APROVACAO = ['', 'Aprovada', 'Precisa diligência', 'Precisa ser revisada'];
+function classeAprovacao(v) {
+  const t = String(v || '').toLowerCase();
+  if (/aprovad/.test(t)) return 'ok';
+  if (/diligen/.test(t)) return 'atencao';
+  if (/revis/.test(t)) return 'revisar';
+  return '';
+}
+/** Campo de texto cresce conforme o conteúdo, até um limite. */
+function ajustarAltura(t) {
+  t.style.height = 'auto';
+  t.style.height = Math.min(t.scrollHeight + 2, 190) + 'px';
+}
+
 function nivelDaOS(status) {
   const t = String(status || '').trim();
   for (let i = 0; i < NIVEIS_OS.length; i++) if (NIVEIS_OS[i].re.test(t)) return NIVEIS_OS[i].k;
@@ -2696,12 +2710,17 @@ function renderOSAcompanhar(lista) {
       </div>
       <div class="tabela-rol" style="max-height:620px">
         <table class="tabela-os">
+          <colgroup>
+            <col style="width:150px"><col style="width:78px"><col style="width:110px"><col style="width:92px">
+            <col style="width:120px"><col style="width:74px"><col style="width:88px"><col style="width:128px"><col style="width:120px">
+            <col><col><col>
+          </colgroup>
           <thead><tr><th>OS</th><th>Placa</th><th>Marca/Modelo</th><th>Unidade</th><th>Oficina</th><th>Data</th>
-            <th style="text-align:right">Orçado</th><th>Situação</th><th style="min-width:180px">Observações</th>
-            <th style="min-width:180px">Relato</th><th style="min-width:180px">Justificativa</th></tr></thead>
+            <th style="text-align:right">Orçado</th><th>Situação</th><th>Aprovação</th>
+            <th>Observações</th><th>Relato</th><th>Justificativa</th></tr></thead>
           <tbody>
           ${selecionadas.slice(0, 400).map(x => `<tr class="${x.nivel === 'n2' ? 'n2' : ''}">
-            <td style="white-space:nowrap"><b style="font-family:var(--fonte-dados)">${esc(x.o.os)}</b> ${pdfLinkHtml(x.o.os)}</td>
+            <td><b style="font-family:var(--fonte-dados)">${esc(x.o.os)}</b><div style="margin-top:3px; display:flex; gap:4px; flex-wrap:wrap">${pdfLinkHtml(x.o.os)}${x.o.linkAnalise ? `<a class="pdf-link analise" href="${escAttr(x.o.linkAnalise)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Relatório de análise">${icoPdf()} análise</a>` : ''}</div></td>
             <td style="font-family:var(--fonte-dados); cursor:pointer" onclick="abrirFicha('${escAttr(x.v ? x.v.placa : x.o.placa)}')">${esc(x.o.placa)}</td>
             <td title="${escAttr(x.modeloCompleto)}">${esc(x.modelo || '—')}${x.v ? '' : ' <small style="color:var(--vermelho)">sem cadastro</small>'}</td>
             <td>${esc(x.unidade || '—')}</td>
@@ -2709,9 +2728,13 @@ function renderOSAcompanhar(lista) {
             <td style="white-space:nowrap">${esc((x.o.data || '').substring(0, 10))}</td>
             <td class="num" style="text-align:right; white-space:nowrap">${fmtMoeda(x.o.valor || 0)}</td>
             <td>${badgeStatusOS(x.o.status)}</td>
-            <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="obs" rows="1">${esc(x.o.obs || '')}</textarea></td>
-            <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="relato" rows="1">${esc(x.o.relato || '')}</textarea></td>
-            <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="justificativa" rows="1">${esc(x.o.justificativa || '')}</textarea></td>
+            <td><select class="campo-os aprovacao ${classeAprovacao(x.o.aprovacao)}" data-os="${escAttr(x.o.os)}" data-campo="aprovacao">
+              ${OPCOES_APROVACAO.map(op => `<option value="${escAttr(op)}" ${(x.o.aprovacao || '') === op ? 'selected' : ''}>${esc(op || '—')}</option>`).join('')}
+              ${x.o.aprovacao && OPCOES_APROVACAO.indexOf(x.o.aprovacao) < 0 ? `<option value="${escAttr(x.o.aprovacao)}" selected>${esc(x.o.aprovacao)}</option>` : ''}
+            </select></td>
+            <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="obs">${esc(x.o.obs || '')}</textarea></td>
+            <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="relato">${esc(x.o.relato || '')}</textarea></td>
+            <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="justificativa">${esc(x.o.justificativa || '')}</textarea></td>
           </tr>`).join('') || '<tr><td colspan="11"><div class="vazio">Nenhuma ordem de serviço nesta situação</div></td></tr>'}
           </tbody>
         </table>
@@ -2723,14 +2746,19 @@ function renderOSAcompanhar(lista) {
   c.querySelectorAll('button[data-nivel]').forEach(b => b.addEventListener('click', () => { ESTADO.nivelOS = b.dataset.nivel; renderOSAcompanhar(ESTADO.filtrado); }));
   c.querySelectorAll('.campo-os').forEach(t => {
     t.dataset.original = t.value;
-    t.addEventListener('input', () => {
+    if (t.tagName === 'TEXTAREA') ajustarAltura(t);
+    const aoMudar = () => {
       const mudou = t.value !== t.dataset.original;
       t.classList.toggle('sujo', mudou);
+      if (t.tagName === 'TEXTAREA') ajustarAltura(t);
+      if (t.classList.contains('aprovacao')) t.className = 'campo-os aprovacao ' + classeAprovacao(t.value) + (mudou ? ' sujo' : '');
       const chave = t.dataset.os + '|' + t.dataset.campo;
       if (mudou) ESTADO.osEditadas[chave] = { os: t.dataset.os, campo: t.dataset.campo, valor: t.value };
       else delete ESTADO.osEditadas[chave];
       atualizarBotaoSalvarOS();
-    });
+    };
+    t.addEventListener('input', aoMudar);
+    t.addEventListener('change', aoMudar);
   });
   ouvir('btn-salvar-os', 'click', salvarAlteracoesOS);
   atualizarBotaoSalvarOS();

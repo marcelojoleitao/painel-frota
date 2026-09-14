@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.17.0';
+const CODIGO_VERSAO = '2.18.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1048,7 +1048,9 @@ function instalarGatilho() {
 /*  Edição de campos da aba OS (observações, relato, justificativa) */
 /* ------------------------------------------------------------ */
 
-const CAMPOS_OS_EDITAVEIS = { obs: 'Observações', relato: 'Relato', justificativa: 'Justificativa' };
+const CAMPOS_OS_EDITAVEIS = { obs: 'Observações', relato: 'Relato', justificativa: 'Justificativa', aprovacao: 'Aprovação' };
+/** Rótulos alternativos aceitos para cada campo editável da aba OS. */
+const ALTERNATIVAS_OS = { aprovacao: ['Aprovação', 'Aprovacao', 'Análise', 'Analise'], obs: ['Observações', 'Observacoes'], relato: ['Relato'], justificativa: ['Justificativa'] };
 
 function salvarCamposOS(token, os, campos) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
@@ -1080,7 +1082,9 @@ function salvarCamposOS(token, os, campos) {
     Object.keys(campos || {}).forEach(chave => {
       const rotulo = CAMPOS_OS_EDITAVEIS[chave];
       if (!rotulo) { recusados.push(chave); return; }
-      const col = cab.findIndex(c => c.toUpperCase() === rotulo.toUpperCase());
+      const nomes = ALTERNATIVAS_OS[chave] || [rotulo];
+      let col = -1;
+      for (let i = 0; i < nomes.length && col < 0; i++) col = cab.findIndex(c => c.toUpperCase() === nomes[i].toUpperCase());
       if (col < 0) { recusados.push(rotulo + ' (coluna inexistente)'); return; }
       const celula = aba.getRange(linha, col + 1);
       if (celula.getFormula()) { recusados.push(rotulo + ' (coluna com fórmula)'); return; }
@@ -3842,6 +3846,18 @@ function _lerGestores_(ss) {
   return saida;
 }
 
+/** Primeiro dos rótulos que existir no objeto. Com `link`, só aceita valor que pareça URL. */
+function _primeiroValor_(o, rotulos, link) {
+  for (let i = 0; i < rotulos.length; i++) {
+    const v = o[rotulos[i]];
+    if (v === undefined || v === null || String(v).trim() === '') continue;
+    if (link && !/^https?:\/\//i.test(String(v).trim())) continue;
+    if (!link && /^https?:\/\//i.test(String(v).trim())) continue;
+    return v;
+  }
+  return '';
+}
+
 function _lerOS_(ss) {
   const pend = _abaPorCabecalho_(ss, CONFIG.ABA_OS_PENDENTES, ['OS', 'Placa', 'Orçado', 'Status']);
   const linhaDe = {};
@@ -3849,7 +3865,9 @@ function _lerOS_(ss) {
   const lista = [];
   if (pend) _linhasComoObjetos_(pend).forEach((o, i) => lista.push({ origem: 'PENDENTE', linha: pend.linhaCab + 2 + i, os: _txt_(o['OS']), placa: _txt_(o['Placa']).toUpperCase(),
     valor: _num_(o['Orçado']), aprovado: _num_(o['Aprovado']), data: _dataTxt_(o['Data']), oficina: _txt_(o['Oficina']), status: _txt_(o['Status']),
-    unidade: _txt_(o['Unidade SIPAC']), obs: _txt_(o['Observações']), relato: _txt_(o['Relato']), justificativa: _txt_(o['Justificativa']), modelo: _txt_(o['Marca/Modelo']) }));
+    unidade: _txt_(o['Unidade SIPAC']), obs: _txt_(o['Observações']), relato: _txt_(o['Relato']), justificativa: _txt_(o['Justificativa']),
+    modelo: _txt_(o['Marca/Modelo']), aprovacao: _txt_(_primeiroValor_(o, ['Aprovação', 'Aprovacao', 'Análise', 'Analise'])),
+    linkAnalise: _txt_(_primeiroValor_(o, ['Análise PDF', 'Link Análise', 'Relatório de Análise', 'Relatorio de Analise', 'Link Analise', 'Análise', 'Analise'], true)) }));
   if (ace) _linhasComoObjetos_(ace).forEach(o => lista.push({ origem: 'ACEITE', os: _txt_(o['OS']), placa: _txt_(o['Placa']).toUpperCase(),
     valor: _num_(o['Valor Total']), aprovado: null, data: _dataTxt_(o['Data Aprovação']), oficina: '', status: _txt_(o['Status']),
     unidade: _txt_(o['Unidade SIPAC']), obs: _txt_(o['Observações']), modelo: _txt_(o['Modelo']), inicio: _dataTxt_(o['Data Início Serviço']),

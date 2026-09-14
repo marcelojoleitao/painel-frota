@@ -554,8 +554,17 @@ table.tabela td.acoes { text-align: right; }
 .tabela-os td { padding: 5px 8px; border-bottom: 1px solid var(--borda); font-size: 12.5px; vertical-align: top; }
 .tabela-os tr.n2 td { background: #FFFBF0; }
 .tabela-os tr:hover td { background: #F1F5FC; }
+.tabela-os { table-layout: fixed; }
+.tabela-os td { word-wrap: break-word; overflow-wrap: anywhere; }
 .tabela-os .campo-os { width: 100%; border: 1px solid transparent; border-radius: 5px; padding: 4px 6px; font: inherit; font-size: 12px;
-  background: transparent; resize: vertical; min-height: 28px; }
+  background: transparent; resize: vertical; min-height: 28px; line-height: 1.35; overflow: hidden; }
+.tabela-os textarea.campo-os { max-height: 190px; }
+.tabela-os select.campo-os { min-height: 26px; cursor: pointer; border-color: var(--borda); background: #fff; font-weight: 600; }
+.tabela-os select.campo-os.ok { background: #E9F7EF; border-color: var(--verde); color: #1E7A4D; }
+.tabela-os select.campo-os.atencao { background: #FFF6E5; border-color: var(--ambar); color: #8A6200; }
+.tabela-os select.campo-os.revisar { background: #FDECEA; border-color: var(--vermelho); color: #9A2F24; }
+.pdf-link.analise { background: #E8EEFA; color: var(--azul); border-color: #C7D6F0; }
+.pdf-link.analise:hover { background: var(--azul); color: #fff; }
 .tabela-os .campo-os:hover { border-color: var(--borda-forte); background: #fff; }
 .tabela-os .campo-os:focus { outline: none; border-color: var(--azul-claro); background: #fff; box-shadow: 0 0 0 2px rgba(46,111,217,.15); }
 .tabela-os .campo-os.sujo { border-color: var(--ambar); background: #FFFBF3; }
