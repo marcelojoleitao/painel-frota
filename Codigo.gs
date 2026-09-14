@@ -63,6 +63,8 @@ const CONFIG = {
   PASTA_FOTOS: '1RXE1xx0GPYZhtZAuWArmU9z7RVueOcUT',
   // CRLVs baixados/anexados (mesma pasta do consultas_detran.py)
   PASTA_CRLV: '1RAs2cZEE4MzQJHKRiYKZFLefYrQcSAcC',
+  // Termos de tombamento (vazio = usa a pasta dos CRLVs)
+  PASTA_TOMBAMENTO: '',
   // Registro das ações executadas pelo painel (aba criada automaticamente na planilha base)
   ABA_LOG: 'LogAcoes',
   // Fila de ações que dependem do DETRAN (executadas pelo trabalhador Python local)
@@ -917,6 +919,71 @@ function acaoAuditarCrlv(token, placa) {
     _logAcao_(p.ss, p.sessao.email, 'Auditar CRLV', placa, 'ERRO', msg);
     return { ok: false, erro: msg };
   }
+}
+
+
+/* ------------------------------------------------------------ */
+/*  Documentos da viatura (CRLV e termo de tombamento)           */
+/* ------------------------------------------------------------ */
+
+const DOCUMENTOS_VIATURA = {
+  crlv:       { campo: 'linkCrlv', rotulo: 'CRLV',                 sufixo: '',       pasta: 'PASTA_CRLV' },
+  tombamento: { campo: 'linkTomb', rotulo: 'Termo de tombamento',  sufixo: '_termo', pasta: 'PASTA_TOMBAMENTO' }
+};
+
+/**
+ * Substitui ou inclui um documento em PDF da viatura. O arquivo vai para a
+ * pasta do Drive e o link é gravado na coluna correspondente da ConsultaBD.
+ * O arquivo anterior com o mesmo nome vai para a lixeira (fica recuperável).
+ */
+function anexarDocumento(token, placa, tipo, base64, nomeArquivo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const doc = DOCUMENTOS_VIATURA[tipo];
+  if (!doc) return { ok: false, erro: 'Tipo de documento inválido.' };
+  placa = String(placa || '').trim().toUpperCase();
+  if (!base64 || base64.length < 100) return { ok: false, erro: 'Arquivo vazio.' };
+  if (base64.length > 12 * 1024 * 1024) return { ok: false, erro: 'PDF acima de 9 MB.' };
+  const idPasta = CONFIG[doc.pasta] || CONFIG.PASTA_CRLV;
+  if (!idPasta) return { ok: false, erro: 'Pasta do Drive não configurada para ' + doc.rotulo + '.' };
+
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Outra gravação em andamento.' }; }
+  try {
+    const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
+    const mapa = _mapaEdicao_(aba);
+    const info = mapa.porCampo[doc.campo];
+    if (!info) return { ok: false, erro: 'Coluna de ' + doc.rotulo + ' não encontrada na ConsultaBD.' };
+    if (!info.editavel) return { ok: false, erro: 'A coluna ' + info.nome + ' está bloqueada (' + info.motivo + ').' };
+    const alvo = _linhaDaPlaca_(aba, placa);
+    if (alvo.linha < 0) return { ok: false, erro: 'Placa ' + placa + ' não encontrada.' };
+
+    const bytes = Utilities.base64Decode(base64);
+    const pasta = DriveApp.getFolderById(idPasta);
+    const nome = placa + doc.sufixo + '.pdf';
+    const iguais = pasta.getFilesByName(nome);
+    while (iguais.hasNext()) { try { iguais.next().setTrashed(true); } catch (e) {} }
+    const arq = pasta.createFile(Utilities.newBlob(bytes, 'application/pdf', nome));
+    try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+    const link = 'https://drive.google.com/file/d/' + arq.getId() + '/view?usp=sharing';
+    aba.getRange(alvo.linha, info.col).setValue(link);
+
+    let detalhe = doc.rotulo + ' anexado' + (nomeArquivo ? ' (' + nomeArquivo + ')' : '');
+    if (tipo === 'crlv') {
+      try {
+        const texto = _pdfTexto_(bytes);
+        const placaPdf = _extrairPlacaPdf_(texto);
+        if (placaPdf && placaPdf !== placa) detalhe += ' • ATENÇÃO: o PDF parece ser da placa ' + placaPdf;
+        const ex = _extrairExercicio_(texto, placa);
+        if (ex && alvo.idx.anoEx !== undefined) { aba.getRange(alvo.linha, alvo.idx.anoEx + 1).setValue(ex); detalhe += ' • exercício ' + ex + ' gravado'; }
+      } catch (e) { detalhe += ' • leitura do PDF indisponível'; }
+    }
+    SpreadsheetApp.flush();
+    limparCache();
+    _logAcao_(p.ss, p.sessao.email, 'Anexar ' + doc.rotulo, placa, 'OK', detalhe);
+    return { ok: true, link: link, nome: nome, detalhe: detalhe };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  } finally { trava.releaseLock(); }
 }
 
 /** ANEXAR CRLV manual: recebe o PDF do navegador, salva como PLACA.pdf e grava o link. */

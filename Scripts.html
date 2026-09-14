@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.18.5';
+const VERSAO_PAINEL = '2.19.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -1664,7 +1664,7 @@ function abrirFormViatura(placa) {
   });
   const soltos = edicao.filter(e => e.campo && e.editavel && !usados.has(e.campo) && e.campo !== 'placa' && e.campo.indexOf('foto') !== 0).map(e => campoHtml(e.campo)).filter(Boolean).join('');
   if (soltos) corpo += secao('Outros campos editáveis', `<div class="form-grade">${soltos}</div>`);
-  if (!novo) corpo += secaoFotosEdicao(v, porCampo);
+  if (!novo) corpo += secaoFotosEdicao(v, porCampo) + secaoDocumentosEdicao(v, porCampo);
   const bloqueadas = edicao.filter(e => !e.editavel).length;
 
   htm('gaveta-cab', `
@@ -1682,6 +1682,10 @@ function abrirFormViatura(placa) {
   const corpoEl = el('gaveta-corpo'); if (corpoEl) corpoEl.scrollTop = 0;
   document.querySelectorAll('#gaveta-corpo .foto-slot input[type=file]').forEach(inp => inp.addEventListener('change', () => {
     if (inp.files && inp.files[0]) enviarFoto(placa, inp.dataset.ang, inp.files[0]);
+    inp.value = '';
+  }));
+  document.querySelectorAll('#gaveta-corpo input[data-doc]').forEach(inp => inp.addEventListener('change', () => {
+    if (inp.files && inp.files[0]) enviarDocumento(placa, inp.dataset.doc, inp.files[0]);
     inp.value = '';
   }));
   document.querySelectorAll('#gaveta-corpo [data-e]').forEach(i => i.addEventListener('input', () => {
@@ -2820,6 +2824,54 @@ function salvarAlteracoesOS() {
     else { erros++; proxima(); }
   };
   proxima();
+}
+
+
+/* ---------------- Documentos da viatura (CRLV e termo) ---------------- */
+const DOCS_VIATURA = [
+  { tipo: 'crlv', campo: 'linkCrlv', rotulo: 'CRLV', dica: 'Documento do veículo. O painel lê o PDF, confere a placa e grava o Ano Exercício.' },
+  { tipo: 'tombamento', campo: 'linkTomb', rotulo: 'Termo de tombamento', dica: 'Termo de responsabilidade patrimonial.' }
+];
+
+function secaoDocumentosEdicao(v, porCampo) {
+  const cartoes = DOCS_VIATURA.map(d => {
+    const info = porCampo[d.campo];
+    const atual = v[d.campo];
+    const bloqueada = info && !info.editavel;
+    return `<div class="doc-slot">
+      <div class="doc-cab"><b>${esc(d.rotulo)}</b>${atual ? `<a class="pdf-link" href="${escAttr(atual)}" target="_blank" rel="noopener">${icoPdf()} abrir atual</a>` : '<span class="badge manutencao">sem arquivo</span>'}</div>
+      <div class="cartao-dica" style="margin:4px 0 8px">${esc(d.dica)}</div>
+      ${bloqueada ? '<div class="foto-data">coluna bloqueada na planilha</div>' :
+        `<label class="btn claro" style="cursor:pointer; display:inline-flex">${atual ? 'Substituir' : 'Anexar'} PDF
+          <input type="file" accept="application/pdf" class="oculto" data-doc="${d.tipo}"></label>
+         <div class="foto-data doc-status" id="doc-status-${d.tipo}"></div>`}
+    </div>`;
+  }).join('');
+  return secao('Documentos', `<div class="docs-edicao">${cartoes}</div>
+    <div class="cartao-dica">O arquivo vai para a pasta do Drive e o link entra na ConsultaBD. A versão anterior vai para a lixeira do Drive, de onde pode ser recuperada.</div>`);
+}
+
+function enviarDocumento(placa, tipo, arquivo) {
+  const status = el('doc-status-' + tipo);
+  const diga = t => { if (status) status.textContent = t; };
+  if (!/pdf$/i.test(arquivo.type) && !/\.pdf$/i.test(arquivo.name)) { toast('Envie um arquivo PDF.'); return; }
+  if (arquivo.size > 9 * 1024 * 1024) { toast('PDF acima de 9 MB.'); return; }
+  diga('Enviando ' + arquivo.name + '…');
+  const leitor = new FileReader();
+  leitor.onerror = () => diga('Falha ao ler o arquivo.');
+  leitor.onload = () => {
+    const base64 = String(leitor.result).substring(String(leitor.result).indexOf(',') + 1);
+    const run = servidor('anexarDocumento',
+      r => {
+        if (!r || !r.ok) { diga(''); toast((r && r.erro) || 'Falha no envio.', true); return; }
+        diga('Anexado ✓');
+        toast(placa + ': ' + r.detalhe);
+        recarregarAposEdicao(placa);
+      },
+      e => { diga(''); toast('Erro: ' + (e && e.message ? e.message : e), true); });
+    if (run) run.anexarDocumento(ESTADO.token, placa, tipo, base64, arquivo.name);
+  };
+  leitor.readAsDataURL(arquivo);
 }
 
 </script>
