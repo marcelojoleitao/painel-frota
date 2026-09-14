@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.15.1';
+const CODIGO_VERSAO = '2.15.2';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -2791,13 +2791,21 @@ function verificarDependenciasAceites() {
     catch (e) { return; }
     const refs = [];
     formulas.forEach((l, i) => l.forEach((f, j) => {
-      if (f && f.indexOf(idAntigo) >= 0) refs.push(aba.getName() + '!' + String.fromCharCode(65 + j) + (i + 1));
+      if (f && f.indexOf(idAntigo) >= 0) refs.push({ cel: aba.getName() + '!' + String.fromCharCode(65 + j) + (i + 1), f: f });
     }));
-    if (refs.length) { achou2 = true; Logger.log('   ' + refs.slice(0, 8).join(', ') + (refs.length > 8 ? ' (+' + (refs.length - 8) + ')' : '')); }
+    if (refs.length) {
+      achou2 = true;
+      refs.slice(0, 5).forEach(r => Logger.log('   ' + r.cel + ' → ' + r.f.substring(0, 300)));
+      if (refs.length > 5) Logger.log('   (+' + (refs.length - 5) + ' outras)');
+    }
   });
   if (!achou2) Logger.log('   nenhuma.');
 
-  Logger.log('=== 3) O painel');
+  Logger.log('=== 3) Abas da planilha antiga que NÃO migram (viram histórico parado)');
+  const naoMigram = antiga.getSheets().map(a => a.getName()).filter(n => migradas.indexOf(n) < 0);
+  Logger.log('   ' + (naoMigram.length ? naoMigram.join(' | ') : 'nenhuma'));
+
+  Logger.log('=== 4) O painel');
   Logger.log('   lê as bases de: ' + CONFIG.ID_BASE + ' (planilha-mãe)');
   Logger.log('   usa a planilha antiga apenas em migrarDadosManutencao().');
   Logger.log('Conclusão: se 1 e 2 vieram vazios, a planilha de aceites pode ser aposentada depois da migração.');
