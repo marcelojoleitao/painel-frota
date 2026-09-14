@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.18.2';
+const CODIGO_VERSAO = '2.18.3';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -274,7 +274,8 @@ function carregarDados(token, forcarAtualizacao) {
       datasFotos:   _datasFotos_(null),
       meta: {
         atualizadoEm: Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm'),
-        statusOcultosPadrao: CONFIG.STATUS_OCULTOS_PADRAO
+        statusOcultosPadrao: CONFIG.STATUS_OCULTOS_PADRAO,
+        versaoCodigo: CODIGO_VERSAO
       }
     };
     if (CONFIG.CACHE_SEG > 0) _cacheGravar_(chave, payload, CONFIG.CACHE_SEG);
@@ -282,6 +283,7 @@ function carregarDados(token, forcarAtualizacao) {
   } else payload.meta.doCache = true;
 
   payload.usuario = { email: sessao.email, nome: sessao.nome || '', lotacao: sessao.lotacao || '', admin: !!sessao.admin };
+  payload.meta.versaoCodigo = CODIGO_VERSAO;   // mesmo vindo do cache, informa a versão em execução
   if (!sessao.admin) { payload.solicitacoes = []; payload.edicao = null; }
   else {
     try {

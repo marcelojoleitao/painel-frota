@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.18.2';
+const VERSAO_PAINEL = '2.18.3';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2681,7 +2681,15 @@ function renderOSAcompanhar(lista) {
 
   const rotuloNivel = nivel === 'todas' ? 'todas as situações' : (NIVEIS_OS.find(n => n.k === nivel) || {}).rotulo || nivel;
 
-  c.innerHTML = `
+  const versaoServidor = (ESTADO.dados.meta && ESTADO.dados.meta.versaoCodigo) || '';
+  const camposVazios = selecionadas.length && !selecionadas.some(x => x.o.aprovacao || x.o.linkAnalise || x.o.relato);
+  const aviso = (!versaoServidor || versaoServidor < '2.18.2')
+    ? `<div class="cartao largo" style="margin-bottom:12px"><div class="alerta-item" style="cursor:default">
+         <span class="t">SERVIDOR DESATUALIZADO</span><div style="margin-top:3px">O Codigo.gs em execução é a versão ${esc(versaoServidor || 'anterior a 2.18')}, que não lê as colunas Aprovação e Relatório da Análise. Cole o Codigo.gs no editor, faça Implantar → Nova versão e clique no ⟳ do topo.</div></div></div>`
+    : (camposVazios ? `<div class="cartao largo" style="margin-bottom:12px"><div class="alerta-item amb" style="cursor:default">
+         <span class="t">COLUNAS VAZIAS</span><div style="margin-top:3px">O servidor (v${esc(versaoServidor)}) leu a aba OS mas relato, aprovação e link vieram em branco. Clique no ⟳ do topo para reler a planilha — os dados podem estar em cache.</div></div></div>` : '');
+
+  c.innerHTML = aviso + `
     <div class="kpis">
       ${kpi('Aguardando você (nível 2)', n2.length, fmtMoeda(soma(n2)) + ' orçado', n2.length ? 'vermelho' : 'verde', null, true)}
       ${kpi('Na seleção atual', selecionadas.length, esc(rotuloNivel), '', null, true)}
