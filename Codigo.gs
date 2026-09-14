@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.18.0';
+const CODIGO_VERSAO = '2.18.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1048,7 +1048,7 @@ function instalarGatilho() {
 /*  Edição de campos da aba OS (observações, relato, justificativa) */
 /* ------------------------------------------------------------ */
 
-const CAMPOS_OS_EDITAVEIS = { obs: 'Observações', relato: 'Relato', justificativa: 'Justificativa', aprovacao: 'Aprovação' };
+const CAMPOS_OS_EDITAVEIS = { obs: 'Observações', relato: 'Relato', justificativa: 'Justificativa' };
 /** Rótulos alternativos aceitos para cada campo editável da aba OS. */
 const ALTERNATIVAS_OS = { aprovacao: ['Aprovação', 'Aprovacao', 'Análise', 'Analise'], obs: ['Observações', 'Observacoes'], relato: ['Relato'], justificativa: ['Justificativa'] };
 
@@ -3846,6 +3846,19 @@ function _lerGestores_(ss) {
   return saida;
 }
 
+/** Primeiro endereço encontrado na linha, qualquer que seja o nome da coluna. */
+function _urlDaLinha_(o) {
+  const chaves = Object.keys(o);
+  for (let i = 0; i < chaves.length; i++) {
+    const v = o[chaves[i]];
+    const t = String(v === null || v === undefined ? '' : v).trim();
+    if (/^https?:\/\//i.test(t)) return t;
+    const m = t.match(/HYPERLINK\s*\(\s*"([^"]+)"/i);   // =HIPERLINK("...";"...")
+    if (m) return m[1];
+  }
+  return '';
+}
+
 /** Primeiro dos rótulos que existir no objeto. Com `link`, só aceita valor que pareça URL. */
 function _primeiroValor_(o, rotulos, link) {
   for (let i = 0; i < rotulos.length; i++) {
@@ -3867,7 +3880,7 @@ function _lerOS_(ss) {
     valor: _num_(o['Orçado']), aprovado: _num_(o['Aprovado']), data: _dataTxt_(o['Data']), oficina: _txt_(o['Oficina']), status: _txt_(o['Status']),
     unidade: _txt_(o['Unidade SIPAC']), obs: _txt_(o['Observações']), relato: _txt_(o['Relato']), justificativa: _txt_(o['Justificativa']),
     modelo: _txt_(o['Marca/Modelo']), aprovacao: _txt_(_primeiroValor_(o, ['Aprovação', 'Aprovacao', 'Análise', 'Analise'])),
-    linkAnalise: _txt_(_primeiroValor_(o, ['Análise PDF', 'Link Análise', 'Relatório de Análise', 'Relatorio de Analise', 'Link Analise', 'Análise', 'Analise'], true)) }));
+    linkAnalise: _urlDaLinha_(o) }));
   if (ace) _linhasComoObjetos_(ace).forEach(o => lista.push({ origem: 'ACEITE', os: _txt_(o['OS']), placa: _txt_(o['Placa']).toUpperCase(),
     valor: _num_(o['Valor Total']), aprovado: null, data: _dataTxt_(o['Data Aprovação']), oficina: '', status: _txt_(o['Status']),
     unidade: _txt_(o['Unidade SIPAC']), obs: _txt_(o['Observações']), modelo: _txt_(o['Modelo']), inicio: _dataTxt_(o['Data Início Serviço']),

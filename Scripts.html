@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.18.0';
+const VERSAO_PAINEL = '2.18.1';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2618,7 +2618,6 @@ const NIVEIS_OS = [
   { k: 'conc', rotulo: 'Concluídas e não cobradas',   re: /CONCLU/i },
   { k: 'cob',  rotulo: 'Cobradas',                    re: /^COBRADAS$/i }
 ];
-const OPCOES_APROVACAO = ['', 'Aprovada', 'Precisa diligência', 'Precisa ser revisada'];
 function classeAprovacao(v) {
   const t = String(v || '').toLowerCase();
   if (/aprovad/.test(t)) return 'ok';
@@ -2711,8 +2710,9 @@ function renderOSAcompanhar(lista) {
       <div class="tabela-rol" style="max-height:620px">
         <table class="tabela-os">
           <colgroup>
-            <col style="width:150px"><col style="width:78px"><col style="width:110px"><col style="width:92px">
-            <col style="width:120px"><col style="width:74px"><col style="width:88px"><col style="width:128px"><col style="width:120px">
+            <col style="width:132px"><col style="width:74px"><col style="width:104px"><col style="width:86px">
+            <col style="width:104px"><col style="width:70px"><col style="width:86px">
+            <col style="width:132px"><col style="width:124px">
             <col><col><col>
           </colgroup>
           <thead><tr><th>OS</th><th>Placa</th><th>Marca/Modelo</th><th>Unidade</th><th>Oficina</th><th>Data</th>
@@ -2728,10 +2728,7 @@ function renderOSAcompanhar(lista) {
             <td style="white-space:nowrap">${esc((x.o.data || '').substring(0, 10))}</td>
             <td class="num" style="text-align:right; white-space:nowrap">${fmtMoeda(x.o.valor || 0)}</td>
             <td>${badgeStatusOS(x.o.status)}</td>
-            <td><select class="campo-os aprovacao ${classeAprovacao(x.o.aprovacao)}" data-os="${escAttr(x.o.os)}" data-campo="aprovacao">
-              ${OPCOES_APROVACAO.map(op => `<option value="${escAttr(op)}" ${(x.o.aprovacao || '') === op ? 'selected' : ''}>${esc(op || '—')}</option>`).join('')}
-              ${x.o.aprovacao && OPCOES_APROVACAO.indexOf(x.o.aprovacao) < 0 ? `<option value="${escAttr(x.o.aprovacao)}" selected>${esc(x.o.aprovacao)}</option>` : ''}
-            </select></td>
+            <td>${x.o.aprovacao ? `<span class="etiqueta-aprov ${classeAprovacao(x.o.aprovacao)}">${esc(x.o.aprovacao)}</span>` : '<span style="color:var(--tinta-suave)">—</span>'}</td>
             <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="obs">${esc(x.o.obs || '')}</textarea></td>
             <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="relato">${esc(x.o.relato || '')}</textarea></td>
             <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="justificativa">${esc(x.o.justificativa || '')}</textarea></td>
