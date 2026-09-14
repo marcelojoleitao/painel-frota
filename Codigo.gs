@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.15.2';
+const CODIGO_VERSAO = '2.16.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -2749,6 +2749,72 @@ function _decBR3_(n) { return (n || 0).toLocaleString('pt-BR', { minimumFraction
 /** As bases de manutenção agora vivem na planilha-mãe. */
 function _ssManut_() { return SpreadsheetApp.openById(CONFIG.ID_BASE); }
 
+
+
+/**
+ * Mapeia todas as abas da planilha-mãe: tamanho, se o painel usa, quem depende
+ * de quem (pelas fórmulas) e o que parece órfão. Não altera nada.
+ * Rode no editor e leia o log.
+ */
+function mapearAbasDaPlanilhaMae() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const usadasPeloPainel = {};
+  [['ABA_BASE', 'frota, filtros, ficha, edição'], ['ABA_ABAST', 'abastecimento e relatórios'], ['ABA_MANUT', 'manutenção'],
+   ['ABA_GESTORES', 'contatos por unidade'], ['ABA_OS_PENDENTES', 'aba Ordens de serviço'], ['ABA_OS_ACEITES', 'aba Ordens de serviço'],
+   ['ABA_SOLICITACOES', 'solicitações de prefeituras'], ['ABA_ACIDENTES', 'alerta de acidente nos relatórios'],
+   ['ABA_ANP', 'relatório de glosa'], ['ABA_RESUMO_GLOSA', 'histórico de glosa em Pagamentos'],
+   ['ABA_LOG', 'registro de ações'], ['ABA_FILA', 'fila do DETRAN'],
+   ['ABA_DETALHE', 'relatório analítico'], ['ABA_ACEITES', 'resumo de OS'], ['ABA_ORCAMENTOS', 'resumo de OS']
+  ].forEach(par => { const nome = CONFIG[par[0]]; if (nome) usadasPeloPainel[nome] = par[1]; });
+  (CONFIG.ABAS_AUX_MANUT || []).forEach(n => { usadasPeloPainel[n] = 'sustenta fórmula do DetalhamentoDB'; });
+
+  const abas = ss.getSheets();
+  const nomes = abas.map(a => a.getName());
+  const info = {}, usadaPor = {};
+  nomes.forEach(n => { usadaPor[n] = []; });
+
+  abas.forEach(aba => {
+    const nome = aba.getName();
+    const nLin = aba.getLastRow(), nCol = aba.getLastColumn();
+    let formulas = [];
+    try { formulas = aba.getRange(1, 1, Math.min(Math.max(nLin, 1), 300), Math.max(nCol, 1)).getFormulas(); } catch (e) {}
+    let qtdFormulas = 0, importrange = 0;
+    const cita = {};
+    formulas.forEach(l => l.forEach(f => {
+      if (!f) return;
+      qtdFormulas++;
+      if (/IMPORTRANGE/i.test(f)) importrange++;
+      nomes.forEach(outro => {
+        if (outro === nome) return;
+        if (new RegExp("'?" + outro.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "'?!").test(f)) cita[outro] = true;
+      });
+    }));
+    Object.keys(cita).forEach(alvo => { usadaPor[alvo].push(nome); });
+    info[nome] = { linhas: nLin, colunas: nCol, formulas: qtdFormulas, importrange: importrange, cita: Object.keys(cita) };
+  });
+
+  const emUso = [], apoio = [], candidatas = [];
+  nomes.forEach(n => {
+    const i = info[n];
+    const usoPainel = usadasPeloPainel[n];
+    const dependentes = usadaPor[n];
+    const linha = n + ' (' + i.linhas + ' linhas, ' + i.colunas + ' col' + (i.formulas ? ', ' + i.formulas + ' fórmulas' : '') +
+      (i.importrange ? ', ' + i.importrange + ' IMPORTRANGE' : '') + ')' +
+      (i.cita.length ? ' → usa: ' + i.cita.join(', ') : '') +
+      (dependentes.length ? ' | usada por: ' + dependentes.join(', ') : '');
+    if (usoPainel) emUso.push(linha + ' | PAINEL: ' + usoPainel);
+    else if (dependentes.length) apoio.push(linha);
+    else candidatas.push(linha);
+  });
+
+  Logger.log('===== ABAS USADAS PELO PAINEL (' + emUso.length + ') =====');
+  emUso.forEach(l => Logger.log('  ' + l));
+  Logger.log('===== ABAS DE APOIO — outra aba depende delas (' + apoio.length + ') =====');
+  apoio.forEach(l => Logger.log('  ' + l));
+  Logger.log('===== SEM USO APARENTE — nem o painel nem outra aba usa (' + candidatas.length + ') =====');
+  candidatas.forEach(l => Logger.log('  ' + l));
+  Logger.log('Observação: abas com IMPORTRANGE podem ser espelhos de outras planilhas, e abas podem ser lidas por scripts ou planilhas externas que este mapa não alcança.');
+}
 
 /**
  * Verifica se a planilha de aceites pode ser aposentada: procura quem ainda
