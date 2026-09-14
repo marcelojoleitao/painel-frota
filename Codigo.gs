@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.15.0';
+const CODIGO_VERSAO = '2.15.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -2748,6 +2748,60 @@ function _decBR3_(n) { return (n || 0).toLocaleString('pt-BR', { minimumFraction
 
 /** As bases de manutenção agora vivem na planilha-mãe. */
 function _ssManut_() { return SpreadsheetApp.openById(CONFIG.ID_BASE); }
+
+
+/**
+ * Verifica se a planilha de aceites pode ser aposentada: procura quem ainda
+ * depende dela, nos dois sentidos.
+ *  1) abas da própria planilha antiga que usam as bases migradas (param de
+ *     receber dados novos, mas continuam com o histórico);
+ *  2) fórmulas na planilha-mãe que ainda apontam para o ID da planilha antiga.
+ * Não altera nada.
+ */
+function verificarDependenciasAceites() {
+  const idAntigo = CONFIG.ID_MANUT_ANTIGA;
+  const migradas = [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS].concat(CONFIG.ABAS_AUX_MANUT || []);
+
+  Logger.log('=== 1) Abas da planilha de aceites que usam as bases migradas');
+  const antiga = SpreadsheetApp.openById(idAntigo);
+  let achou1 = false;
+  antiga.getSheets().forEach(aba => {
+    const nome = aba.getName();
+    if (migradas.indexOf(nome) >= 0) return;
+    if (aba.getLastRow() < 1) return;
+    let formulas;
+    try { formulas = aba.getRange(1, 1, Math.min(aba.getLastRow(), 200), Math.max(1, aba.getLastColumn())).getFormulas(); }
+    catch (e) { return; }
+    const usa = {};
+    formulas.forEach(l => l.forEach(f => {
+      if (!f) return;
+      migradas.forEach(b => { if (new RegExp("'?" + b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "'?!").test(f)) usa[b] = true; });
+    }));
+    if (Object.keys(usa).length) { achou1 = true; Logger.log('   ' + nome + ' usa: ' + Object.keys(usa).join(', ')); }
+  });
+  if (!achou1) Logger.log('   nenhuma — só as bases migradas tinham fórmulas relevantes.');
+
+  Logger.log('=== 2) Fórmulas na planilha-mãe que apontam para a planilha de aceites');
+  const mae = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  let achou2 = false;
+  mae.getSheets().forEach(aba => {
+    if (aba.getLastRow() < 1) return;
+    let formulas;
+    try { formulas = aba.getRange(1, 1, Math.min(aba.getLastRow(), 200), Math.max(1, aba.getLastColumn())).getFormulas(); }
+    catch (e) { return; }
+    const refs = [];
+    formulas.forEach((l, i) => l.forEach((f, j) => {
+      if (f && f.indexOf(idAntigo) >= 0) refs.push(aba.getName() + '!' + String.fromCharCode(65 + j) + (i + 1));
+    }));
+    if (refs.length) { achou2 = true; Logger.log('   ' + refs.slice(0, 8).join(', ') + (refs.length > 8 ? ' (+' + (refs.length - 8) + ')' : '')); }
+  });
+  if (!achou2) Logger.log('   nenhuma.');
+
+  Logger.log('=== 3) O painel');
+  Logger.log('   lê as bases de: ' + CONFIG.ID_BASE + ' (planilha-mãe)');
+  Logger.log('   usa a planilha antiga apenas em migrarDadosManutencao().');
+  Logger.log('Conclusão: se 1 e 2 vieram vazios, a planilha de aceites pode ser aposentada depois da migração.');
+}
 
 /** Abas da planilha de origem que são espelhos de outra planilha (IMPORTRANGE). */
 function _espelhosImportrange_(ss) {
