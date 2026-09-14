@@ -59,9 +59,11 @@ const CONFIG = {
   EDICAO_LINHAS_VERIFICACAO: [2, 3],
   EDICAO_OBRIGATORIOS: ['placa', 'modelo', 'tipo', 'categoria', 'especie', 'cor', 'comb', 'anoFab', 'anoMod', 'chassi', 'renavam', 'blind', 'carac'],
 
-  // Colunas pintadas são preenchidas por script — e o painel também é um deles.
-  // Estes campos ficam liberados mesmo com fundo colorido (nunca com fórmula):
-  EDICAO_EXCECOES: ['fotoFD', 'fotoLE', 'fotoTR', 'fotoLD', 'linkCrlv', 'linkTomb', 'anoEx', 'multasTxt', 'tombamento', 'unidTomb', 'crv', 'codCrv'],
+  // As seis colunas de link (fotos, CRLV e termo de tombamento) são pintadas
+  // porque um script as preenche. O painel passa a ser mais um desses scripts,
+  // então só elas ficam liberadas apesar da cor. Todo o resto segue a regra
+  // normal: fórmula ou cor = bloqueado.
+  EDICAO_EXCECOES: ['fotoFD', 'fotoLE', 'fotoTR', 'fotoLD', 'linkCrlv', 'linkTomb'],
 
   // Fotos das viaturas (mesma pasta do consultas_detran.py)
   PASTA_FOTOS: '1RXE1xx0GPYZhtZAuWArmU9z7RVueOcUT',
