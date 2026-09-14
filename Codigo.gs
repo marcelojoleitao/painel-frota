@@ -59,6 +59,10 @@ const CONFIG = {
   EDICAO_LINHAS_VERIFICACAO: [2, 3],
   EDICAO_OBRIGATORIOS: ['placa', 'modelo', 'tipo', 'categoria', 'especie', 'cor', 'comb', 'anoFab', 'anoMod', 'chassi', 'renavam', 'blind', 'carac'],
 
+  // Colunas pintadas são preenchidas por script — e o painel também é um deles.
+  // Estes campos ficam liberados mesmo com fundo colorido (nunca com fórmula):
+  EDICAO_EXCECOES: ['fotoFD', 'fotoLE', 'fotoTR', 'fotoLD', 'linkCrlv', 'linkTomb', 'anoEx', 'multasTxt', 'tombamento', 'unidTomb', 'crv', 'codCrv'],
+
   // Fotos das viaturas (mesma pasta do consultas_detran.py)
   PASTA_FOTOS: '1RXE1xx0GPYZhtZAuWArmU9z7RVueOcUT',
   // CRLVs baixados/anexados (mesma pasta do consultas_detran.py)
@@ -1196,10 +1200,17 @@ function _mapaEdicao_(aba) {
   const idx = _mapearCampos_(cab);
   const campoPorCol = {};
   Object.keys(idx).forEach(k => { campoPorCol[idx[k]] = k; });
+  const excecoes = CONFIG.EDICAO_EXCECOES || [];
   const lista = [];
   for (let c = 0; c < nCols; c++) {
     if (!cab[c]) continue;
-    lista.push({ col: c + 1, nome: cab[c], campo: campoPorCol[c] || '', editavel: !bloqueada[c], motivo: bloqueada[c] });
+    const campo = campoPorCol[c] || '';
+    const motivo = bloqueada[c];
+    // fórmula nunca é sobrescrita; cor é só marcação de "preenchido por script",
+    // e o painel é um desses scripts — por isso os campos da lista de exceções passam.
+    const liberado = motivo && motivo.indexOf('fórmula') < 0 && campo && excecoes.indexOf(campo) >= 0;
+    lista.push({ col: c + 1, nome: cab[c], campo: campo,
+      editavel: !motivo || liberado, motivo: liberado ? motivo + ' — liberado para o painel' : motivo });
   }
   return { lista: lista, porCampo: (function () { const m = {}; lista.forEach(x => { if (x.campo) m[x.campo] = x; }); return m; })() };
 }

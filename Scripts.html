@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.19.0';
+const VERSAO_PAINEL = '2.20.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -1759,7 +1759,7 @@ function secaoFotosEdicao(v, porCampo) {
     const bloqueada = info && !info.editavel;
     return `<div class="foto-slot" data-ang="${ang}">
       <div class="foto ${img ? '' : 'sem'}">${img ? `<img src="${escAttr(img)}" alt="${nomes[ang]}">` : nomes[ang] + '<br>sem foto'}<span class="rotulo">${nomes[ang]}</span></div>
-      ${bloqueada ? `<div class="foto-data">coluna bloqueada</div>` :
+      ${bloqueada ? `<div class="foto-data" title="${escAttr(info.motivo)}">coluna bloqueada por fórmula</div>` :
         `<label class="btn claro foto-btn">${url ? 'Trocar' : 'Enviar'} foto
           <input type="file" accept="image/*" capture="environment" class="oculto" data-ang="${ang}"></label>
         <div class="foto-data foto-status" id="foto-status-${ang}"></div>`}
@@ -2840,8 +2840,8 @@ function secaoDocumentosEdicao(v, porCampo) {
     const bloqueada = info && !info.editavel;
     return `<div class="doc-slot">
       <div class="doc-cab"><b>${esc(d.rotulo)}</b>${atual ? `<a class="pdf-link" href="${escAttr(atual)}" target="_blank" rel="noopener">${icoPdf()} abrir atual</a>` : '<span class="badge manutencao">sem arquivo</span>'}</div>
-      <div class="cartao-dica" style="margin:4px 0 8px">${esc(d.dica)}</div>
-      ${bloqueada ? '<div class="foto-data">coluna bloqueada na planilha</div>' :
+      <div class="cartao-dica" style="margin:4px 0 8px">${esc(d.dica)}${info && info.motivo && info.motivo.indexOf('liberado') > 0 ? ' <span style="color:var(--ambar)">Coluna preenchida por script — o painel também grava aqui.</span>' : ''}</div>
+      ${bloqueada ? `<div class="foto-data" title="${escAttr(info.motivo)}">coluna bloqueada por fórmula</div>` :
         `<label class="btn claro" style="cursor:pointer; display:inline-flex">${atual ? 'Substituir' : 'Anexar'} PDF
           <input type="file" accept="application/pdf" class="oculto" data-doc="${d.tipo}"></label>
          <div class="foto-data doc-status" id="doc-status-${d.tipo}"></div>`}
