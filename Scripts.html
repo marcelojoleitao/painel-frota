@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.24.0';
+const VERSAO_PAINEL = '2.25.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -3132,6 +3132,7 @@ function renderMultas() {
     return;
   }
   if (ESTADO.subMultas === 'bases') return renderCadastrosMultas(c);
+  if (ESTADO.subMultas === 'analise') return renderAnaliseMultas(c);
   renderAcompanhamentoMultas(c);
 }
 
@@ -3241,7 +3242,8 @@ function renderAcompanhamentoMultas(c) {
             <td><b style="font-family:var(--fonte-dados)">${esc(m.ai || '—')}</b>
               ${m.aiOriginario ? `<div class="vinculo">origem: <b>${esc(m.aiOriginario)}</b>${m.origem && m.origem.status ? ' · ' + esc(m.origem.status) : ''}</div>` : ''}
               ${m.derivadas.length ? `<div class="vinculo">gerou: <b>${esc(m.derivadas.join(', '))}</b></div>` : ''}</td>
-            <td style="font-family:var(--fonte-dados)">${esc(m.placa || '—')}
+            <td style="font-family:var(--fonte-dados)">${m.placa ? (viaturaDaMulta(m.placa) ? `<a class="link-btn" style="font-family:var(--fonte-dados); font-weight:700" onclick="abrirFicha('${escAttr(viaturaDaMulta(m.placa).placa)}')">${esc(m.placa)}</a>` : esc(m.placa)) : '—'}
+              ${(() => { const v = viaturaDaMulta(m.placa); return v ? `<div class="vinculo">${esc(v.modeloCurto || v.modelo || '')}${v.unidadeCurta ? ' · ' + esc(v.unidadeCurta) : ''}</div>` : '<div class="vinculo">fora da frota</div>'; })()}
               ${m.cobrada ? `<div class="vinculo" style="color:var(--vermelho)">em cobrança${m.consultaEm ? ' · ' + esc(m.consultaEm) : ''}</div>` : ''}</td>
             <td>${esc(m.orgao || '—')}</td>
             <td style="font-family:var(--fonte-dados); font-size:11.5px">${esc(m.processo || '—')}
@@ -3329,9 +3331,9 @@ function abrirFormMulta(linha) {
     </div>`) +
     secao('Processo', `<div class="form-grade">
       ${campo('processo')}${campo('protocolo')}${campo('dataDefesa')}
-      ${campo('status', 'lista', dados.bases.status)}
-      ${campo('condutor')}${campo('matricula')}${campo('observacoes')}
-    </div>`);
+      ${campo('status', 'lista', dados.bases.status)}${campo('observacoes')}
+    </div>`) +
+    (m ? blocoViaturaMulta(m) : '');
 
   htm('gaveta-cab', `<div class="titulo"><h2>${m ? 'Editar multa ' + esc(m.ai) : 'Nova multa'}</h2>
     <div class="sub">${m ? esc(m.placa + ' · ' + (m.orgao || '')) : 'registro na planilha de multas'}</div></div>
@@ -3498,4 +3500,102 @@ function editarItemBase(tipo, item) {
     if (run) run.editarBaseMulta(ESTADO.token, tipo, chaveOriginal, dados);
   });
 }
+
+/** Viatura correspondente a uma placa da multa (frota ou cadastro de fora). */
+function viaturaDaMulta(placa) {
+  if (!placa) return null;
+  const p = String(placa).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  return (ESTADO.veiculos || []).find(v => v.placa === p || v.placaMerc === p || v.placaRes === p) || null;
+}
+
+/** Painel com os dados da viatura dentro da ficha da multa. */
+function blocoViaturaMulta(m) {
+  const v = viaturaDaMulta(m.placa);
+  if (!v) {
+    const fora = (ESTADO.multas.bases.outrasVtrs || []).find(o => o.placa === m.placa);
+    return secao('Viatura', fora
+      ? `<div class="grade-dados">
+           <div class="dado"><div class="k">Placa</div><div class="v">${esc(fora.placa)}</div></div>
+           <div class="dado"><div class="k">Marca/Modelo</div><div class="v" style="font-size:14px">${esc(fora.modelo || '—')}</div></div>
+           <div class="dado"><div class="k">Origem</div><div class="v" style="font-size:14px">fora da frota</div></div>
+         </div><div class="cartao-dica">Cadastrada em "Viaturas de fora da frota". Edite em Multas → Cadastros.</div>`
+      : `<div class="cartao-dica">A placa ${esc(m.placa || '')} não está na ConsultaBD nem no cadastro de viaturas de fora da frota. Cadastre em Multas → Cadastros para que a marca/modelo saia no ofício.</div>`);
+  }
+  const d = (k, valor) => `<div class="dado"><div class="k">${k}</div><div class="v" style="font-size:14px">${esc(valor || '—')}</div></div>`;
+  return secao('Viatura', `
+    <div class="grade-dados">
+      ${d('Placa', v.placa)}${d('Marca/Modelo', v.modelo)}${d('Unidade SIPAC', v.unidade)}
+      ${d('Uso', v.uso)}${d('Status', v.status)}${d('Ano', (v.anoFab || '') + (v.anoMod ? '/' + v.anoMod : ''))}
+      ${d('Cor', v.cor)}${d('Renavam', v.renavam)}${d('Tombamento', v.tombamento)}
+      ${d('Exercício', v.anoEx)}${d('Licenciamento', v.licStatus)}${d('Gestor da unidade', v.gestorNome)}
+    </div>
+    <div class="form-acoes" style="margin-top:8px">
+      <button class="btn claro" onclick="fecharFicha(); setTimeout(function(){ abrirFicha('${escAttr(v.placa)}'); }, 120)">Abrir ficha completa da viatura</button>
+    </div>
+    ${v.multasTxt ? `<div class="cartao-dica">Multas registradas na consulta da viatura: ${esc(String(v.multasTxt).substring(0, 220))}${String(v.multasTxt).length > 220 ? '…' : ''}</div>` : ''}`);
+}
+
+/* ---------------- análise das multas ---------------- */
+function renderAnaliseMultas(c) {
+  const todas = ESTADO.multas.multas.map(m => {
+    const v = viaturaDaMulta(m.placa);
+    return Object.assign({}, m, {
+      unidade: v ? (v.unidadeCurta || v.unidade || 'Sem unidade') : 'Fora da frota',
+      uso: v ? (v.uso || 'Sem uso') : 'Fora da frota',
+      modelo: v ? (v.modeloCurto || v.modelo || '—') : '—',
+      ano: (String(m.dataInfracao || '').match(/\d{2}\/\d{2}\/(\d{4})/) || [])[1] || 'sem data'
+    });
+  });
+  const agrupar = chave => {
+    const mapa = new Map();
+    todas.forEach(m => { const k = m[chave] || '—'; mapa.set(k, (mapa.get(k) || 0) + 1); });
+    return Array.from(mapa.entries()).sort((a, b) => b[1] - a[1]);
+  };
+  const porAno = Array.from(todas.reduce((mapa, m) => mapa.set(m.ano, (mapa.get(m.ano) || 0) + 1), new Map()).entries())
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  const barras = (itens, cor, limite) => {
+    const lista = itens.slice(0, limite || 12);
+    const maximo = Math.max(1, ...lista.map(i => i[1]));
+    return lista.map(([k, v]) => `<button class="barra" style="cursor:default"><span class="rotulo">${esc(k)}</span>
+      <span class="trilha"><span class="preench" style="width:${Math.round(v / maximo * 100)}%; background:${cor}"></span></span>
+      <span class="valor">${v}</span></button>`).join('') || '<div class="vazio">Sem dados</div>';
+  };
+  const deferido = todas.filter(m => classeStatus(m.status) === 'deferido').length;
+  const indeferido = todas.filter(m => classeStatus(m.status) === 'indeferido').length;
+  const julgadas = deferido + indeferido;
+
+  c.innerHTML = `
+    <div class="kpis">
+      ${kpi('Total de processos', todas.length, porAno.length + ' ano(s) com registro', '', null, true)}
+      ${kpi('Viaturas envolvidas', new Set(todas.map(m => m.placa).filter(Boolean)).size, 'placas distintas', '', null, true)}
+      ${kpi('Unidades atingidas', new Set(todas.map(m => m.unidade)).size, 'com ao menos uma multa', '', null, true)}
+      ${kpi('Índice de êxito', julgadas ? fmtDec(deferido / julgadas * 100) + '%' : '—', deferido + ' de ' + julgadas + ' julgadas', julgadas && deferido / julgadas > 0.5 ? 'verde' : 'ambar', null, true)}
+      ${kpi('Ainda em cobrança', todas.filter(m => m.cobrada).length, 'constam na consulta da viatura', 'vermelho', null, true)}
+    </div>
+
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+      <div class="cartao"><div class="cartao-cab"><h3>Por ano da infração</h3></div><div class="barras compacto">${barras(porAno, 'var(--azul)', 20)}</div></div>
+      <div class="cartao"><div class="cartao-cab"><h3>Por unidade SIPAC</h3><small>cruzado com a ConsultaBD</small></div><div class="barras compacto" style="max-height:260px; overflow:auto">${barras(agrupar('unidade'), 'var(--ambar)')}</div></div>
+      <div class="cartao"><div class="cartao-cab"><h3>Por órgão autuador</h3></div><div class="barras compacto" style="max-height:260px; overflow:auto">${barras(agrupar('orgao'), 'var(--roxo, #7D5BA6)')}</div></div>
+      <div class="cartao"><div class="cartao-cab"><h3>Por enquadramento</h3></div><div class="barras compacto" style="max-height:260px; overflow:auto">${barras(agrupar('enquadramento'), 'var(--ciano, #00A3B5)')}</div></div>
+      <div class="cartao"><div class="cartao-cab"><h3>Viaturas mais autuadas</h3></div><div class="barras compacto" style="max-height:260px; overflow:auto">${barras(agrupar('placa'), 'var(--vermelho)')}</div></div>
+      <div class="cartao"><div class="cartao-cab"><h3>Por uso SIPAC</h3></div><div class="barras compacto">${barras(agrupar('uso'), 'var(--verde)')}</div></div>
+    </div>
+
+    <div class="cartao largo" style="margin-top:14px">
+      <div class="cartao-cab"><h3>Unidades com mais processos</h3><small>situação de cada uma</small></div>
+      <div class="tabela-rol" style="max-height:320px"><table class="tabela-simples" style="width:100%">
+        <thead><tr><th>Unidade</th><th class="num">Processos</th><th class="num">Viaturas</th><th class="num">Deferidas</th><th class="num">Indeferidas</th><th class="num">Em cobrança</th></tr></thead>
+        <tbody>${agrupar('unidade').map(([u]) => {
+          const doGrupo = todas.filter(m => m.unidade === u);
+          return `<tr><td>${esc(u)}</td><td class="num">${doGrupo.length}</td>
+            <td class="num">${new Set(doGrupo.map(m => m.placa).filter(Boolean)).size}</td>
+            <td class="num">${doGrupo.filter(m => classeStatus(m.status) === 'deferido').length}</td>
+            <td class="num">${doGrupo.filter(m => classeStatus(m.status) === 'indeferido').length}</td>
+            <td class="num">${doGrupo.filter(m => m.cobrada).length}</td></tr>`;
+        }).join('')}</tbody></table></div>
+    </div>`;
+  ajustarKpis();
+}
+
 </script>
