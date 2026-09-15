@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.22.0';
+const VERSAO_PAINEL = '2.23.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -81,6 +81,7 @@ const ESTADO = {
   pdfsPorOS: {}, pdfsPorPlaca: {}, filtroStatusOS: '', filtroStatusAceite: '',
   subAcoes: 'executar', lote: null, fila: null, subDados: 'importar', subOS: 'panorama', nivelOS: 'n2', osEditadas: {},
   subPag: 'panorama', processo: null, compProcesso: {}, tituloEditado: {},
+  subMultas: 'acompanhar', multas: null, filtroMulta: { status: '', orgao: '', tipo: '', busca: '' },
   dados: null,
   veiculos: [],
   filtros: {},          // chave -> Set de valores selecionados
@@ -317,11 +318,11 @@ function renderChips() {
    ABAS
    ============================================================ */
 function mudarAba(aba) {
-  if ((aba === 'acoes' || aba === 'dados') && !ESTADO.admin) aba = 'painel';
+  if ((aba === 'acoes' || aba === 'dados' || aba === 'multas') && !ESTADO.admin) aba = 'painel';
   if (aba === 'os') setTimeout(ajustarAlturasOS, 60);
   ESTADO.aba = aba;
   document.querySelectorAll('#abas .topo-aba').forEach(b => b.classList.toggle('ativa', b.dataset.aba === aba));
-  ['painel', 'viaturas', 'uso', 'manut', 'os', 'pagamentos', 'patrimonio', 'acoes', 'dados'].forEach(a => cls('aba-' + a, 'oculto', a !== aba));
+  ['painel', 'viaturas', 'uso', 'manut', 'os', 'pagamentos', 'patrimonio', 'acoes', 'multas', 'dados'].forEach(a => cls('aba-' + a, 'oculto', a !== aba));
   renderAba();
 }
 function renderAba() {
@@ -340,6 +341,7 @@ function renderAba() {
   else if (ESTADO.aba === 'patrimonio') renderPatrimonio(lista);
   else if (ESTADO.aba === 'acoes') renderAcoes(lista);
   else if (ESTADO.aba === 'dados') renderDados();
+  else if (ESTADO.aba === 'multas') renderMultas();
   ajustarKpis();
 }
 
@@ -833,6 +835,11 @@ function debounce(fn, ms) { let t; return function () { clearTimeout(t); t = set
 
 function iniciarApp() {
   document.querySelectorAll('#abas .topo-aba').forEach(b => b.addEventListener('click', () => mudarAba(b.dataset.aba)));
+  document.querySelectorAll('#subabas-multas .subaba').forEach(b => b.addEventListener('click', () => {
+    ESTADO.subMultas = b.dataset.sub;
+    document.querySelectorAll('#subabas-multas .subaba').forEach(x => x.classList.toggle('ativa', x === b));
+    renderMultas();
+  }));
   document.querySelectorAll('#subabas-pag .subaba').forEach(b => b.addEventListener('click', () => {
     ESTADO.subPag = b.dataset.sub;
     document.querySelectorAll('#subabas-pag .subaba').forEach(x => x.classList.toggle('ativa', x === b));
@@ -3104,6 +3111,282 @@ function extensoLocal(valor) {
   const a = reais ? f(reais) + (reais === 1 ? ' real' : ' reais') : '';
   const b = cent ? f(cent) + (cent === 1 ? ' centavo' : ' centavos') : '';
   return a + (b ? (a ? ' e ' : '') + b : '');
+}
+
+
+/* ============================================================
+   MULTAS — acompanhamento dos processos e defesas
+   ============================================================ */
+function renderMultas() {
+  const c = el('multas-conteudo'); if (!c) return;
+  if (!ESTADO.multas) {
+    c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Lendo a planilha de multas…</div></div>';
+    const run = servidor('lerMultas',
+      r => {
+        if (!r || !r.ok) { c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha ao ler.') + '</div></div>'; return; }
+        ESTADO.multas = r; renderMultas();
+      },
+      e => { c.innerHTML = '<div class="cartao largo"><div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div></div>'; });
+    if (run) run.lerMultas(ESTADO.token);
+    return;
+  }
+  if (ESTADO.subMultas === 'bases') return renderCadastrosMultas(c);
+  renderAcompanhamentoMultas(c);
+}
+
+function classeStatus(st) {
+  const t = String(st || '').toLowerCase();
+  if (/^deferido/.test(t)) return 'deferido';
+  if (/indeferido/.test(t)) return 'indeferido';
+  if (t) return 'andamento';
+  return '';
+}
+
+function renderAcompanhamentoMultas(c) {
+  const dados = ESTADO.multas;
+  const f = ESTADO.filtroMulta;
+  const todas = dados.multas;
+  const filtradas = todas.filter(m => {
+    if (f.status && m.status !== f.status) return false;
+    if (f.orgao && m.orgao !== f.orgao) return false;
+    if (f.tipo && m.tipo.toUpperCase() !== f.tipo) return false;
+    if (f.busca) {
+      const alvo = (m.ai + ' ' + m.aiOriginario + ' ' + m.placa + ' ' + m.processo + ' ' + m.protocolo + ' ' + m.observacoes).toLowerCase();
+      if (alvo.indexOf(f.busca.toLowerCase()) < 0) return false;
+    }
+    return true;
+  });
+
+  const contar = chave => {
+    const mapa = new Map();
+    todas.forEach(m => { const v = (m[chave] || '—').toString(); mapa.set(v, (mapa.get(v) || 0) + 1); });
+    return Array.from(mapa.entries()).sort((a, b) => b[1] - a[1]);
+  };
+  const porStatus = contar('status'), porOrgao = contar('orgao');
+  const cobradas = filtradas.filter(m => m.cobrada);
+  const semDefesa = filtradas.filter(m => !m.linkDefesa);
+  const deferidas = todas.filter(m => classeStatus(m.status) === 'deferido').length;
+  const indeferidas = todas.filter(m => classeStatus(m.status) === 'indeferido').length;
+
+  const barras = (itens, chave, cor) => {
+    const maximo = Math.max(1, ...itens.map(i => i[1]));
+    return itens.slice(0, 10).map(([k, v]) => `<button class="barra ${f[chave] === k ? 'selecionada' : ''}" data-filtro="${chave}" data-valor="${escAttr(k)}">
+      <span class="rotulo">${esc(k)}</span><span class="trilha"><span class="preench" style="width:${Math.round(v / maximo * 100)}%; background:${cor}"></span></span>
+      <span class="valor">${v}</span></button>`).join('');
+  };
+
+  c.innerHTML = `
+    <div class="kpis">
+      ${kpi('Processos registrados', todas.length, filtradas.length !== todas.length ? filtradas.length + ' na seleção' : 'todos', '', null, true)}
+      ${kpi('Ainda cobradas da PRF', cobradas.length, 'constam nas multas da viatura', cobradas.length ? 'vermelho' : 'verde', null, true)}
+      ${kpi('Sem defesa gerada', semDefesa.length, 'na seleção atual', semDefesa.length ? 'ambar' : 'verde', null, true)}
+      ${kpi('Deferidas', deferidas, todas.length ? fmtDec(deferidas / todas.length * 100) + '% do total' : '', 'verde', null, true)}
+      ${kpi('Indeferidas', indeferidas, todas.length ? fmtDec(indeferidas / todas.length * 100) + '% do total' : '', indeferidas ? 'vermelho' : '', null, true)}
+    </div>
+
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); margin-bottom:14px">
+      <div class="cartao"><div class="cartao-cab"><h3>Por status</h3><small>clique para filtrar</small></div><div class="barras compacto">${barras(porStatus, 'status', 'var(--azul)')}</div></div>
+      <div class="cartao"><div class="cartao-cab"><h3>Por órgão</h3><small>clique para filtrar</small></div><div class="barras compacto">${barras(porOrgao, 'orgao', 'var(--ambar)')}</div></div>
+    </div>
+
+    <div class="cartao largo">
+      <div class="cartao-cab"><h3>Processos de multa</h3><small>${filtradas.length} registro(s)</small></div>
+      <div class="os-barra-acoes">
+        <div class="busca" style="max-width:280px"><input id="multa-busca" type="search" placeholder="AI, placa, processo, protocolo…" value="${escAttr(f.busca)}"></div>
+        <select id="multa-tipo" style="max-width:220px">
+          <option value="">Autuação e penalidade</option>
+          ${dados.tipos.map(t => `<option value="${t.sigla}" ${f.tipo === t.sigla ? 'selected' : ''}>${esc(t.nome)}</option>`).join('')}
+        </select>
+        ${(f.status || f.orgao || f.tipo || f.busca) ? '<button class="btn claro" id="multa-limpar">Limpar filtros</button>' : ''}
+        <div class="espaco" style="flex:1"></div>
+        <button class="btn amarelo" id="btn-nova-multa">+ Nova multa</button>
+      </div>
+      <div class="tabela-rol os-rol" style="max-height:600px">
+        <table class="tabela-multas">
+          <colgroup><col style="width:104px"><col style="width:120px"><col style="width:96px"><col style="width:110px">
+            <col style="width:150px"><col style="width:130px"><col><col style="width:130px"><col style="width:120px"></colgroup>
+          <thead><tr><th>Tipo</th><th>AI</th><th>Placa</th><th>Órgão</th><th>Processo</th><th>Enquadramento</th><th>Protocolo e observações</th><th>Status</th><th>Defesa</th></tr></thead>
+          <tbody>
+          ${filtradas.slice(0, 300).map(m => `<tr class="${m.cobrada ? 'cobrada' : ''}">
+            <td><span class="tag-tipo ${m.tipo.toLowerCase()}">${esc(m.tipo || '—')}</span>
+              <div class="vinculo">${esc((m.dataInfracao || '').substring(0, 10))}</div></td>
+            <td><b style="font-family:var(--fonte-dados)">${esc(m.ai || '—')}</b>
+              ${m.aiOriginario ? `<div class="vinculo">origem: <b>${esc(m.aiOriginario)}</b>${m.origem ? ' · ' + esc(m.origem.status || '') : ' (não cadastrado)'}</div>` : ''}
+              ${m.derivadas.length ? `<div class="vinculo">gerou: <b>${esc(m.derivadas.join(', '))}</b></div>` : ''}</td>
+            <td style="font-family:var(--fonte-dados)">${esc(m.placa || '—')}
+              ${m.cobrada ? `<div class="vinculo" style="color:var(--vermelho)">em cobrança${m.consultaEm ? ' · ' + esc(m.consultaEm) : ''}</div>` : ''}</td>
+            <td>${esc(m.orgao || '—')}</td>
+            <td style="font-family:var(--fonte-dados); font-size:11.5px">${esc(m.processo || '—')}
+              ${m.irmas.length ? `<div class="vinculo">mesmo processo: <b>${esc(m.irmas.join(', '))}</b></div>` : ''}</td>
+            <td>${esc(m.enquadramento || '—')}</td>
+            <td>${esc(m.protocolo || '')}${m.observacoes ? `<div class="vinculo">${esc(m.observacoes)}</div>` : ''}</td>
+            <td><span class="status-chip ${classeStatus(m.status)}">${esc(m.status || 'sem status')}</span></td>
+            <td>${m.linkDefesa ? `<a class="pdf-link" href="${escAttr(m.linkDefesa)}" target="_blank" rel="noopener">abrir</a>` : ''}
+              <button class="link-btn" data-defesa="${m.linha}">${m.linkDefesa ? 'refazer' : 'gerar'}</button>
+              <div><button class="link-btn" data-editar="${m.linha}">editar</button></div></td>
+          </tr>`).join('') || '<tr><td colspan="9"><div class="vazio">Nenhum registro com esses filtros</div></td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <div class="cartao-dica">Linhas destacadas em amarelo ainda constam nas multas da viatura na ConsultaBD — sinal de que seguem sendo cobradas da PRF. Quando somem de lá, é provável que o recurso tenha sido aceito.</div>
+    </div>`;
+
+  c.querySelectorAll('button[data-filtro]').forEach(b => b.addEventListener('click', () => {
+    const chave = b.dataset.filtro;
+    ESTADO.filtroMulta[chave] = ESTADO.filtroMulta[chave] === b.dataset.valor ? '' : b.dataset.valor;
+    renderMultas();
+  }));
+  ouvir('multa-busca', 'input', () => { ESTADO.filtroMulta.busca = val('multa-busca'); clearTimeout(ESTADO._tm); ESTADO._tm = setTimeout(renderMultas, 350); });
+  ouvir('multa-tipo', 'change', () => { ESTADO.filtroMulta.tipo = val('multa-tipo'); renderMultas(); });
+  ouvir('multa-limpar', 'click', () => { ESTADO.filtroMulta = { status: '', orgao: '', tipo: '', busca: '' }; renderMultas(); });
+  ouvir('btn-nova-multa', 'click', () => abrirFormMulta(null));
+  c.querySelectorAll('button[data-editar]').forEach(b => b.addEventListener('click', () => abrirFormMulta(parseInt(b.dataset.editar, 10))));
+  c.querySelectorAll('button[data-defesa]').forEach(b => b.addEventListener('click', () => gerarDefesa(parseInt(b.dataset.defesa, 10), b)));
+  ajustarKpis();
+}
+
+/* ---------------- formulário de multa ---------------- */
+function abrirFormMulta(linha) {
+  const dados = ESTADO.multas;
+  const m = linha ? dados.multas.find(x => x.linha === linha) : null;
+  const campo = (chave, tipo, opcoes) => {
+    const valor = m ? (m[chave] || '') : '';
+    const rotulo = dados.rotulos[chave] || chave;
+    if (tipo === 'select') {
+      return `<div class="form-campo" data-campo="${chave}">
+        <label>${esc(rotulo)}</label>
+        <select data-m><option value=""></option>${opcoes.map(o => `<option value="${escAttr(o.valor)}" ${o.valor === valor || o.sigla === valor ? 'selected' : ''}>${esc(o.nome)}</option>`).join('')}</select></div>`;
+    }
+    if (tipo === 'lista') {
+      return `<div class="form-campo" data-campo="${chave}">
+        <label>${esc(rotulo)}</label>
+        <input type="text" value="${escAttr(valor)}" list="lista-${chave}" data-m>
+        <datalist id="lista-${chave}">${opcoes.map(o => `<option value="${escAttr(o)}">`).join('')}</datalist></div>`;
+    }
+    return `<div class="form-campo ${chave === 'observacoes' ? 'largo' : ''}" data-campo="${chave}">
+      <label>${esc(rotulo)}</label><input type="text" value="${escAttr(valor)}" data-m></div>`;
+  };
+
+  const corpo = secao('Notificação', `<div class="form-grade">
+      ${campo('tipo', 'select', dados.tipos.map(t => ({ valor: t.sigla, sigla: t.sigla, nome: t.nome })))}
+      ${campo('dataInfracao')}${campo('ai')}${campo('aiOriginario')}
+      ${campo('placa', 'lista', dados.bases.outrasVtrs.map(o => o.placa).concat(ESTADO.veiculos.map(v => v.placa)))}
+      ${campo('orgao', 'lista', dados.bases.orgaos.map(o => o.orgao))}
+      ${campo('enquadramento', 'lista', dados.bases.enquadramentos.map(e => e.enquadramento))}
+    </div>`) +
+    secao('Processo', `<div class="form-grade">
+      ${campo('processo')}${campo('protocolo')}${campo('dataDefesa')}
+      ${campo('status', 'lista', dados.bases.status)}
+      ${campo('condutor')}${campo('matricula')}${campo('observacoes')}
+    </div>`);
+
+  htm('gaveta-cab', `<div class="titulo"><h2>${m ? 'Editar multa ' + esc(m.ai) : 'Nova multa'}</h2>
+    <div class="sub">${m ? esc(m.placa + ' · ' + (m.orgao || '')) : 'registro na planilha de multas'}</div></div>
+    <button class="gaveta-fechar" onclick="fecharFicha()">×</button>`);
+  htm('gaveta-corpo', corpo + `<div class="form-acoes">
+      <button class="btn amarelo" id="btn-salvar-multa">${m ? 'Salvar' : 'Cadastrar'}</button>
+      <button class="btn claro" onclick="fecharFicha()">Cancelar</button>
+      ${m ? `<span class="form-aviso">Lançada em ${esc(m.lancamento || '—')}</span>` : ''}
+    </div>`);
+  cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
+  document.body.style.overflow = 'hidden';
+  ouvir('btn-salvar-multa', 'click', () => {
+    const campos = {};
+    document.querySelectorAll('#gaveta-corpo .form-campo[data-campo]').forEach(fc => {
+      const i = fc.querySelector('[data-m]');
+      if (i) campos[fc.dataset.campo] = i.value;
+    });
+    if (!campos.ai && !campos.placa) { toast('Informe ao menos o AI ou a placa.'); return; }
+    const btn = el('btn-salvar-multa');
+    btn.disabled = true; btn.textContent = 'Gravando…';
+    const run = servidor('salvarMulta',
+      r => {
+        if (!r || !r.ok) { btn.disabled = false; btn.textContent = 'Salvar'; toast((r && r.erro) || 'Falha ao gravar.', true); return; }
+        toast(r.novo ? 'Multa cadastrada.' : r.gravados.length + ' campo(s) gravado(s).');
+        fecharFicha(); ESTADO.multas = null; renderMultas();
+      },
+      e => { btn.disabled = false; btn.textContent = 'Salvar'; toast('Erro: ' + (e && e.message ? e.message : e), true); });
+    if (run) run.salvarMulta(ESTADO.token, linha || 0, campos);
+  });
+}
+
+function gerarDefesa(linha, botao) {
+  if (botao) { botao.disabled = true; botao.textContent = 'gerando…'; }
+  const run = servidor('gerarDefesaMulta',
+    r => {
+      if (botao) { botao.disabled = false; botao.textContent = 'gerar'; }
+      if (!r || !r.ok) { toast((r && r.erro) || 'Falha ao gerar a defesa.', true); return; }
+      toast('Defesa gerada: ' + r.nome);
+      window.open(r.url, '_blank');
+      ESTADO.multas = null; renderMultas();
+    },
+    e => { if (botao) { botao.disabled = false; botao.textContent = 'gerar'; } toast('Erro: ' + (e && e.message ? e.message : e), true); });
+  if (run) run.gerarDefesaMulta(ESTADO.token, linha);
+}
+
+/* ---------------- cadastros ---------------- */
+function renderCadastrosMultas(c) {
+  const b = ESTADO.multas.bases;
+  const semGestor = b.orgaos.filter(o => !o.gestor);
+  c.innerHTML = `
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+      <div class="acao-cartao">
+        <h4>Órgãos e gestores</h4>
+        <div class="desc">O gestor entra no cabeçalho do ofício de defesa.${semGestor.length ? ' <b style="color:var(--vermelho)">' + semGestor.length + ' sem gestor.</b>' : ''}</div>
+        <div class="form-campo" style="margin-bottom:6px"><label>Órgão</label><input type="text" id="novo-orgao"></div>
+        <div class="form-campo" style="margin-bottom:8px"><label>Gestor (como aparece no ofício)</label><textarea id="novo-gestor" rows="2"></textarea></div>
+        <button class="btn amarelo" id="btn-novo-orgao">Cadastrar órgão</button>
+        <div class="mini-tabela" style="max-height:220px; margin-top:10px"><table class="tabela-simples"><tbody>
+          ${b.orgaos.map(o => `<tr><td><b>${esc(o.orgao)}</b></td><td>${o.gestor ? esc(o.gestor.substring(0, 60)) : '<span style="color:var(--vermelho)">sem gestor</span>'}</td></tr>`).join('')}
+        </tbody></table></div>
+      </div>
+
+      <div class="acao-cartao">
+        <h4>Enquadramentos</h4>
+        <div class="desc">Cada enquadramento aponta para o documento modelo usado na defesa.</div>
+        <div class="form-campo" style="margin-bottom:6px"><label>Enquadramento</label><input type="text" id="novo-enq" placeholder="Art. 218, I"></div>
+        <div class="form-campo" style="margin-bottom:6px"><label>Descrição (texto do artigo)</label><textarea id="novo-desc" rows="2"></textarea></div>
+        <div class="form-campo" style="margin-bottom:8px"><label>ID do documento modelo</label><input type="text" id="novo-modelo" placeholder="cole o ID do Google Docs"></div>
+        <button class="btn amarelo" id="btn-novo-enq">Cadastrar enquadramento</button>
+        <div class="mini-tabela" style="max-height:220px; margin-top:10px"><table class="tabela-simples"><tbody>
+          ${b.enquadramentos.map(e => `<tr><td><b>${esc(e.enquadramento)}</b></td>
+            <td>${e.modelo ? `<a class="pdf-link" href="https://docs.google.com/document/d/${escAttr(e.modelo)}/edit" target="_blank" rel="noopener">modelo</a>` : '<span style="color:var(--vermelho)">sem modelo</span>'}</td></tr>`).join('')}
+        </tbody></table></div>
+      </div>
+
+      <div class="acao-cartao">
+        <h4>Viaturas de fora da frota</h4>
+        <div class="desc">Placas que não estão na ConsultaBD mas aparecem em defesas — o modelo usa a marca/modelo.</div>
+        <div class="form-campo" style="margin-bottom:6px"><label>Placa</label><input type="text" id="nova-placa" style="text-transform:uppercase"></div>
+        <div class="form-campo" style="margin-bottom:8px"><label>Marca/Modelo</label><input type="text" id="nova-marca"></div>
+        <button class="btn amarelo" id="btn-nova-vtr">Cadastrar viatura</button>
+        <div class="mini-tabela" style="max-height:220px; margin-top:10px"><table class="tabela-simples"><tbody>
+          ${b.outrasVtrs.map(o => `<tr><td><b style="font-family:var(--fonte-dados)">${esc(o.placa)}</b></td><td>${esc(o.modelo)}</td></tr>`).join('')}
+        </tbody></table></div>
+      </div>
+    </div>
+    ${ESTADO.multas.pastaDefesas ? `<div class="cartao largo" style="margin-top:14px"><div class="cartao-cab"><h3>Onde ficam as defesas</h3></div>
+      <a class="btn claro" href="${escAttr(ESTADO.multas.pastaDefesas)}" target="_blank" rel="noopener" style="text-decoration:none">📁 Abrir a pasta dos documentos gerados</a></div>` : ''}`;
+
+  const cadastrar = (tipo, dados, btn) => {
+    const b2 = el(btn); if (b2) { b2.disabled = true; b2.textContent = 'Cadastrando…'; }
+    const run = servidor('cadastrarBaseMulta',
+      r => { if (b2) b2.disabled = false; if (!r || !r.ok) { toast((r && r.erro) || 'Falha.', true); return; } toast('Cadastrado.'); ESTADO.multas = null; renderMultas(); },
+      e => { if (b2) b2.disabled = false; toast('Erro: ' + (e && e.message ? e.message : e), true); });
+    if (run) run.cadastrarBaseMulta(ESTADO.token, tipo, dados);
+  };
+  ouvir('btn-novo-orgao', 'click', () => {
+    if (!val('novo-orgao')) { toast('Informe o órgão.'); return; }
+    cadastrar('orgao', { orgao: val('novo-orgao'), gestor: (el('novo-gestor') || {}).value || '' }, 'btn-novo-orgao');
+  });
+  ouvir('btn-novo-enq', 'click', () => {
+    if (!val('novo-enq')) { toast('Informe o enquadramento.'); return; }
+    cadastrar('enquadramento', { enquadramento: val('novo-enq'), descricao: (el('novo-desc') || {}).value || '', modelo: val('novo-modelo') }, 'btn-novo-enq');
+  });
+  ouvir('btn-nova-vtr', 'click', () => {
+    if (!val('nova-placa')) { toast('Informe a placa.'); return; }
+    cadastrar('outraVtr', { placa: val('nova-placa'), modelo: val('nova-marca') }, 'btn-nova-vtr');
+  });
 }
 
 </script>

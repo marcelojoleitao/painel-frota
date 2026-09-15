@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.22.0';
+const CODIGO_VERSAO = '2.23.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -49,6 +49,10 @@ const CONFIG = {
   ABA_TIT_MANUT:  'Títulos Manut.',
   COLS_TIT_ABAST: 18,   // A:R (até Chave de Acesso)
   COLS_TIT_MANUT: 19,   // A:S (até Chave de Acesso)
+  // Multas (planilha de acompanhamento dos processos)
+  ID_MULTAS: '12gJWTsSfj_TqIAFvlrqsLUpBf2qMlZ9xXmgodA2fVDc',
+  PASTA_DEFESAS: '1eyLGfer7R58-Usw54gTUTWyvoE8WCtiQ',
+
   // Processo de pagamento
   ABA_CONTROLE_PROC: 'ControleProcesso',        // criada na planilha de títulos
   PASTA_DOCS_PAGAMENTO: '1bJVCw-Lkvfi3dyNPHEP6tC9tymAbbZML',
@@ -4151,6 +4155,367 @@ function reaisPorExtenso(valor) {
   const r = reais === 0 ? '' : porExtenso(reais) + (reais === 1 ? ' real' : ' reais');
   const c = centavos === 0 ? '' : porExtenso(centavos) + (centavos === 1 ? ' centavo' : ' centavos');
   return r + (c ? (r ? ' e ' : '') + c : '');
+}
+
+/* ============================================================
+   MULTAS — acompanhamento dos processos e geração das defesas
+   Fonte: planilha "Multas 16ª SPRF/CE".
+     linha 2 = parâmetros {{...}} por coluna
+     linha 3 = cabeçalho legível
+     linha 4+ = registros
+   ============================================================ */
+
+const MULTAS = {
+  aba: 'Multas', abaDefesas: 'Defesas', abaOutras: 'Outras VTRs',
+  linhaParametros: 2, linhaCabecalho: 3, primeiraLinha: 4,
+  colLancamento: 33,   // AG — data em que o registro entrou
+  colLinkDefesa: 32,   // AF — era a marcação "Selecionado"; passa a guardar o link da defesa
+  // campo curto → coluna (1-based)
+  col: { tipo: 1, dataInfracao: 2, dataDefesa: 3, orgao: 4, ai: 5, aiOriginario: 6, placa: 7,
+         processo: 8, enquadramento: 9, protocolo: 10, observacoes: 11, status: 12,
+         condutor: 13, matricula: 14, movimentacaoSei: 15, seiOriginario: 16, protocoloOriginario: 17 },
+  rotulos: { tipo: 'Tipo', dataInfracao: 'Data da infração', dataDefesa: 'Data da defesa', orgao: 'Órgão',
+             ai: 'Nº do AI', aiOriginario: 'Nº do AI originário', placa: 'Placa', processo: 'Nº do processo',
+             enquadramento: 'Enquadramento', protocolo: 'Protocolo', observacoes: 'Observações',
+             status: 'Status', condutor: 'Condutor', matricula: 'Matrícula' },
+  tipos: [{ sigla: 'NA', nome: 'Notificação de Autuação' }, { sigla: 'NP', nome: 'Notificação de Penalidade' }]
+};
+
+function _ssMultas_() { return SpreadsheetApp.openById(CONFIG.ID_MULTAS); }
+
+/** Aba de bases (status, enquadramentos, órgãos) — localizada pelo cabeçalho. */
+function _abaBasesMultas_(ss) {
+  const abas = ss.getSheets();
+  for (let i = 0; i < abas.length; i++) {
+    const a = abas[i];
+    if (a.getLastRow() < 2 || a.getLastColumn() < 5) continue;
+    const topo = a.getRange(1, 1, Math.min(3, a.getLastRow()), a.getLastColumn()).getValues();
+    const achou = topo.some(l => l.some(c => /DOCUMENTO MODELO/i.test(String(c))));
+    if (achou) return a;
+  }
+  return null;
+}
+
+/** Bases: status, órgãos com gestor, enquadramentos com descrição e modelo, outras viaturas. */
+function _basesMultas_(ss) {
+  const bases = { status: [], orgaos: [], enquadramentos: [], outrasVtrs: [] };
+  const aba = _abaBasesMultas_(ss);
+  if (aba) {
+    const valores = aba.getDataRange().getValues();
+    let linhaCab = 0;
+    for (let i = 0; i < Math.min(4, valores.length); i++) {
+      if (valores[i].some(c => /DOCUMENTO MODELO/i.test(String(c)))) { linhaCab = i; break; }
+    }
+    const cab = valores[linhaCab].map(c => _normCab_(c));
+    const c = re => cab.findIndex(x => re.test(x));
+    const iStatus = c(/^STATUS$/), iEnq = c(/^ENQUADRAMENTO$/), iDesc = c(/DESCRICAO/),
+          iModelo = c(/DOCUMENTO MODELO/), iOrgao = c(/^ORGAO$/), iGestor = c(/^GESTOR$/);
+    for (let r = linhaCab + 1; r < valores.length; r++) {
+      const l = valores[r];
+      const st = iStatus >= 0 ? String(l[iStatus] || '').trim() : '';
+      if (st) bases.status.push(st);
+      const enq = iEnq >= 0 ? String(l[iEnq] || '').trim() : '';
+      if (enq) bases.enquadramentos.push({ enquadramento: enq,
+        descricao: iDesc >= 0 ? String(l[iDesc] || '').trim() : '',
+        modelo: iModelo >= 0 ? String(l[iModelo] || '').trim() : '' });
+      const org = iOrgao >= 0 ? String(l[iOrgao] || '').trim() : '';
+      if (org) bases.orgaos.push({ orgao: org, gestor: iGestor >= 0 ? String(l[iGestor] || '').trim() : '' });
+    }
+    bases._aba = aba.getName();
+    bases._cols = { linhaCab: linhaCab + 1, status: iStatus + 1, enq: iEnq + 1, desc: iDesc + 1, modelo: iModelo + 1, orgao: iOrgao + 1, gestor: iGestor + 1 };
+  }
+  const outras = ss.getSheetByName(MULTAS.abaOutras);
+  if (outras && outras.getLastRow() > 1) {
+    outras.getRange(2, 1, outras.getLastRow() - 1, 3).getValues().forEach(l => {
+      const placa = String(l[0] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      if (placa) bases.outrasVtrs.push({ placa: placa, renavam: String(l[1] || '').trim(), modelo: String(l[2] || '').trim() });
+    });
+  }
+  return bases;
+}
+
+/** Multas cadastradas + vínculos + conferência com as multas da viatura na ConsultaBD. */
+function lerMultas(token) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const ss = _ssMultas_();
+    const aba = ss.getSheetByName(MULTAS.aba);
+    if (!aba) return { ok: false, erro: 'Aba "' + MULTAS.aba + '" não encontrada.' };
+    const nLin = aba.getLastRow();
+    const nCol = Math.max(aba.getLastColumn(), MULTAS.colLancamento);
+    const valores = nLin >= MULTAS.primeiraLinha
+      ? aba.getRange(MULTAS.primeiraLinha, 1, nLin - MULTAS.primeiraLinha + 1, nCol).getDisplayValues() : [];
+
+    const bases = _basesMultas_(ss);
+    const cadastro = _multasDaFrota_();           // AI → { placa, consultaEm, valor }
+    const lista = [];
+    valores.forEach((l, i) => {
+      const ai = String(l[MULTAS.col.ai - 1] || '').trim();
+      const placa = String(l[MULTAS.col.placa - 1] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      if (!ai && !placa) return;
+      const item = { linha: MULTAS.primeiraLinha + i };
+      Object.keys(MULTAS.col).forEach(k => { item[k] = String(l[MULTAS.col[k] - 1] || '').trim(); });
+      item.placa = placa;
+      item.tipoNome = (MULTAS.tipos.find(t => t.sigla === item.tipo.toUpperCase()) || {}).nome || item.tipo;
+      item.lancamento = String(l[MULTAS.colLancamento - 1] || '').trim() || item.dataInfracao;
+      const linkCelula = String(l[MULTAS.colLinkDefesa - 1] || '').trim();
+      item.linkDefesa = /^https?:\/\//i.test(linkCelula) ? linkCelula : '';
+      // ainda está sendo cobrada da PRF?
+      const naFrota = cadastro[ai.replace(/\D/g, '')] || cadastro[ai.toUpperCase()];
+      item.cobrada = !!naFrota;
+      item.consultaEm = naFrota ? naFrota.consultaEm : '';
+      item.valorMulta = naFrota ? naFrota.valor : 0;
+      lista.push(item);
+    });
+
+    // vínculos: mesmo processo (autuação × penalidade) e AI originário
+    const porProcesso = {};
+    lista.forEach(m => { if (m.processo) (porProcesso[m.processo] = porProcesso[m.processo] || []).push(m.ai); });
+    const porAi = {};
+    lista.forEach(m => { if (m.ai) porAi[m.ai] = m; });
+    lista.forEach(m => {
+      m.irmas = (porProcesso[m.processo] || []).filter(x => x && x !== m.ai);
+      const orig = m.aiOriginario ? porAi[m.aiOriginario] : null;
+      m.origem = orig ? { ai: orig.ai, enquadramento: orig.enquadramento, status: orig.status, data: orig.dataInfracao } : null;
+      m.derivadas = lista.filter(x => x.aiOriginario && x.aiOriginario === m.ai).map(x => x.ai);
+    });
+
+    return { ok: true, multas: lista, bases: bases, tipos: MULTAS.tipos, rotulos: MULTAS.rotulos,
+      pastaDefesas: CONFIG.PASTA_DEFESAS ? 'https://drive.google.com/drive/folders/' + CONFIG.PASTA_DEFESAS : '' };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** AIs que ainda constam nas multas das viaturas (coluna Multas da ConsultaBD). */
+function _multasDaFrota_() {
+  const mapa = {};
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    const aba = ss.getSheetByName(CONFIG.ABA_BASE);
+    const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0].map(v => String(v || '').trim());
+    const idx = _mapearCampos_(cab);
+    if (idx.multasTxt === undefined || idx.placa === undefined) return mapa;
+    const n = aba.getLastRow() - 1;
+    const placas = aba.getRange(2, idx.placa + 1, n, 1).getValues();
+    const textos = aba.getRange(2, idx.multasTxt + 1, n, 1).getValues();
+    textos.forEach((l, i) => {
+      const txt = String(l[0] || '');
+      if (!txt) return;
+      const m = _parseMultas_(txt);
+      m.itens.forEach(item => {
+        const chave = String(item.ait || '').replace(/\D/g, '');
+        if (!chave) return;
+        mapa[chave] = { placa: String(placas[i][0] || '').trim().toUpperCase(), consultaEm: m.consultaEm, valor: item.aPagar || item.valor || 0 };
+        mapa[String(item.ait).toUpperCase()] = mapa[chave];
+      });
+    });
+  } catch (e) { Logger.log('Multas da frota: ' + e); }
+  return mapa;
+}
+
+/** Cria ou atualiza um registro de multa. */
+function salvarMulta(token, linha, campos) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Planilha ocupada.' }; }
+  try {
+    const aba = _ssMultas_().getSheetByName(MULTAS.aba);
+    if (!aba) return { ok: false, erro: 'Aba de multas não encontrada.' };
+    let alvo = parseInt(linha, 10) || 0;
+    const novo = !alvo;
+    if (novo) {
+      alvo = Math.max(aba.getLastRow() + 1, MULTAS.primeiraLinha);
+      // replica as fórmulas das colunas calculadas (R a U e os dados da viatura)
+      if (alvo > MULTAS.primeiraLinha) {
+        const modelo = aba.getRange(alvo - 1, 1, 1, Math.max(aba.getLastColumn(), MULTAS.colLancamento)).getFormulasR1C1()[0];
+        modelo.forEach((f, i) => { if (f) aba.getRange(alvo, i + 1).setFormulaR1C1(f); });
+      }
+      aba.getRange(alvo, MULTAS.colLancamento).setValue(Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy'));
+    }
+    const gravados = [], recusados = [];
+    Object.keys(campos || {}).forEach(k => {
+      const col = MULTAS.col[k];
+      if (!col) { recusados.push(k); return; }
+      const celula = aba.getRange(alvo, col);
+      if (celula.getFormula()) { recusados.push((MULTAS.rotulos[k] || k) + ' (fórmula)'); return; }
+      let valor = campos[k];
+      if (k === 'tipo') {
+        const achado = MULTAS.tipos.find(t => t.nome === valor || t.sigla === String(valor).toUpperCase());
+        valor = achado ? achado.sigla : valor;          // a planilha guarda NA/NP
+      }
+      if (k === 'placa') valor = String(valor || '').toUpperCase();
+      celula.setValue(valor === null || valor === undefined ? '' : valor);
+      gravados.push(MULTAS.rotulos[k] || k);
+    });
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, p.sessao.email, novo ? 'Cadastrar multa' : 'Editar multa', String(campos.placa || ''),
+      String(campos.ai || ''), gravados.join(', '));
+    return { ok: true, linha: alvo, novo: novo, gravados: gravados, recusados: recusados };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/** Acrescenta um item às bases (órgão, enquadramento ou outra viatura). */
+function cadastrarBaseMulta(token, tipo, dados) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(15000); } catch (e) { return { ok: false, erro: 'Planilha ocupada.' }; }
+  try {
+    const ss = _ssMultas_();
+    if (tipo === 'outraVtr') {
+      let aba = ss.getSheetByName(MULTAS.abaOutras);
+      if (!aba) { aba = ss.insertSheet(MULTAS.abaOutras); aba.appendRow(['Placa', 'Renavam', 'Marca/Modelo']); }
+      aba.appendRow([String(dados.placa || '').toUpperCase(), dados.renavam || '', dados.modelo || '']);
+    } else {
+      const aba = _abaBasesMultas_(ss);
+      if (!aba) return { ok: false, erro: 'Aba de bases não encontrada.' };
+      const bases = _basesMultas_(ss);
+      const c = bases._cols;
+      const proxima = col => {
+        const valores = aba.getRange(c.linhaCab + 1, col, Math.max(1, aba.getLastRow() - c.linhaCab), 1).getValues();
+        for (let i = 0; i < valores.length; i++) if (!String(valores[i][0]).trim()) return c.linhaCab + 1 + i;
+        return aba.getLastRow() + 1;
+      };
+      if (tipo === 'orgao') {
+        const linha = proxima(c.orgao);
+        aba.getRange(linha, c.orgao).setValue(String(dados.orgao || '').trim());
+        if (c.gestor > 0) aba.getRange(linha, c.gestor).setValue(String(dados.gestor || '').trim());
+      } else if (tipo === 'enquadramento') {
+        const linha = proxima(c.enq);
+        aba.getRange(linha, c.enq).setValue(String(dados.enquadramento || '').trim());
+        if (c.desc > 0) aba.getRange(linha, c.desc).setValue(String(dados.descricao || '').trim());
+        if (c.modelo > 0) aba.getRange(linha, c.modelo).setValue(String(dados.modelo || '').trim());
+      } else return { ok: false, erro: 'Tipo de cadastro inválido.' };
+    }
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, p.sessao.email, 'Cadastrar ' + tipo + ' (multas)', '', 'OK', JSON.stringify(dados).substring(0, 200));
+    return { ok: true };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/** Normaliza os órgãos da aba de multas e completa a base com os que faltarem. */
+function normalizarOrgaosMultas() {
+  const ss = _ssMultas_();
+  const aba = ss.getSheetByName(MULTAS.aba);
+  const bases = _basesMultas_(ss);
+  const conhecidos = {};
+  bases.orgaos.forEach(o => { conhecidos[_normCab_(o.orgao)] = o.orgao; });
+  const n = aba.getLastRow() - MULTAS.primeiraLinha + 1;
+  if (n < 1) { Logger.log('Sem registros.'); return; }
+  const faixa = aba.getRange(MULTAS.primeiraLinha, MULTAS.col.orgao, n, 1);
+  const valores = faixa.getValues();
+  const novos = {}, ajustes = [];
+  const saida = valores.map(l => {
+    const bruto = String(l[0] || '').trim();
+    if (!bruto) return [''];
+    const chave = _normCab_(bruto);
+    if (conhecidos[chave]) { if (conhecidos[chave] !== bruto) ajustes.push(bruto + ' → ' + conhecidos[chave]); return [conhecidos[chave]]; }
+    novos[bruto] = (novos[bruto] || 0) + 1;
+    return [bruto];
+  });
+  faixa.setValues(saida);
+  Logger.log('Padronizados: ' + (ajustes.length ? ajustes.slice(0, 20).join(' | ') : 'nenhum'));
+  Logger.log('Órgãos ausentes na base (sem gestor): ' + (Object.keys(novos).length ? Object.keys(novos).map(k => k + ' (' + novos[k] + ')').join(' | ') : 'nenhum'));
+  const acrescentar = Object.keys(novos);
+  if (acrescentar.length) {
+    acrescentar.forEach(o => cadastrarBaseMultaInterno_(ss, 'orgao', { orgao: o, gestor: '' }));
+    Logger.log(acrescentar.length + ' órgão(s) acrescentado(s) à base, sem gestor — complete depois.');
+  }
+}
+function cadastrarBaseMultaInterno_(ss, tipo, dados) {
+  const aba = _abaBasesMultas_(ss);
+  const bases = _basesMultas_(ss);
+  const c = bases._cols;
+  const valores = aba.getRange(c.linhaCab + 1, c.orgao, Math.max(1, aba.getLastRow() - c.linhaCab), 1).getValues();
+  let linha = aba.getLastRow() + 1;
+  for (let i = 0; i < valores.length; i++) if (!String(valores[i][0]).trim()) { linha = c.linhaCab + 1 + i; break; }
+  aba.getRange(linha, c.orgao).setValue(dados.orgao);
+}
+
+/** Gera a defesa de uma multa a partir do modelo do enquadramento. */
+function gerarDefesaMulta(token, linha) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const ss = _ssMultas_();
+    const aba = ss.getSheetByName(MULTAS.aba);
+    const alvo = parseInt(linha, 10);
+    if (!alvo || alvo < MULTAS.primeiraLinha) return { ok: false, erro: 'Registro inválido.' };
+    const nCol = Math.max(aba.getLastColumn(), MULTAS.colLancamento);
+    const dados = aba.getRange(alvo, 1, 1, nCol).getDisplayValues()[0];
+    const parametrosCab = aba.getRange(MULTAS.linhaParametros, 1, 1, nCol).getValues()[0];
+
+    // parâmetros: cada coluna cujo cabeçalho da linha 2 é {{chave}}
+    const parametros = { data: Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy') };
+    parametrosCab.forEach((h, i) => {
+      const t = String(h || '');
+      if (t.indexOf('{{') < 0) return;
+      parametros[t.replace(/[{}]/g, '').trim()] = String(dados[i] || '').trim();
+    });
+    // complementos que o painel calcula
+    const enquadramento = String(dados[MULTAS.col.enquadramento - 1] || '').trim();
+    const orgao = String(dados[MULTAS.col.orgao - 1] || '').trim();
+    const placa = String(dados[MULTAS.col.placa - 1] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const bases = _basesMultas_(ss);
+    const enq = bases.enquadramentos.find(e => e.enquadramento === enquadramento);
+    const org = bases.orgaos.find(o => _normCab_(o.orgao) === _normCab_(orgao));
+    if (!parametros.idmodelo && enq) parametros.idmodelo = enq.modelo;
+    if (!parametros.artigoinfracao && enq) parametros.artigoinfracao = enq.descricao;
+    if (!parametros.gestordoorgao && org) parametros.gestordoorgao = org.gestor;
+    if (!parametros.tipodenotificacao) {
+      const t = MULTAS.tipos.find(x => x.sigla === String(dados[MULTAS.col.tipo - 1] || '').trim().toUpperCase());
+      parametros.tipodenotificacao = t ? t.nome.replace('Notificação de ', '') : '';
+    }
+    if (!parametros.marcamodelo || !parametros.unidade) {
+      const v = _viaturaPorPlaca_(placa);
+      if (v) { parametros.marcamodelo = parametros.marcamodelo || v.modelo; parametros.unidade = parametros.unidade || v.unidade; }
+      else {
+        const outra = bases.outrasVtrs.find(o => o.placa === placa);
+        if (outra) parametros.marcamodelo = parametros.marcamodelo || outra.modelo;
+      }
+    }
+    if (!parametros.idmodelo) return { ok: false, erro: 'O enquadramento "' + enquadramento + '" não tem documento modelo na base.' };
+
+    const numeroAI = parametros.numeroai || String(dados[MULTAS.col.ai - 1] || '').trim();
+    const pasta = DriveApp.getFolderById(CONFIG.PASTA_DEFESAS);
+    const nome = 'Defesa ' + numeroAI + ' - ' + Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy');
+    // substitui a defesa anterior da mesma multa, em vez de acumular
+    ['Defesa ' + numeroAI, nome].forEach(prefixo => {
+      const antigos = pasta.getFilesByName(prefixo);
+      while (antigos.hasNext()) { try { antigos.next().setTrashed(true); } catch (e) {} }
+    });
+    const linkAnterior = String(dados[MULTAS.colLinkDefesa - 1] || '');
+    const idAnterior = (linkAnterior.match(/\/d\/([\w-]{20,})/) || [])[1];
+    if (idAnterior) { try { DriveApp.getFileById(idAnterior).setTrashed(true); } catch (e) {} }
+
+    const copia = DriveApp.getFileById(parametros.idmodelo).makeCopy(nome, pasta);
+    const doc = DocumentApp.openById(copia.getId());
+    const corpo = doc.getBody();
+    Object.keys(parametros).forEach(k => { corpo.replaceText('\\{\\{' + k + '\\}\\}', parametros[k] || ''); });
+    doc.saveAndClose();
+    try { copia.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+    const url = copia.getUrl();
+    aba.getRange(alvo, MULTAS.colLinkDefesa).setValue(url);
+    if (!String(dados[MULTAS.col.dataDefesa - 1] || '').trim()) {
+      aba.getRange(alvo, MULTAS.col.dataDefesa).setValue(Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy'));
+    }
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, p.sessao.email, 'Gerar defesa', placa, numeroAI, url);
+    return { ok: true, url: url, nome: nome, parametros: parametros };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+function _viaturaPorPlaca_(placa) {
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    const aba = ss.getSheetByName(CONFIG.ABA_BASE);
+    const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0].map(v => String(v || '').trim());
+    const idx = _mapearCampos_(cab);
+    const n = aba.getLastRow() - 1;
+    const placas = aba.getRange(2, idx.placa + 1, n, 1).getValues().map(l => String(l[0] || '').trim().toUpperCase());
+    const i = placas.indexOf(placa);
+    if (i < 0) return null;
+    const linha = aba.getRange(i + 2, 1, 1, aba.getLastColumn()).getValues()[0];
+    return { modelo: idx.modelo !== undefined ? String(linha[idx.modelo] || '') : '',
+             unidade: idx.unidade !== undefined ? String(linha[idx.unidade] || '') : '' };
+  } catch (e) { return null; }
 }
 
 /* ============================================================
