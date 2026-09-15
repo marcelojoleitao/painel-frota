@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.31.0';
+const CODIGO_VERSAO = '2.32.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1903,14 +1903,29 @@ function importarTituloManut(token, arquivo) {
     const linha = _primeiraLinhaVaziaNaColuna_(aba, 1, 3);
     aba.getRange(linha, 1, 1, 5).setValues([[c.titulo, c.numeroNfse, _parseNumeroBR_(c.valorTotal),
       _parseNumeroBR_(c.reembolsoPecas), _parseNumeroBR_(c.reembolsoMaoObra)]]);   // F e G são fórmulas
+    // terceiro item da nota (juros/acerto) vai para Outros Descontos
+    if (c.outrosValor) {
+      const cabManut = _cabTitulos_(aba, PROC['Manutenção']);
+      const colOutros = cabManut.col.outrosDescontos;
+      if (colOutros !== undefined && colOutros >= 0) aba.getRange(linha, colOutros + 1).setValue(c.outrosValor);
+    }
     aba.getRange(linha, 8, 1, 4).setValues([['', _parseDataBR_(c.dataEmissao), _parseDataBR_(c.vencimento), _formatarCompetencia_(c.competencia, false)]]);
     aba.getRange(linha, 19).setValue(String(c.chave || ''));
     const linkNota = _guardarNotaFiscal_(arquivo, 'Manutenção', c.competencia, c.numeroNfse);
     _gravarLinkNota_(aba, linha, linkNota);
     SpreadsheetApp.flush(); limparCache();
     _logAcao_(p.ss, p.sessao.email, 'Importar título manutenção', '', 'Título ' + c.titulo, 'NF ' + c.numeroNfse + ' | peças ' + c.reembolsoPecas + ' | MO ' + c.reembolsoMaoObra);
-    return { ok: true, linha: linha, campos: c, linkNota: linkNota };
+    return { ok: true, linha: linha, campos: c, linkNota: linkNota, conferencia: _conferirNf_(c) };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/** Confere se peças + mão de obra + demais itens fecham com o total da nota. */
+function _conferirNf_(c) {
+  const n = v => _parseNumeroBR_(v) || 0;
+  const soma = Math.round((n(c.reembolsoPecas) + n(c.reembolsoMaoObra) + (c.outrosValor || 0)) * 100) / 100;
+  const total = Math.round(n(c.valorTotal) * 100) / 100;
+  return { soma: soma, total: total, confere: Math.abs(soma - total) < 0.01,
+           itens: (c.outrosItens || []).map(o => o.rotulo + ': ' + o.valor) };
 }
 
 /** Lê o PDF sem gravar nada — confere o que seria importado. */
@@ -2088,37 +2103,41 @@ function _camposNf_(texto) {
   const valorTotal = g(/VALOR TOTAL DA NOTA FISCAL:?\s*R?\$?\s*([\d.]+,\d{2})/);
   const valorLiquido = g(/VALOR LIQUIDO DA NOTA FISCAL:?\s*R?\$?\s*([\d.]+,\d{2})/);
   const desconto = g(/DESCONTO CONDICIONAL\s*:?\s*([\d.]+,\d{2})/);
-  const reembolsos = _reembolsosNf_(T, _parseNumeroBR_(valorTotal), _parseNumeroBR_(valorLiquido), _parseNumeroBR_(desconto));
+  const itens = _itensNf_(T);
   return {
     titulo: g(/TITULO NRO\.?\s*:?\s*(\d+)/),
     numeroNfse: g(/NUMERO NFS-?E NACIONAL\s*:?\s*(\d+)/),
     valorTotal: valorTotal, valorLiquido: valorLiquido, desconto: desconto,
-    reembolsoPecas: reembolsos.pecas, reembolsoMaoObra: reembolsos.mao,
+    reembolsoPecas: itens.pecas, reembolsoMaoObra: itens.mao,
+    outrosItens: itens.outros,
+    outrosValor: itens.outros.reduce((soma, o) => soma + (_parseNumeroBR_(o.valor) || 0), 0),
+    outrosRotulo: itens.outros.map(o => o.rotulo).join(' + '),
     dataEmissao: g(/DATA DE EMISSAO:?\s*(\d{2}\/\d{2}\/\d{4})/),
     vencimento: venc ? venc[1] : '', competencia: competencia,
     chave: (CONFIG.CHAVE_NF === 'municipal' && chaveMunicipal) ? chaveMunicipal : (chaveNacional || chaveMunicipal)
   };
 }
 
-/** Peças e mão de obra: procura o par de valores que soma o total da nota. */
-function _reembolsosNf_(T, total, liquido, desconto) {
-  const RE = /\d[\d.]*,\d{2}/g;
-  const todas = (T.match(RE) || []).map(s => ({ s: s, n: _parseNumeroBR_(s) }));
-  const ultimoReembolso = () => {
-    const i = T.lastIndexOf('REEMBOLSO');
-    if (i < 0) return { pecas: '', mao: '' };
-    const ms = (T.slice(i).match(RE) || []).filter(x => _parseNumeroBR_(x) > 0);
-    return ms.length >= 2 ? { pecas: ms[0], mao: ms[1] } : { pecas: '', mao: '' };
-  };
-  if (!total) return ultimoReembolso();
-  const excluir = [total, liquido, desconto].filter(x => x > 0);
-  const candidatas = todas.filter(m => m.n > 0 && !excluir.some(x => Math.abs(x - m.n) < 0.005));
-  for (let i = 0; i < candidatas.length; i++) {
-    for (let j = i + 1; j < candidatas.length; j++) {
-      if (Math.abs(candidatas[i].n + candidatas[j].n - total) < 0.005) return { pecas: candidatas[i].s, mao: candidatas[j].s };
-    }
+/**
+ * Itens não tributáveis da NFS-e, lidos pelo rótulo de cada linha.
+ * A Ticket Log emite "REEMBOLSO EM PECAS", "REEMBOLSO DE MAO DE OBRA" e,
+ * eventualmente, uma terceira linha (juros/acerto). Ler por rótulo evita o
+ * problema de somar pares quando há mais de dois itens.
+ */
+function _itensNf_(T) {
+  const valor = re => { const m = T.match(re); return m ? m[1] : ''; };
+  const pecas = valor(/REEMBOLSO EM PECAS[\s\S]{0,80}?(\d[\d.]*,\d{2})/);
+  const mao = valor(/REEMBOLSO DE MAO DE OBRA[\s\S]{0,80}?(\d[\d.]*,\d{2})/);
+  const outros = [];
+  // qualquer outro item da seção, com o rótulo que a nota usou
+  const re = /(?:CONTA E ORDEM DE TERCEIRO\.\s*)([A-Z0-9ÇÃÕÁÉÍÓÚ\.\s\/-]{4,60}?)\s+\d{2}\/\d{2}\/\d{4}\s+(\d[\d.]*,\d{2})/g;
+  let m;
+  while ((m = re.exec(T)) !== null) {
+    const rotulo = m[1].replace(/\s+/g, ' ').trim();
+    if (/REEMBOLSO EM PECAS|REEMBOLSO DE MAO DE OBRA/.test(rotulo)) continue;
+    outros.push({ rotulo: rotulo, valor: m[2] });
   }
-  return ultimoReembolso();
+  return { pecas: pecas, mao: mao, outros: outros };
 }
 
 /** Arquivo enviado: tabela HTML (com rowspan) ou Excel convertido pelo Drive. */

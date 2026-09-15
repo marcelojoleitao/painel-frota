@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.31.0';
+const VERSAO_PAINEL = '2.32.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2322,8 +2322,13 @@ function desenharResultadoImportacao(id, r) {
       ${dado('Título', esc(c.titulo || '—'))}${dado('NF', esc(c.numeroNfse || '—'))}
       ${dado('Valor total', esc(c.valorTotal || '—'))}${c.reembolsoPecas ? dado('Peças', esc(c.reembolsoPecas)) : ''}
       ${c.reembolsoMaoObra ? dado('Mão de obra', esc(c.reembolsoMaoObra)) : ''}
+      ${c.outrosValor ? dado('Outros itens', fmtMoeda(c.outrosValor), 'alerta-txt') : ''}
       ${dado('Emissão', esc(c.dataEmissao || '—'))}${dado('Vencimento', esc(c.vencimento || '—'))}
       ${dado('Competência', esc(c.competencia || '—'))}${r.linha ? dado('Linha gravada', r.linha, 'ok-txt') : ''}</div>` +
+      (r.conferencia ? `<div class="cartao-dica" style="${r.conferencia.confere ? '' : 'border-left:3px solid var(--vermelho)'}">
+         ${r.conferencia.confere ? '✓ Itens conferem com o total da nota' : '⚠ Os itens somam ' + fmtMoeda(r.conferencia.soma) + ' e o total é ' + fmtMoeda(r.conferencia.total)}
+         ${r.conferencia.itens.length ? '<br>Além de peças e mão de obra: ' + esc(r.conferencia.itens.join(' · ')) + ' — gravado em Outros Descontos.' : ''}
+       </div>` : '') +
       (r.linkNota ? `<a class="btn claro" href="${escAttr(r.linkNota)}" target="_blank" rel="noopener" style="margin-top:8px; text-decoration:none">${icoPdf()} Abrir a nota guardada</a>` : '');
     toast('Título ' + (c.titulo || '') + ' gravado.');
   } else {
