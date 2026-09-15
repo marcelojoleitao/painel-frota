@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.28.1';
+const CODIGO_VERSAO = '2.29.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4117,6 +4117,102 @@ function _preencherTabelas_(corpo, resumo, serie) {
   return ajustadas;
 }
 
+
+
+/**
+ * PREPARA TUDO do processo de pagamento, numa única execução:
+ *   1. copia os seis modelos para a pasta de modelos e passa a usar as cópias;
+ *   2. atualiza na planilha os links dos modelos e da pasta;
+ *   3. garante a linha "Outros descontos" nas tabelas dos termos de atesto;
+ *   4. confere se a coluna "Outros Descontos" existe nas abas de títulos.
+ * Pode rodar quantas vezes quiser: cada passo verifica antes de agir.
+ */
+function prepararProcessoPagamento() {
+  Logger.log('===== 1. MODELOS =====');
+  migrarModelosPagamento();
+
+  Logger.log('===== 2. LINKS NA PLANILHA =====');
+  atualizarLinksModelosPagamento();
+
+  Logger.log('===== 3. TABELAS DOS MODELOS =====');
+  ajustarTabelasModelosPagamento();
+
+  Logger.log('===== 4. COLUNA "OUTROS DESCONTOS" =====');
+  conferirColunaOutrosDescontos();
+
+  Logger.log('===== FIM — confira os avisos acima =====');
+  return 'Preparação concluída.';
+}
+
+/**
+ * Garante a linha "(-) Outros descontos" na tabela dos termos de atesto,
+ * inserida antes da linha de valor líquido, copiando o formato da linha acima.
+ */
+function ajustarTabelasModelosPagamento() {
+  const modelos = _modelosPagamento_();
+  const normaliza = t => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+  Object.keys(modelos).forEach(tipo => {
+    Object.keys(modelos[tipo]).forEach(nome => {
+      if (!/atesto/i.test(nome)) return;
+      try {
+        const doc = DocumentApp.openById(modelos[tipo][nome]);
+        const corpo = doc.getBody();
+        const tabelas = corpo.getTables();
+        let mexeu = false;
+        for (let t = 0; t < tabelas.length; t++) {
+          const tab = tabelas[t];
+          let temOutros = false, linhaLiquido = -1;
+          for (let r = 0; r < tab.getNumRows(); r++) {
+            const rotulo = normaliza(tab.getRow(r).getCell(0).getText());
+            if (rotulo.indexOf('outros descontos') >= 0) temOutros = true;
+            if (rotulo.indexOf('valor liquido') >= 0 && linhaLiquido < 0) linhaLiquido = r;
+          }
+          if (temOutros || linhaLiquido < 1) continue;
+          // copia a linha anterior para manter a formatação e troca o conteúdo
+          const modeloLinha = tab.getRow(linhaLiquido - 1).copy();
+          const nova = tab.insertTableRow(linhaLiquido, modeloLinha);
+          nova.getCell(0).editAsText().setText('(-) Outros descontos');
+          for (let cl = 1; cl < nova.getNumCells(); cl++) {
+            const atual = nova.getCell(cl).getText();
+            nova.getCell(cl).editAsText().setText(atual.indexOf('R$') >= 0 ? 'R$ 0,00' : (cl === nova.getNumCells() - 1 ? '0,00' : ''));
+          }
+          mexeu = true;
+          Logger.log('   ' + nome + ': linha "Outros descontos" inserida antes do valor líquido.');
+        }
+        if (mexeu) doc.saveAndClose(); else { doc.saveAndClose(); Logger.log('   ' + nome + ': já tinha a linha (ou tabela não reconhecida).'); }
+      } catch (e) {
+        Logger.log('   ' + nome + ': FALHOU — ' + String(e).substring(0, 140));
+      }
+    });
+  });
+}
+
+/**
+ * Confere se existe a coluna "Outros Descontos" nas abas de títulos.
+ * Não cria sozinha de propósito: inserir coluna deslocaria as tabelas do
+ * relatório e do atesto e o roteiro que ficam à direita. O log diz onde criar.
+ */
+function conferirColunaOutrosDescontos() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_TITULOS);
+  Object.keys(PROC).forEach(tipo => {
+    const def = PROC[tipo];
+    const aba = ss.getSheetByName(def.aba);
+    if (!aba) { Logger.log('   ' + def.aba + ': aba não encontrada'); return; }
+    const cab = _cabTitulos_(aba, def);
+    const existe = cab.cab.indexOf('Outros Descontos') >= 0;
+    if (existe) { Logger.log('   ' + def.aba + ': coluna presente — o painel já usa.'); return; }
+    const ultima = def.cols;   // A:R no abastecimento, A:S na manutenção
+    Logger.log('   ' + def.aba + ': sem a coluna. Para usar, escreva "Outros Descontos" no cabeçalho (linha ' +
+      cab.linha + ') de uma coluna livre — sugestão: a primeira à direita da coluna ' +
+      _letraColuna_(ultima) + ' que não pertença às tabelas do relatório ou do atesto.');
+  });
+}
+
+function _letraColuna_(n) {
+  let s = '';
+  while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
 
 /**
  * Copia os seis modelos do processo de pagamento para a pasta de modelos e
