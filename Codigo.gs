@@ -1037,6 +1037,36 @@ function anexarCrlv(token, placa, base64) {
   }
 }
 
+/**
+ * Rode no editor para o Google pedir a permissão de ESCRITA no Drive.
+ * O autorizarDrive() só lê, e por isso não dispara o consentimento de escrita —
+ * era por isso que copiar os modelos falhava mesmo com o escopo no manifesto.
+ * Esta função cria um arquivo de teste, copia um documento e apaga os dois.
+ */
+function autorizarDriveEscrita() {
+  Logger.log('Conta em uso: ' + Session.getEffectiveUser().getEmail());
+  const temp = DriveApp.createFile('teste-permissao-painel.txt', 'ok', MimeType.PLAIN_TEXT);
+  Logger.log('Criar arquivo: OK (' + temp.getId() + ')');
+  temp.setTrashed(true);
+
+  const modelos = CONFIG.MODELOS_PAGAMENTO || {};
+  const primeiro = Object.keys(modelos).map(t => Object.keys(modelos[t]).map(n => ({ t: t, n: n, id: modelos[t][n] }))[0]).filter(Boolean)[0];
+  if (primeiro) {
+    try {
+      const copia = DriveApp.getFileById(primeiro.id).makeCopy('teste-copia-painel', DriveApp.getFolderById(CONFIG.PASTA_DOCS_PAGAMENTO));
+      Logger.log('Copiar modelo "' + primeiro.n + '": OK');
+      copia.setTrashed(true);
+    } catch (e) { Logger.log('Copiar modelo FALHOU: ' + e); }
+  }
+  [['PASTA_FOTOS', 'fotos'], ['PASTA_CRLV', 'CRLVs'], ['PASTA_DOCS_PAGAMENTO', 'documentos de pagamento']].forEach(par => {
+    const id = CONFIG[par[0]];
+    if (!id) { Logger.log('Pasta de ' + par[1] + ': não configurada'); return; }
+    try { Logger.log('Pasta de ' + par[1] + ': ' + DriveApp.getFolderById(id).getName() + ' — acessível'); }
+    catch (e) { Logger.log('Pasta de ' + par[1] + ': SEM ACESSO (' + e + ')'); }
+  });
+  Logger.log('Se tudo acima deu OK, faça Implantar → Gerenciar implantações → Nova versão.');
+}
+
 /** Rode UMA vez no editor para o Apps Script pedir a permissão de leitura do Drive. */
 function autorizarDrive() {
   const pasta = DriveApp.getFolderById(CONFIG.PASTA_OS_PDF);
