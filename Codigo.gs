@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.29.0';
+const CODIGO_VERSAO = '2.29.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4134,8 +4134,8 @@ function prepararProcessoPagamento() {
   Logger.log('===== 2. LINKS NA PLANILHA =====');
   atualizarLinksModelosPagamento();
 
-  Logger.log('===== 3. TABELAS DOS MODELOS =====');
-  ajustarTabelasModelosPagamento();
+  Logger.log('===== 3. TABELAS DOS MODELOS (somente conferência) =====');
+  ajustarTabelasModelosPagamento(false);
 
   Logger.log('===== 4. COLUNA "OUTROS DESCONTOS" =====');
   conferirColunaOutrosDescontos();
@@ -4145,10 +4145,12 @@ function prepararProcessoPagamento() {
 }
 
 /**
- * Garante a linha "(-) Outros descontos" na tabela dos termos de atesto,
- * inserida antes da linha de valor líquido, copiando o formato da linha acima.
+ * Confere a tabela dos termos de atesto e lista as linhas que ela tem hoje.
+ * Só altera o documento se você chamar com aplicar = true:
+ *     ajustarTabelasModelosPagamento(true)
+ * Assim não há risco de duplicar uma linha que já exista com outro nome.
  */
-function ajustarTabelasModelosPagamento() {
+function ajustarTabelasModelosPagamento(aplicar) {
   const modelos = _modelosPagamento_();
   const normaliza = t => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
   Object.keys(modelos).forEach(tipo => {
@@ -4167,7 +4169,13 @@ function ajustarTabelasModelosPagamento() {
             if (rotulo.indexOf('outros descontos') >= 0) temOutros = true;
             if (rotulo.indexOf('valor liquido') >= 0 && linhaLiquido < 0) linhaLiquido = r;
           }
-          if (temOutros || linhaLiquido < 1) continue;
+          // relatório do que foi encontrado, para você decidir
+          const rotulos = [];
+          for (let r = 0; r < tab.getNumRows(); r++) rotulos.push(tab.getRow(r).getCell(0).getText().trim());
+          Logger.log('   ' + nome + ' — linhas da tabela: ' + rotulos.filter(Boolean).join(' | '));
+          if (temOutros) { Logger.log('     já contém "Outros descontos".'); continue; }
+          if (linhaLiquido < 1) { Logger.log('     não achei a linha de valor líquido; nada a fazer.'); continue; }
+          if (!aplicar) { Logger.log('     FALTA a linha "Outros descontos". Para inserir, rode ajustarTabelasModelosPagamento(true).'); continue; }
           // copia a linha anterior para manter a formatação e troca o conteúdo
           const modeloLinha = tab.getRow(linhaLiquido - 1).copy();
           const nova = tab.insertTableRow(linhaLiquido, modeloLinha);
@@ -4179,7 +4187,8 @@ function ajustarTabelasModelosPagamento() {
           mexeu = true;
           Logger.log('   ' + nome + ': linha "Outros descontos" inserida antes do valor líquido.');
         }
-        if (mexeu) doc.saveAndClose(); else { doc.saveAndClose(); Logger.log('   ' + nome + ': já tinha a linha (ou tabela não reconhecida).'); }
+        doc.saveAndClose();
+        if (mexeu) Logger.log('   ' + nome + ': documento salvo com a linha nova.');
       } catch (e) {
         Logger.log('   ' + nome + ': FALHOU — ' + String(e).substring(0, 140));
       }
@@ -4189,8 +4198,8 @@ function ajustarTabelasModelosPagamento() {
 
 /**
  * Confere se existe a coluna "Outros Descontos" nas abas de títulos.
- * Não cria sozinha de propósito: inserir coluna deslocaria as tabelas do
- * relatório e do atesto e o roteiro que ficam à direita. O log diz onde criar.
+ * Nunca cria nem move nada: as tabelas do relatório e do atesto e os roteiros
+ * ficam à direita, e inserir coluna deslocaria tudo.
  */
 function conferirColunaOutrosDescontos() {
   const ss = SpreadsheetApp.openById(CONFIG.ID_TITULOS);
