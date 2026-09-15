@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.27.1';
+const VERSAO_PAINEL = '2.27.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -319,17 +319,12 @@ function renderChips() {
 /* ============================================================
    ABAS
    ============================================================ */
-/** Abas que não usam os filtros da frota — o painel lateral some nelas. */
-const ABAS_SEM_FILTRO = ['multas', 'dados'];
-
+/** Aplica a preferência do usuário sobre o painel de filtros — vale para todas as abas. */
 function ajustarFiltrosLaterais() {
-  const corpo = el('corpo'); if (!corpo) return;
   if (window.innerWidth <= 900) return;
-  const semFiltro = ABAS_SEM_FILTRO.indexOf(ESTADO.aba) >= 0;
-  const escolha = lerGuardado(CHAVE_FILTROS_OCULTOS) === '1';
-  cls('corpo', 'sem-filtros', semFiltro || escolha);
+  cls('corpo', 'sem-filtros', lerGuardado(CHAVE_FILTROS_OCULTOS) === '1');
   const botao = el('btn-filtros');
-  if (botao) botao.disabled = semFiltro;
+  if (botao) botao.disabled = false;
 }
 
 function mudarAba(aba) {
