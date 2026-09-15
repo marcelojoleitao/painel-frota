@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.28.0';
+const CODIGO_VERSAO = '2.28.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4153,6 +4153,79 @@ function migrarModelosPagamento() {
   Logger.log('Modelos do pagamento agora vêm da pasta ' + destino.getName() + '.');
   Logger.log('Os originais continuam onde estavam; para voltar atrás, apague a propriedade MODELOS_PAGAMENTO.');
   return 'OK';
+}
+
+
+/**
+ * Atualiza, na planilha de pagamentos, os links dos modelos e da pasta para
+ * apontarem para as cópias migradas.
+ *   Títulos Manut.: AC52:AC55   |   Títulos Abast.: AA63:AA66
+ * Troca o ID dentro do link (valor ou fórmula HIPERLINK), preservando o texto.
+ * Rode depois de migrarModelosPagamento().
+ */
+function atualizarLinksModelosPagamento() {
+  const antigos = CONFIG.MODELOS_PAGAMENTO, novos = _modelosPagamento_();
+  const mapa = {};
+  Object.keys(antigos).forEach(tipo => {
+    Object.keys(antigos[tipo]).forEach(nome => {
+      const de = antigos[tipo][nome], para = (novos[tipo] || {})[nome];
+      if (para && para !== de) mapa[de] = para;
+    });
+  });
+  if (CONFIG.PASTA_DOCS_PAGAMENTO && CONFIG.PASTA_MODELOS_PAGAMENTO) {
+    mapa['1eyLGfer7R58-Usw54gTUTWyvoE8WCtiQ'] = CONFIG.PASTA_MODELOS_PAGAMENTO;   // pasta antiga dos modelos
+  }
+  if (!Object.keys(mapa).length) {
+    Logger.log('Nenhuma troca a fazer — rode migrarModelosPagamento() antes.');
+    return;
+  }
+  Logger.log('Trocas previstas:');
+  Object.keys(mapa).forEach(k => Logger.log('   ' + k + ' → ' + mapa[k]));
+
+  const ss = SpreadsheetApp.openById(CONFIG.ID_TITULOS);
+  const alvos = [
+    { aba: 'Títulos Manut.', faixa: 'AC52:AC55' },
+    { aba: 'Títulos Abast.', faixa: 'AA63:AA66' }
+  ];
+  let trocadas = 0;
+  alvos.forEach(alvo => {
+    const aba = ss.getSheetByName(alvo.aba);
+    if (!aba) { Logger.log(alvo.aba + ': aba não encontrada'); return; }
+    const faixa = aba.getRange(alvo.faixa);
+    const valores = faixa.getValues();
+    const formulas = faixa.getFormulas();
+    const saida = valores.map((linha, i) => linha.map((v, j) => {
+      let conteudo = formulas[i][j] || String(v === null || v === undefined ? '' : v);
+      const original = conteudo;
+      Object.keys(mapa).forEach(velho => {
+        if (conteudo.indexOf(velho) >= 0) conteudo = conteudo.split(velho).join(mapa[velho]);
+      });
+      if (conteudo !== original) {
+        trocadas++;
+        Logger.log('   ' + alvo.aba + ' ' + alvo.faixa.split(':')[0].replace(/\d+/, '') + (parseInt(alvo.faixa.match(/\d+/)[0], 10) + i) +
+                   ': atualizado');
+      }
+      return conteudo;
+    }));
+    faixa.setValues(saida);
+  });
+  SpreadsheetApp.flush();
+  limparCache();
+  Logger.log(trocadas + ' célula(s) atualizada(s). Confira os links nas duas abas.');
+  return trocadas + ' célula(s) atualizada(s)';
+}
+
+/** Mostra o que há nessas células hoje, sem alterar nada. */
+function verLinksModelosPagamento() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_TITULOS);
+  [['Títulos Manut.', 'AC52:AC55'], ['Títulos Abast.', 'AA63:AA66']].forEach(par => {
+    const aba = ss.getSheetByName(par[0]);
+    if (!aba) { Logger.log(par[0] + ': não encontrada'); return; }
+    const faixa = aba.getRange(par[1]);
+    const valores = faixa.getDisplayValues(), formulas = faixa.getFormulas();
+    Logger.log('--- ' + par[0] + ' ' + par[1]);
+    valores.forEach((l, i) => Logger.log('   ' + (formulas[i][0] || l[0]).substring(0, 160)));
+  });
 }
 
 /** Modelos em uso: os copiados (PropertiesService) ou, se não houver, os originais do CONFIG. */
