@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.30.0';
+const VERSAO_PAINEL = '2.31.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2323,7 +2323,8 @@ function desenharResultadoImportacao(id, r) {
       ${dado('Valor total', esc(c.valorTotal || '—'))}${c.reembolsoPecas ? dado('Peças', esc(c.reembolsoPecas)) : ''}
       ${c.reembolsoMaoObra ? dado('Mão de obra', esc(c.reembolsoMaoObra)) : ''}
       ${dado('Emissão', esc(c.dataEmissao || '—'))}${dado('Vencimento', esc(c.vencimento || '—'))}
-      ${dado('Competência', esc(c.competencia || '—'))}${r.linha ? dado('Linha gravada', r.linha, 'ok-txt') : ''}</div>`;
+      ${dado('Competência', esc(c.competencia || '—'))}${r.linha ? dado('Linha gravada', r.linha, 'ok-txt') : ''}</div>` +
+      (r.linkNota ? `<a class="btn claro" href="${escAttr(r.linkNota)}" target="_blank" rel="noopener" style="margin-top:8px; text-decoration:none">${icoPdf()} Abrir a nota guardada</a>` : '');
     toast('Título ' + (c.titulo || '') + ' gravado.');
   } else {
     html = `<div class="grade-dados" style="margin-top:10px">
@@ -2974,6 +2975,7 @@ function desenharProcesso(c, r) {
       <div class="os-barra-acoes">
         <div class="form-campo" style="margin:0"><label>Competência</label>
           <select id="proc-comp">${(r.competencias || []).map(x => `<option value="${escAttr(x)}" ${x === r.competencia ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div>
+        ${r.linkNota ? `<a class="btn claro" href="${escAttr(r.linkNota)}" target="_blank" rel="noopener" style="text-decoration:none">${icoPdf()} Nota fiscal da competência</a>` : '<span class="form-aviso">Nota fiscal ainda não importada nesta competência.</span>'}
         <span class="form-aviso">Roteiro: ${feitas} de ${totalEtapas} etapas concluídas.</span>
       </div>
     </div>

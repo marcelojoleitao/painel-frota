@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.30.0';
+const CODIGO_VERSAO = '2.31.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -57,6 +57,8 @@ const CONFIG = {
   // Mesma pasta guarda os modelos das defesas e os do processo de pagamento
   PASTA_MODELOS_MULTAS: '1MDuD2wfSBuealux2lVoVTlFpq-BOPNrS',
   PASTA_MODELOS_PAGAMENTO: '1MDuD2wfSBuealux2lVoVTlFpq-BOPNrS',
+  // PDFs das notas fiscais importadas (um por competência e tipo)
+  PASTA_NOTAS_FISCAIS: '1f4lCVwDVkii42XvvfxBCNI-XzfB6wPcZ',
 
   // Processo de pagamento
   ABA_CONTROLE_PROC: 'ControleProcesso',        // criada na planilha de títulos
@@ -1815,6 +1817,51 @@ function _normalizarCodigo_(v) { return String(v || '').trim(); }
 /*  (portadas do importador que ficava no menu da planilha)      */
 /* ------------------------------------------------------------ */
 
+/**
+ * Guarda o PDF da nota fiscal na pasta de notas, com nome padronizado
+ * (NF Abastecimento 08-2026.pdf). Se já houver um da mesma competência,
+ * ele é substituído — o antigo vai para a lixeira.
+ */
+function _guardarNotaFiscal_(arquivo, tipo, competencia, numeroNf) {
+  if (!CONFIG.PASTA_NOTAS_FISCAIS) return '';
+  try {
+    const pasta = DriveApp.getFolderById(CONFIG.PASTA_NOTAS_FISCAIS);
+    const comp = String(competencia || '').replace('/', '-') || 'sem-competencia';
+    const nome = 'NF ' + tipo + ' ' + comp + (numeroNf ? ' - ' + numeroNf : '') + '.pdf';
+    // remove versões anteriores da mesma competência, qualquer que seja o número da nota
+    const prefixo = 'NF ' + tipo + ' ' + comp;
+    const existentes = pasta.getFiles();
+    while (existentes.hasNext()) {
+      const f = existentes.next();
+      if (f.getName().indexOf(prefixo) === 0) { try { f.setTrashed(true); } catch (e) {} }
+    }
+    const blob = Utilities.newBlob(Utilities.base64Decode(arquivo.base64), 'application/pdf', nome);
+    const arq = pasta.createFile(blob);
+    try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+    return arq.getUrl();
+  } catch (e) {
+    Logger.log('Nota fiscal não guardada: ' + e);
+    return '';
+  }
+}
+
+/** Grava o link do PDF na coluna "Link NF" da aba de títulos, criando-a se faltar. */
+function _gravarLinkNota_(aba, linha, link) {
+  if (!link) return '';
+  try {
+    const nCols = Math.max(aba.getLastColumn(), 1);
+    const cabLinha = 2;
+    const cab = aba.getRange(cabLinha, 1, 1, nCols).getValues()[0].map(c => _normCab_(c));
+    let col = cab.findIndex(c => c === 'LINK NF' || c === 'NF PDF' || c === 'ARQUIVO NF');
+    if (col < 0) {
+      col = nCols;                                   // primeira coluna livre à direita
+      aba.getRange(cabLinha, col + 1).setValue('Link NF');
+    }
+    aba.getRange(linha, col + 1).setValue(link);
+    return link;
+  } catch (e) { Logger.log('Link da NF não gravado: ' + e); return ''; }
+}
+
 /** PDF da NF de abastecimento → aba "Títulos Abast." (A:G + R). */
 function importarTituloAbast(token, arquivo) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
@@ -1832,9 +1879,11 @@ function importarTituloAbast(token, arquivo) {
     aba.getRange(linha, 1, 1, 7).setValues([[c.titulo, c.numeroNfse, _parseNumeroBR_(c.valorTotal), '',
       _parseDataBR_(c.dataEmissao), _parseDataBR_(c.vencimento), _formatarCompetencia_(c.competencia, false)]]);
     aba.getRange(linha, 18).setValue(String(c.chave || ''));
+    const linkNota = _guardarNotaFiscal_(arquivo, 'Abastecimento', c.competencia, c.numeroNfse);
+    _gravarLinkNota_(aba, linha, linkNota);
     SpreadsheetApp.flush(); limparCache();
     _logAcao_(p.ss, p.sessao.email, 'Importar título abastecimento', '', 'Título ' + c.titulo, 'NF ' + c.numeroNfse + ' | ' + c.valorTotal + ' | comp. ' + c.competencia);
-    return { ok: true, linha: linha, campos: c };
+    return { ok: true, linha: linha, campos: c, linkNota: linkNota };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
 }
 
@@ -1856,9 +1905,11 @@ function importarTituloManut(token, arquivo) {
       _parseNumeroBR_(c.reembolsoPecas), _parseNumeroBR_(c.reembolsoMaoObra)]]);   // F e G são fórmulas
     aba.getRange(linha, 8, 1, 4).setValues([['', _parseDataBR_(c.dataEmissao), _parseDataBR_(c.vencimento), _formatarCompetencia_(c.competencia, false)]]);
     aba.getRange(linha, 19).setValue(String(c.chave || ''));
+    const linkNota = _guardarNotaFiscal_(arquivo, 'Manutenção', c.competencia, c.numeroNfse);
+    _gravarLinkNota_(aba, linha, linkNota);
     SpreadsheetApp.flush(); limparCache();
     _logAcao_(p.ss, p.sessao.email, 'Importar título manutenção', '', 'Título ' + c.titulo, 'NF ' + c.numeroNfse + ' | peças ' + c.reembolsoPecas + ' | MO ' + c.reembolsoMaoObra);
-    return { ok: true, linha: linha, campos: c };
+    return { ok: true, linha: linha, campos: c, linkNota: linkNota };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
 }
 
@@ -3893,6 +3944,7 @@ function lerProcessoPagamento(token, tipo, competencia) {
     if (!competencia) return { ok: true, competencias: disponiveis, sugerida: padrao, roteiro: _lerRoteiro_(aba, def) };
     if (!dados) return { ok: false, erro: 'Competência ' + competencia + ' não encontrada em ' + def.aba + '.', competencias: disponiveis, sugerida: padrao };
 
+    const linkNota = _linkNotaDaLinha_(aba, cab, dados, tipo, competencia);
     const titulo = {}, rotulos = {};
     const todos = Object.keys(def.campos).concat(Object.keys(def.opcionais || {}).filter(k => cab.col[k] >= 0));
     todos.forEach(k => {
@@ -3907,13 +3959,29 @@ function lerProcessoPagamento(token, tipo, competencia) {
     const grupos = (def.grupos || []).map(g => [g[0], g[1].filter(k => todos.indexOf(k) >= 0)]).filter(g => g[1].length);
 
     return { ok: true, tipo: tipo, competencia: competencia, competencias: disponiveis,
-      sugerida: padrao, titulo: titulo, somenteLeitura: def.somenteLeitura, rotulos: rotulos, grupos: grupos, dinheiro: def.dinheiro,
+      sugerida: padrao, linkNota: linkNota, titulo: titulo, somenteLeitura: def.somenteLeitura, rotulos: rotulos, grupos: grupos, dinheiro: def.dinheiro,
       modelos: Object.keys((_modelosPagamento_() || {})[tipo] || {}).map(n => ({ nome: n, url: 'https://docs.google.com/document/d/' + _modelosPagamento_()[tipo][n] + '/edit' })),
       pastaModelos: CONFIG.PASTA_MODELOS_PAGAMENTO ? 'https://drive.google.com/drive/folders/' + CONFIG.PASTA_MODELOS_PAGAMENTO : '',
       pastaSaida: CONFIG.PASTA_DOCS_PAGAMENTO ? 'https://drive.google.com/drive/folders/' + CONFIG.PASTA_DOCS_PAGAMENTO : '',
       roteiro: _lerRoteiro_(aba, def), etapasFeitas: _etapasFeitas_(tipo, competencia),
       resumo: _resumoProcesso_(tipo, titulo), serie: _serieContratual_(tipo, cab, valores) };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Link do PDF da nota: o gravado na planilha ou, na falta, o arquivo na pasta. */
+function _linkNotaDaLinha_(aba, cab, dados, tipo, competencia) {
+  const col = cab.cab.map(c => _normCab_(c)).findIndex(c => c === 'LINK NF' || c === 'NF PDF' || c === 'ARQUIVO NF');
+  if (col >= 0 && dados[col] && /^https?:\/\//i.test(String(dados[col]))) return String(dados[col]);
+  if (!CONFIG.PASTA_NOTAS_FISCAIS) return '';
+  try {
+    const prefixo = 'NF ' + tipo + ' ' + String(competencia || '').replace('/', '-');
+    const arquivos = DriveApp.getFolderById(CONFIG.PASTA_NOTAS_FISCAIS).getFiles();
+    while (arquivos.hasNext()) {
+      const f = arquivos.next();
+      if (f.getName().indexOf(prefixo) === 0) return f.getUrl();
+    }
+  } catch (e) { Logger.log('Busca da NF: ' + e); }
+  return '';
 }
 
 /** Composição do valor e os textos por extenso, como no termo de atesto. */
