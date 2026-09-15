@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.26.0';
+const VERSAO_PAINEL = '2.26.1';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -3174,7 +3174,8 @@ function renderAcompanhamentoMultas(c) {
     return d ? d[3] + d[2] + d[1] : '00000000';
   };
   const valorOrdem = { linha: m => m.linha, data: dataOrdem, tipo: m => m.tipo, ai: m => m.ai, placa: m => m.placa,
-    orgao: m => m.orgao, processo: m => m.processo, enquadramento: m => m.enquadramento, status: m => m.status };
+    orgao: m => m.orgao, processo: m => m.processo, enquadramento: m => m.enquadramento,
+    protocolo: m => m.protocolo, status: m => m.status };
   const o = ESTADO.ordemMulta;
   const extrai = valorOrdem[o.campo] || (m => m.linha);
   filtradas.sort((a, b) => {
@@ -3232,12 +3233,14 @@ function renderAcompanhamentoMultas(c) {
       </div>
       <div class="tabela-rol os-rol" style="max-height:640px">
         <table class="tabela-multas">
-          <colgroup><col style="width:40px"><col style="width:88px"><col style="width:116px"><col style="width:92px"><col style="width:106px">
-            <col style="width:142px"><col style="width:124px"><col><col style="width:122px"><col style="width:110px"></colgroup>
+          <colgroup>
+            <col style="width:3%"><col style="width:7%"><col style="width:11%"><col style="width:9%"><col style="width:9%">
+            <col style="width:12%"><col style="width:11%"><col style="width:9%"><col style="width:13%"><col style="width:9%"><col style="width:7%">
+          </colgroup>
           <thead><tr>
 ${cabecalho('linha', '#')}${cabecalho('tipo', 'Tipo')}${cabecalho('ai', 'AI')}${cabecalho('placa', 'Placa')}${cabecalho('orgao', 'Órgão')}
             ${cabecalho('processo', 'Processo')}${cabecalho('enquadramento', 'Enquadramento')}
-<th>Protocolo e observações</th>${cabecalho('status', 'Status')}<th>Defesa</th>
+${cabecalho('protocolo', 'Protocolo')}<th>Observações</th>${cabecalho('status', 'Status')}<th>Defesa</th>
           </tr></thead>
           <tbody>
           ${filtradas.slice(0, 400).map((m, ord) => `<tr class="${m.cobrada ? 'cobrada' : ''}">
@@ -3254,14 +3257,14 @@ ${cabecalho('linha', '#')}${cabecalho('tipo', 'Tipo')}${cabecalho('ai', 'AI')}${
             <td style="font-family:var(--fonte-dados); font-size:11.5px">${esc(m.processo || '—')}
               ${m.irmas.length ? `<div class="vinculo">mesmo processo: <b>${esc(m.irmas.join(', '))}</b></div>` : ''}</td>
             <td>${esc(m.enquadramento || '—')}</td>
-            <td>${m.protocolo ? `<div><b>${esc(m.protocolo)}</b></div>` : ''}
-              ${m.observacoes ? `<div class="obs-multa" title="${escAttr(m.observacoes)}">${esc(m.observacoes)}</div>` : ''}</td>
+            <td style="font-family:var(--fonte-dados); font-size:11.5px">${esc(m.protocolo || '')}</td>
+            <td>${m.observacoes ? `<div class="obs-multa" title="${escAttr(m.observacoes)}">${esc(m.observacoes)}</div>` : ''}</td>
             <td><span class="status-chip ${classeStatus(m.status)}">${esc(m.status || 'sem status')}</span>
               ${m.dataDefesa ? `<div class="vinculo">defesa em ${esc(m.dataDefesa.substring(0, 10))}</div>` : ''}</td>
             <td>${m.linkDefesa ? `<a class="pdf-link" href="${escAttr(m.linkDefesa)}" target="_blank" rel="noopener">abrir</a>` : ''}
               <div style="margin-top:3px"><button class="link-btn" data-defesa="${m.linha}">${m.linkDefesa ? 'refazer' : 'gerar defesa'}</button></div>
               <div><button class="link-btn" data-editar="${m.linha}">editar</button></div></td>
-          </tr>`).join('') || '<tr><td colspan="10"><div class="vazio">Nenhum registro com esses filtros</div></td></tr>'}
+          </tr>`).join('') || '<tr><td colspan="11"><div class="vazio">Nenhum registro com esses filtros</div></td></tr>'}
           </tbody>
         </table>
       </div>
