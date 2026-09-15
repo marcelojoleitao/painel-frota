@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.23.1';
+const CODIGO_VERSAO = '2.24.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4257,7 +4257,10 @@ function lerMultas(token) {
       const item = { linha: MULTAS.primeiraLinha + i };
       Object.keys(MULTAS.col).forEach(k => { item[k] = String(l[MULTAS.col[k] - 1] || '').trim(); });
       item.placa = placa;
-      item.tipoNome = (MULTAS.tipos.find(t => t.sigla === item.tipo.toUpperCase()) || {}).nome || item.tipo;
+      // a coluna A nem sempre está preenchida; a coluna R traz o tipo calculado
+      const tipoCalculado = String(l[17] || '').trim();
+      if (!item.tipo && tipoCalculado) item.tipo = /penalidade/i.test(tipoCalculado) ? 'NP' : (/autua/i.test(tipoCalculado) ? 'NA' : tipoCalculado);
+      item.tipoNome = (MULTAS.tipos.find(t => t.sigla === item.tipo.toUpperCase()) || {}).nome || tipoCalculado || item.tipo;
       item.lancamento = String(l[MULTAS.colLancamento - 1] || '').trim() || item.dataInfracao;
       const linkCelula = String(l[MULTAS.colLinkDefesa - 1] || '').trim();
       item.linkDefesa = /^https?:\/\//i.test(linkCelula) ? linkCelula : '';
@@ -4504,6 +4507,56 @@ function gerarDefesaMulta(token, linha) {
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 
+
+
+/** Edita um item já existente nas bases (órgão, enquadramento ou outra viatura). */
+function editarBaseMulta(token, tipo, chaveOriginal, dados) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(15000); } catch (e) { return { ok: false, erro: 'Planilha ocupada.' }; }
+  try {
+    const ss = _ssMultas_();
+    if (tipo === 'outraVtr') {
+      const aba = ss.getSheetByName(MULTAS.abaOutras);
+      if (!aba) return { ok: false, erro: 'Aba "' + MULTAS.abaOutras + '" não encontrada.' };
+      const valores = aba.getRange(2, 1, Math.max(1, aba.getLastRow() - 1), 3).getValues();
+      for (let i = 0; i < valores.length; i++) {
+        if (String(valores[i][0] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase() === String(chaveOriginal).toUpperCase()) {
+          aba.getRange(i + 2, 1, 1, 3).setValues([[String(dados.placa || '').toUpperCase(), dados.renavam || valores[i][1], dados.modelo || '']]);
+          SpreadsheetApp.flush();
+          return { ok: true };
+        }
+      }
+      return { ok: false, erro: 'Placa não encontrada na base.' };
+    }
+    const aba = _abaBasesMultas_(ss);
+    if (!aba) return { ok: false, erro: 'Aba de bases não encontrada.' };
+    const c = _basesMultas_(ss)._cols;
+    const col = tipo === 'orgao' ? c.orgao : c.enq;
+    const n = Math.max(1, aba.getLastRow() - c.linhaCab);
+    const valores = aba.getRange(c.linhaCab + 1, col, n, 1).getValues();
+    for (let i = 0; i < valores.length; i++) {
+      if (String(valores[i][0] || '').trim() === String(chaveOriginal).trim()) {
+        const linha = c.linhaCab + 1 + i;
+        if (tipo === 'orgao') {
+          aba.getRange(linha, c.orgao).setValue(String(dados.orgao || '').trim());
+          if (c.gestor > 0) aba.getRange(linha, c.gestor).setValue(String(dados.gestor || '').trim());
+        } else {
+          aba.getRange(linha, c.enq).setValue(String(dados.enquadramento || '').trim());
+          if (c.desc > 0) aba.getRange(linha, c.desc).setValue(String(dados.descricao || '').trim());
+          if (c.modelo > 0) aba.getRange(linha, c.modelo).setValue(String(dados.modelo || '').trim());
+        }
+        SpreadsheetApp.flush();
+        _logAcao_(p.ss, p.sessao.email, 'Editar ' + tipo + ' (multas)', '', chaveOriginal, JSON.stringify(dados).substring(0, 200));
+        return { ok: true, linha: linha };
+      }
+    }
+    return { ok: false, erro: 'Item não encontrado na base.' };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/** Descrição completa e gestor de cada item, para a tela de cadastros poder editar. */
+function _basesDetalhadas_(ss) { return _basesMultas_(ss); }
 
 /**
  * Copia os documentos modelo das defesas para a pasta de modelos e troca os IDs

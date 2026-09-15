@@ -608,6 +608,12 @@ table.tabela td.acoes { text-align: right; }
 .tabela-simples td { padding: 4px 6px; border-bottom: 1px solid var(--borda); font-size: 12.5px; }
 
 /* ============ MULTAS ============ */
+.dobra { border: 1px solid var(--borda); border-radius: var(--raio-p); background: #fff; padding: 6px 10px; }
+.dobra > summary { cursor: pointer; font-size: 12.5px; font-weight: 700; color: var(--azul); padding: 4px 0; }
+.dobra[open] > summary { margin-bottom: 8px; border-bottom: 1px solid var(--borda); }
+.kpi.selecionado { outline: 2px solid var(--azul-claro); outline-offset: -2px; }
+.obs-multa { font-size: 11.5px; color: var(--tinta-suave); line-height: 1.35; max-height: 54px; overflow: hidden; margin-top: 2px; }
+.obs-multa:hover { max-height: none; }
 .tabela-multas { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 1150px; }
 .tabela-multas th { position: sticky; top: 0; background: var(--azul); color: #fff; text-align: left; padding: 6px 8px; font-size: 11.5px; z-index: 2; }
 .tabela-multas td { padding: 5px 8px; border-bottom: 1px solid var(--borda); font-size: 12.5px; vertical-align: top; word-wrap: break-word; overflow-wrap: anywhere; }

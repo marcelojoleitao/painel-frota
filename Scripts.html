@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.23.1';
+const VERSAO_PAINEL = '2.24.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -81,7 +81,8 @@ const ESTADO = {
   pdfsPorOS: {}, pdfsPorPlaca: {}, filtroStatusOS: '', filtroStatusAceite: '',
   subAcoes: 'executar', lote: null, fila: null, subDados: 'importar', subOS: 'panorama', nivelOS: 'n2', osEditadas: {},
   subPag: 'panorama', processo: null, compProcesso: {}, tituloEditado: {},
-  subMultas: 'acompanhar', multas: null, filtroMulta: { status: '', orgao: '', tipo: '', busca: '' },
+  subMultas: 'acompanhar', multas: null, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
+  ordemMulta: { campo: 'data', dir: -1 },
   dados: null,
   veiculos: [],
   filtros: {},          // chave -> Set de valores selecionados
@@ -3146,72 +3147,99 @@ function renderAcompanhamentoMultas(c) {
   const dados = ESTADO.multas;
   const f = ESTADO.filtroMulta;
   const todas = dados.multas;
-  const filtradas = todas.filter(m => {
+
+  const cobradas = todas.filter(m => m.cobrada);
+  const semDefesa = todas.filter(m => !m.linkDefesa);
+  const deferidas = todas.filter(m => classeStatus(m.status) === 'deferido');
+  const indeferidas = todas.filter(m => classeStatus(m.status) === 'indeferido');
+  const especiais = { cobradas: cobradas, semDefesa: semDefesa, deferidas: deferidas, indeferidas: indeferidas };
+
+  let filtradas = f.especial ? (especiais[f.especial] || todas).slice() : todas.slice();
+  filtradas = filtradas.filter(m => {
     if (f.status && m.status !== f.status) return false;
     if (f.orgao && m.orgao !== f.orgao) return false;
-    if (f.tipo && m.tipo.toUpperCase() !== f.tipo) return false;
     if (f.busca) {
-      const alvo = (m.ai + ' ' + m.aiOriginario + ' ' + m.placa + ' ' + m.processo + ' ' + m.protocolo + ' ' + m.observacoes).toLowerCase();
+      const alvo = (m.ai + ' ' + m.aiOriginario + ' ' + m.placa + ' ' + m.processo + ' ' + m.protocolo + ' ' +
+                    m.observacoes + ' ' + m.orgao + ' ' + m.enquadramento).toLowerCase();
       if (alvo.indexOf(f.busca.toLowerCase()) < 0) return false;
     }
     return true;
   });
+
+  // ordenação — padrão: mais recente primeiro
+  const dataOrdem = m => {
+    const t = String(m.dataInfracao || m.lancamento || '');
+    const d = t.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    return d ? d[3] + d[2] + d[1] : '00000000';
+  };
+  const valorOrdem = { data: dataOrdem, tipo: m => m.tipo, ai: m => m.ai, placa: m => m.placa,
+    orgao: m => m.orgao, processo: m => m.processo, enquadramento: m => m.enquadramento, status: m => m.status };
+  const o = ESTADO.ordemMulta;
+  const extrai = valorOrdem[o.campo] || dataOrdem;
+  filtradas.sort((a, b) => String(extrai(a)).localeCompare(String(extrai(b)), 'pt-BR', { numeric: true }) * o.dir);
 
   const contar = chave => {
     const mapa = new Map();
     todas.forEach(m => { const v = (m[chave] || '—').toString(); mapa.set(v, (mapa.get(v) || 0) + 1); });
     return Array.from(mapa.entries()).sort((a, b) => b[1] - a[1]);
   };
-  const porStatus = contar('status'), porOrgao = contar('orgao');
-  const cobradas = filtradas.filter(m => m.cobrada);
-  const semDefesa = filtradas.filter(m => !m.linkDefesa);
-  const deferidas = todas.filter(m => classeStatus(m.status) === 'deferido').length;
-  const indeferidas = todas.filter(m => classeStatus(m.status) === 'indeferido').length;
-
   const barras = (itens, chave, cor) => {
     const maximo = Math.max(1, ...itens.map(i => i[1]));
-    return itens.slice(0, 10).map(([k, v]) => `<button class="barra ${f[chave] === k ? 'selecionada' : ''}" data-filtro="${chave}" data-valor="${escAttr(k)}">
+    return itens.map(([k, v]) => `<button class="barra ${f[chave] === k ? 'selecionada' : ''}" data-filtro="${chave}" data-valor="${escAttr(k)}">
       <span class="rotulo">${esc(k)}</span><span class="trilha"><span class="preench" style="width:${Math.round(v / maximo * 100)}%; background:${cor}"></span></span>
       <span class="valor">${v}</span></button>`).join('');
+  };
+  const kpiClicavel = (chave, rotulo, lista, sub, cor) =>
+    `<div class="kpi ${cor || ''} ${f.especial === chave ? 'selecionado' : ''}" data-especial="${chave}" style="cursor:pointer">
+      <div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${fmtInt(lista.length)}</div>
+      <div class="kpi-sub">${sub}</div></div>`;
+  const cabecalho = (campo, texto, extra) => {
+    const ativo = o.campo === campo;
+    return `<th data-ordem="${campo}" style="cursor:pointer${extra || ''}">${texto}${ativo ? (o.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
   };
 
   c.innerHTML = `
     <div class="kpis">
       ${kpi('Processos registrados', todas.length, filtradas.length !== todas.length ? filtradas.length + ' na seleção' : 'todos', '', null, true)}
-      ${kpi('Ainda cobradas da PRF', cobradas.length, 'constam nas multas da viatura', cobradas.length ? 'vermelho' : 'verde', null, true)}
-      ${kpi('Sem defesa gerada', semDefesa.length, 'na seleção atual', semDefesa.length ? 'ambar' : 'verde', null, true)}
-      ${kpi('Deferidas', deferidas, todas.length ? fmtDec(deferidas / todas.length * 100) + '% do total' : '', 'verde', null, true)}
-      ${kpi('Indeferidas', indeferidas, todas.length ? fmtDec(indeferidas / todas.length * 100) + '% do total' : '', indeferidas ? 'vermelho' : '', null, true)}
+      ${kpiClicavel('cobradas', 'Ainda cobradas da PRF', cobradas, 'constam nas multas da viatura', cobradas.length ? 'vermelho' : 'verde')}
+      ${kpiClicavel('semDefesa', 'Sem defesa gerada', semDefesa, 'clique para ver', semDefesa.length ? 'ambar' : 'verde')}
+      ${kpiClicavel('deferidas', 'Deferidas', deferidas, todas.length ? fmtDec(deferidas.length / todas.length * 100) + '% do total' : '', 'verde')}
+      ${kpiClicavel('indeferidas', 'Indeferidas', indeferidas, todas.length ? fmtDec(indeferidas.length / todas.length * 100) + '% do total' : '', indeferidas.length ? 'vermelho' : '')}
     </div>
 
-    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); margin-bottom:14px">
-      <div class="cartao"><div class="cartao-cab"><h3>Por status</h3><small>clique para filtrar</small></div><div class="barras compacto">${barras(porStatus, 'status', 'var(--azul)')}</div></div>
-      <div class="cartao"><div class="cartao-cab"><h3>Por órgão</h3><small>clique para filtrar</small></div><div class="barras compacto">${barras(porOrgao, 'orgao', 'var(--ambar)')}</div></div>
-    </div>
+    <details class="dobra" ${f.status || f.orgao ? 'open' : ''}>
+      <summary>Distribuição por status e órgão${f.status || f.orgao ? ' — filtro ativo' : ''}</summary>
+      <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+        <div class="cartao"><div class="cartao-cab"><h3>Por status</h3><small>clique para filtrar</small></div>
+          <div class="barras compacto" style="max-height:200px; overflow:auto">${barras(contar('status'), 'status', 'var(--azul)')}</div></div>
+        <div class="cartao"><div class="cartao-cab"><h3>Por órgão</h3><small>clique para filtrar</small></div>
+          <div class="barras compacto" style="max-height:200px; overflow:auto">${barras(contar('orgao'), 'orgao', 'var(--ambar)')}</div></div>
+      </div>
+    </details>
 
-    <div class="cartao largo">
-      <div class="cartao-cab"><h3>Processos de multa</h3><small>${filtradas.length} registro(s)</small></div>
+    <div class="cartao largo" style="margin-top:12px">
+      <div class="cartao-cab"><h3>Processos de multa</h3><small>${filtradas.length} de ${todas.length} • clique no cabeçalho para ordenar</small></div>
       <div class="os-barra-acoes">
-        <div class="busca" style="max-width:280px"><input id="multa-busca" type="search" placeholder="AI, placa, processo, protocolo…" value="${escAttr(f.busca)}"></div>
-        <select id="multa-tipo" style="max-width:220px">
-          <option value="">Autuação e penalidade</option>
-          ${dados.tipos.map(t => `<option value="${t.sigla}" ${f.tipo === t.sigla ? 'selected' : ''}>${esc(t.nome)}</option>`).join('')}
-        </select>
-        ${(f.status || f.orgao || f.tipo || f.busca) ? '<button class="btn claro" id="multa-limpar">Limpar filtros</button>' : ''}
-        <div class="espaco" style="flex:1"></div>
+        <div class="busca" style="max-width:300px"><input id="multa-busca" type="search" placeholder="AI, placa, processo, protocolo, órgão…" value="${escAttr(f.busca)}"></div>
+        ${(f.status || f.orgao || f.busca || f.especial) ? '<button class="btn claro" id="multa-limpar">Limpar filtros</button>' : ''}
+        <div style="flex:1"></div>
         <button class="btn amarelo" id="btn-nova-multa">+ Nova multa</button>
       </div>
-      <div class="tabela-rol os-rol" style="max-height:600px">
+      <div class="tabela-rol os-rol" style="max-height:640px">
         <table class="tabela-multas">
-          <colgroup><col style="width:104px"><col style="width:120px"><col style="width:96px"><col style="width:110px">
-            <col style="width:150px"><col style="width:130px"><col><col style="width:130px"><col style="width:120px"></colgroup>
-          <thead><tr><th>Tipo</th><th>AI</th><th>Placa</th><th>Órgão</th><th>Processo</th><th>Enquadramento</th><th>Protocolo e observações</th><th>Status</th><th>Defesa</th></tr></thead>
+          <colgroup><col style="width:92px"><col style="width:118px"><col style="width:92px"><col style="width:108px">
+            <col style="width:146px"><col style="width:126px"><col><col style="width:126px"><col style="width:112px"></colgroup>
+          <thead><tr>
+            ${cabecalho('tipo', 'Tipo')}${cabecalho('ai', 'AI')}${cabecalho('placa', 'Placa')}${cabecalho('orgao', 'Órgão')}
+            ${cabecalho('processo', 'Processo')}${cabecalho('enquadramento', 'Enquadramento')}
+            <th>Protocolo e observações</th>${cabecalho('status', 'Status')}<th>Defesa</th>
+          </tr></thead>
           <tbody>
-          ${filtradas.slice(0, 300).map(m => `<tr class="${m.cobrada ? 'cobrada' : ''}">
-            <td><span class="tag-tipo ${m.tipo.toLowerCase()}">${esc(m.tipo || '—')}</span>
+          ${filtradas.slice(0, 400).map(m => `<tr class="${m.cobrada ? 'cobrada' : ''}">
+            <td><span class="tag-tipo ${String(m.tipo || '').toLowerCase()}">${esc(m.tipo || '—')}</span>
               <div class="vinculo">${esc((m.dataInfracao || '').substring(0, 10))}</div></td>
             <td><b style="font-family:var(--fonte-dados)">${esc(m.ai || '—')}</b>
-              ${m.aiOriginario ? `<div class="vinculo">origem: <b>${esc(m.aiOriginario)}</b>${m.origem ? ' · ' + esc(m.origem.status || '') : ' (não cadastrado)'}</div>` : ''}
+              ${m.aiOriginario ? `<div class="vinculo">origem: <b>${esc(m.aiOriginario)}</b>${m.origem && m.origem.status ? ' · ' + esc(m.origem.status) : ''}</div>` : ''}
               ${m.derivadas.length ? `<div class="vinculo">gerou: <b>${esc(m.derivadas.join(', '))}</b></div>` : ''}</td>
             <td style="font-family:var(--fonte-dados)">${esc(m.placa || '—')}
               ${m.cobrada ? `<div class="vinculo" style="color:var(--vermelho)">em cobrança${m.consultaEm ? ' · ' + esc(m.consultaEm) : ''}</div>` : ''}</td>
@@ -3219,16 +3247,19 @@ function renderAcompanhamentoMultas(c) {
             <td style="font-family:var(--fonte-dados); font-size:11.5px">${esc(m.processo || '—')}
               ${m.irmas.length ? `<div class="vinculo">mesmo processo: <b>${esc(m.irmas.join(', '))}</b></div>` : ''}</td>
             <td>${esc(m.enquadramento || '—')}</td>
-            <td>${esc(m.protocolo || '')}${m.observacoes ? `<div class="vinculo">${esc(m.observacoes)}</div>` : ''}</td>
-            <td><span class="status-chip ${classeStatus(m.status)}">${esc(m.status || 'sem status')}</span></td>
+            <td>${m.protocolo ? `<div><b>${esc(m.protocolo)}</b></div>` : ''}
+              ${m.observacoes ? `<div class="obs-multa" title="${escAttr(m.observacoes)}">${esc(m.observacoes)}</div>` : ''}</td>
+            <td><span class="status-chip ${classeStatus(m.status)}">${esc(m.status || 'sem status')}</span>
+              ${m.dataDefesa ? `<div class="vinculo">defesa em ${esc(m.dataDefesa.substring(0, 10))}</div>` : ''}</td>
             <td>${m.linkDefesa ? `<a class="pdf-link" href="${escAttr(m.linkDefesa)}" target="_blank" rel="noopener">abrir</a>` : ''}
-              <button class="link-btn" data-defesa="${m.linha}">${m.linkDefesa ? 'refazer' : 'gerar'}</button>
+              <div style="margin-top:3px"><button class="link-btn" data-defesa="${m.linha}">${m.linkDefesa ? 'refazer' : 'gerar defesa'}</button></div>
               <div><button class="link-btn" data-editar="${m.linha}">editar</button></div></td>
           </tr>`).join('') || '<tr><td colspan="9"><div class="vazio">Nenhum registro com esses filtros</div></td></tr>'}
           </tbody>
         </table>
       </div>
-      <div class="cartao-dica">Linhas destacadas em amarelo ainda constam nas multas da viatura na ConsultaBD — sinal de que seguem sendo cobradas da PRF. Quando somem de lá, é provável que o recurso tenha sido aceito.</div>
+      ${filtradas.length > 400 ? `<div class="cartao-dica">Exibindo 400 de ${filtradas.length}. Use a busca ou os filtros.</div>` : ''}
+      <div class="cartao-dica">Linhas em amarelo ainda constam nas multas da viatura na ConsultaBD — seguem sendo cobradas da PRF.</div>
     </div>`;
 
   c.querySelectorAll('button[data-filtro]').forEach(b => b.addEventListener('click', () => {
@@ -3236,9 +3267,31 @@ function renderAcompanhamentoMultas(c) {
     ESTADO.filtroMulta[chave] = ESTADO.filtroMulta[chave] === b.dataset.valor ? '' : b.dataset.valor;
     renderMultas();
   }));
-  ouvir('multa-busca', 'input', () => { ESTADO.filtroMulta.busca = val('multa-busca'); clearTimeout(ESTADO._tm); ESTADO._tm = setTimeout(renderMultas, 350); });
-  ouvir('multa-tipo', 'change', () => { ESTADO.filtroMulta.tipo = val('multa-tipo'); renderMultas(); });
-  ouvir('multa-limpar', 'click', () => { ESTADO.filtroMulta = { status: '', orgao: '', tipo: '', busca: '' }; renderMultas(); });
+  c.querySelectorAll('.kpi[data-especial]').forEach(k => k.addEventListener('click', () => {
+    ESTADO.filtroMulta.especial = ESTADO.filtroMulta.especial === k.dataset.especial ? '' : k.dataset.especial;
+    renderMultas();
+  }));
+  c.querySelectorAll('th[data-ordem]').forEach(th => th.addEventListener('click', () => {
+    const campo = th.dataset.ordem;
+    if (ESTADO.ordemMulta.campo === campo) ESTADO.ordemMulta.dir *= -1;
+    else ESTADO.ordemMulta = { campo: campo, dir: campo === 'data' ? -1 : 1 };
+    renderMultas();
+  }));
+  // a busca filtra sem refazer a tela inteira, para não perder o foco a cada tecla
+  const busca = el('multa-busca');
+  if (busca) {
+    busca.addEventListener('input', () => {
+      ESTADO.filtroMulta.busca = busca.value;
+      clearTimeout(ESTADO._tm);
+      ESTADO._tm = setTimeout(() => {
+        const pos = busca.selectionStart;
+        renderMultas();
+        const novo = el('multa-busca');
+        if (novo) { novo.focus(); try { novo.setSelectionRange(pos, pos); } catch (e) {} }
+      }, 450);
+    });
+  }
+  ouvir('multa-limpar', 'click', () => { ESTADO.filtroMulta = { status: '', orgao: '', busca: '', especial: '' }; renderMultas(); });
   ouvir('btn-nova-multa', 'click', () => abrirFormMulta(null));
   c.querySelectorAll('button[data-editar]').forEach(b => b.addEventListener('click', () => abrirFormMulta(parseInt(b.dataset.editar, 10))));
   c.querySelectorAll('button[data-defesa]').forEach(b => b.addEventListener('click', () => gerarDefesa(parseInt(b.dataset.defesa, 10), b)));
@@ -3328,68 +3381,121 @@ function gerarDefesa(linha, botao) {
 function renderCadastrosMultas(c) {
   const b = ESTADO.multas.bases;
   const semGestor = b.orgaos.filter(o => !o.gestor);
+  const semModelo = b.enquadramentos.filter(e => !e.modelo);
   c.innerHTML = `
-    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">
       <div class="acao-cartao">
         <h4>Órgãos e gestores</h4>
-        <div class="desc">O gestor entra no cabeçalho do ofício de defesa.${semGestor.length ? ' <b style="color:var(--vermelho)">' + semGestor.length + ' sem gestor.</b>' : ''}</div>
+        <div class="desc">O gestor entra no cabeçalho do ofício.${semGestor.length ? ` <b style="color:var(--vermelho)">${semGestor.length} sem gestor.</b>` : ''}</div>
         <div class="form-campo" style="margin-bottom:6px"><label>Órgão</label><input type="text" id="novo-orgao"></div>
         <div class="form-campo" style="margin-bottom:8px"><label>Gestor (como aparece no ofício)</label><textarea id="novo-gestor" rows="2"></textarea></div>
         <button class="btn amarelo" id="btn-novo-orgao">Cadastrar órgão</button>
-        <div class="mini-tabela" style="max-height:220px; margin-top:10px"><table class="tabela-simples"><tbody>
-          ${b.orgaos.map(o => `<tr><td><b>${esc(o.orgao)}</b></td><td>${o.gestor ? esc(o.gestor.substring(0, 60)) : '<span style="color:var(--vermelho)">sem gestor</span>'}</td></tr>`).join('')}
+        <div class="mini-tabela" style="max-height:280px; margin-top:10px"><table class="tabela-simples"><tbody>
+          ${b.orgaos.map((o, i) => `<tr><td style="width:38%"><b>${esc(o.orgao)}</b></td>
+            <td>${o.gestor ? esc(o.gestor.substring(0, 70)) : '<span style="color:var(--vermelho)">sem gestor</span>'}</td>
+            <td style="width:52px"><button class="link-btn" data-edit-orgao="${i}">editar</button></td></tr>`).join('')}
         </tbody></table></div>
       </div>
 
       <div class="acao-cartao">
         <h4>Enquadramentos</h4>
-        <div class="desc">Cada enquadramento aponta para o documento modelo usado na defesa.</div>
+        <div class="desc">Cada enquadramento aponta para o modelo da defesa.${semModelo.length ? ` <b style="color:var(--vermelho)">${semModelo.length} sem modelo.</b>` : ''}</div>
         <div class="form-campo" style="margin-bottom:6px"><label>Enquadramento</label><input type="text" id="novo-enq" placeholder="Art. 218, I"></div>
         <div class="form-campo" style="margin-bottom:6px"><label>Descrição (texto do artigo)</label><textarea id="novo-desc" rows="2"></textarea></div>
-        <div class="form-campo" style="margin-bottom:8px"><label>ID do documento modelo</label><input type="text" id="novo-modelo" placeholder="cole o ID do Google Docs"></div>
+        <div class="form-campo" style="margin-bottom:8px"><label>ID do documento modelo</label><input type="text" id="novo-modelo"></div>
         <button class="btn amarelo" id="btn-novo-enq">Cadastrar enquadramento</button>
-        <div class="mini-tabela" style="max-height:220px; margin-top:10px"><table class="tabela-simples"><tbody>
-          ${b.enquadramentos.map(e => `<tr><td><b>${esc(e.enquadramento)}</b></td>
-            <td>${e.modelo ? `<a class="pdf-link" href="https://docs.google.com/document/d/${escAttr(e.modelo)}/edit" target="_blank" rel="noopener">modelo</a>` : '<span style="color:var(--vermelho)">sem modelo</span>'}</td></tr>`).join('')}
+        <div class="mini-tabela" style="max-height:280px; margin-top:10px"><table class="tabela-simples"><tbody>
+          ${b.enquadramentos.map((e, i) => `<tr><td style="width:48%"><b>${esc(e.enquadramento)}</b></td>
+            <td>${e.modelo ? `<a class="pdf-link" href="https://docs.google.com/document/d/${escAttr(e.modelo)}/edit" target="_blank" rel="noopener">modelo</a>` : '<span style="color:var(--vermelho)">sem modelo</span>'}</td>
+            <td style="width:52px"><button class="link-btn" data-edit-enq="${i}">editar</button></td></tr>`).join('')}
         </tbody></table></div>
       </div>
 
       <div class="acao-cartao">
         <h4>Viaturas de fora da frota</h4>
-        <div class="desc">Placas que não estão na ConsultaBD mas aparecem em defesas — o modelo usa a marca/modelo.</div>
+        <div class="desc">Placas que não estão na ConsultaBD mas aparecem em defesas.</div>
         <div class="form-campo" style="margin-bottom:6px"><label>Placa</label><input type="text" id="nova-placa" style="text-transform:uppercase"></div>
         <div class="form-campo" style="margin-bottom:8px"><label>Marca/Modelo</label><input type="text" id="nova-marca"></div>
         <button class="btn amarelo" id="btn-nova-vtr">Cadastrar viatura</button>
-        <div class="mini-tabela" style="max-height:220px; margin-top:10px"><table class="tabela-simples"><tbody>
-          ${b.outrasVtrs.map(o => `<tr><td><b style="font-family:var(--fonte-dados)">${esc(o.placa)}</b></td><td>${esc(o.modelo)}</td></tr>`).join('')}
+        <div class="mini-tabela" style="max-height:280px; margin-top:10px"><table class="tabela-simples"><tbody>
+          ${b.outrasVtrs.map((o, i) => `<tr><td style="width:40%"><b style="font-family:var(--fonte-dados)">${esc(o.placa)}</b></td>
+            <td>${esc(o.modelo)}</td><td style="width:52px"><button class="link-btn" data-edit-vtr="${i}">editar</button></td></tr>`).join('')}
         </tbody></table></div>
       </div>
     </div>
+
     <div class="cartao largo" style="margin-top:14px"><div class="cartao-cab"><h3>Pastas</h3></div>
       <div style="display:flex; gap:8px; flex-wrap:wrap">
         ${ESTADO.multas.pastaDefesas ? `<a class="btn claro" href="${escAttr(ESTADO.multas.pastaDefesas)}" target="_blank" rel="noopener" style="text-decoration:none">📁 Defesas geradas</a>` : ''}
         ${ESTADO.multas.pastaModelos ? `<a class="btn claro" href="${escAttr(ESTADO.multas.pastaModelos)}" target="_blank" rel="noopener" style="text-decoration:none">📁 Modelos das defesas</a>` : ''}
       </div></div>`;
 
-  const cadastrar = (tipo, dados, btn) => {
-    const b2 = el(btn); if (b2) { b2.disabled = true; b2.textContent = 'Cadastrando…'; }
-    const run = servidor('cadastrarBaseMulta',
-      r => { if (b2) b2.disabled = false; if (!r || !r.ok) { toast((r && r.erro) || 'Falha.', true); return; } toast('Cadastrado.'); ESTADO.multas = null; renderMultas(); },
+  const enviar = (fn, args, btn, aoOk) => {
+    const b2 = btn ? el(btn) : null;
+    if (b2) b2.disabled = true;
+    const run = servidor(fn,
+      r => { if (b2) b2.disabled = false;
+        if (!r || !r.ok) { toast((r && r.erro) || 'Falha.', true); return; }
+        toast('Gravado.'); ESTADO.multas = null; if (aoOk) aoOk(); renderMultas(); },
       e => { if (b2) b2.disabled = false; toast('Erro: ' + (e && e.message ? e.message : e), true); });
-    if (run) run.cadastrarBaseMulta(ESTADO.token, tipo, dados);
+    if (run) run[fn].apply(run, [ESTADO.token].concat(args));
   };
+
   ouvir('btn-novo-orgao', 'click', () => {
     if (!val('novo-orgao')) { toast('Informe o órgão.'); return; }
-    cadastrar('orgao', { orgao: val('novo-orgao'), gestor: (el('novo-gestor') || {}).value || '' }, 'btn-novo-orgao');
+    enviar('cadastrarBaseMulta', ['orgao', { orgao: val('novo-orgao'), gestor: (el('novo-gestor') || {}).value || '' }], 'btn-novo-orgao');
   });
   ouvir('btn-novo-enq', 'click', () => {
     if (!val('novo-enq')) { toast('Informe o enquadramento.'); return; }
-    cadastrar('enquadramento', { enquadramento: val('novo-enq'), descricao: (el('novo-desc') || {}).value || '', modelo: val('novo-modelo') }, 'btn-novo-enq');
+    enviar('cadastrarBaseMulta', ['enquadramento', { enquadramento: val('novo-enq'), descricao: (el('novo-desc') || {}).value || '', modelo: val('novo-modelo') }], 'btn-novo-enq');
   });
   ouvir('btn-nova-vtr', 'click', () => {
     if (!val('nova-placa')) { toast('Informe a placa.'); return; }
-    cadastrar('outraVtr', { placa: val('nova-placa'), modelo: val('nova-marca') }, 'btn-nova-vtr');
+    enviar('cadastrarBaseMulta', ['outraVtr', { placa: val('nova-placa'), modelo: val('nova-marca') }], 'btn-nova-vtr');
   });
+  c.querySelectorAll('button[data-edit-orgao]').forEach(x => x.addEventListener('click', () => editarItemBase('orgao', b.orgaos[parseInt(x.dataset.editOrgao, 10)])));
+  c.querySelectorAll('button[data-edit-enq]').forEach(x => x.addEventListener('click', () => editarItemBase('enquadramento', b.enquadramentos[parseInt(x.dataset.editEnq, 10)])));
+  c.querySelectorAll('button[data-edit-vtr]').forEach(x => x.addEventListener('click', () => editarItemBase('outraVtr', b.outrasVtrs[parseInt(x.dataset.editVtr, 10)])));
 }
 
+/** Edição de um item das bases, na gaveta lateral. */
+function editarItemBase(tipo, item) {
+  if (!item) return;
+  const campos = tipo === 'orgao'
+    ? [['orgao', 'Órgão', item.orgao, 'input'], ['gestor', 'Gestor (como aparece no ofício)', item.gestor, 'textarea']]
+    : tipo === 'enquadramento'
+      ? [['enquadramento', 'Enquadramento', item.enquadramento, 'input'], ['descricao', 'Descrição', item.descricao, 'textarea'], ['modelo', 'ID do documento modelo', item.modelo, 'input']]
+      : [['placa', 'Placa', item.placa, 'input'], ['modelo', 'Marca/Modelo', item.modelo, 'input']];
+  const chaveOriginal = tipo === 'orgao' ? item.orgao : tipo === 'enquadramento' ? item.enquadramento : item.placa;
+
+  htm('gaveta-cab', `<div class="titulo"><h2>Editar ${tipo === 'orgao' ? 'órgão' : tipo === 'enquadramento' ? 'enquadramento' : 'viatura'}</h2>
+    <div class="sub">${esc(chaveOriginal)}</div></div><button class="gaveta-fechar" onclick="fecharFicha()">×</button>`);
+  htm('gaveta-corpo', secao('Dados', `<div class="form-grade">${campos.map(([k, rot, valor, tipoCampo]) => `
+      <div class="form-campo ${tipoCampo === 'textarea' ? 'largo' : ''}" data-campo="${k}">
+        <label>${esc(rot)}</label>
+        ${tipoCampo === 'textarea' ? `<textarea rows="3" data-b>${esc(valor || '')}</textarea>` : `<input type="text" value="${escAttr(valor || '')}" data-b>`}
+      </div>`).join('')}</div>`) +
+    `<div class="form-acoes"><button class="btn amarelo" id="btn-salvar-base">Salvar</button>
+      <button class="btn claro" onclick="fecharFicha()">Cancelar</button>
+      ${tipo === 'enquadramento' && item.modelo ? `<a class="btn claro" href="https://docs.google.com/document/d/${escAttr(item.modelo)}/edit" target="_blank" rel="noopener" style="text-decoration:none">Abrir modelo</a>` : ''}
+    </div>`);
+  cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
+  document.body.style.overflow = 'hidden';
+  ouvir('btn-salvar-base', 'click', () => {
+    const dados = {};
+    document.querySelectorAll('#gaveta-corpo .form-campo[data-campo]').forEach(fc => {
+      const i = fc.querySelector('[data-b]');
+      if (i) dados[fc.dataset.campo] = i.value;
+    });
+    const btn = el('btn-salvar-base');
+    btn.disabled = true; btn.textContent = 'Gravando…';
+    const run = servidor('editarBaseMulta',
+      r => {
+        if (!r || !r.ok) { btn.disabled = false; btn.textContent = 'Salvar'; toast((r && r.erro) || 'Falha.', true); return; }
+        toast('Cadastro atualizado.'); fecharFicha(); ESTADO.multas = null; renderMultas();
+      },
+      e => { btn.disabled = false; btn.textContent = 'Salvar'; toast('Erro: ' + (e && e.message ? e.message : e), true); });
+    if (run) run.editarBaseMulta(ESTADO.token, tipo, chaveOriginal, dados);
+  });
+}
 </script>
