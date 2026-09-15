@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.21.5';
+const VERSAO_PAINEL = '2.22.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2988,6 +2988,12 @@ function desenharProcesso(c, r) {
         <button class="btn amarelo" id="btn-gerar-docs">Gerar documentos</button>
         <div class="foto-data" id="docs-status"></div>
         <div id="docs-result"></div>
+        ${(r.modelos && r.modelos.length) ? `<div class="modelos-links">
+          <div class="grupo-titulo" style="margin-top:12px">Modelos</div>
+          <div class="cartao-dica" style="margin:0 0 6px">Abra para editar o texto do documento. O que você mudar aqui vale para as próximas gerações.</div>
+          ${r.modelos.map(m => `<a class="btn claro" href="${escAttr(m.url)}" target="_blank" rel="noopener" style="text-decoration:none; width:100%; justify-content:flex-start; margin-bottom:5px">✏️ ${esc(m.nome)}</a>`).join('')}
+          ${r.pastaSaida ? `<a class="btn claro" href="${escAttr(r.pastaSaida)}" target="_blank" rel="noopener" style="text-decoration:none; width:100%; justify-content:flex-start">📁 Pasta dos documentos gerados</a>` : ''}
+        </div>` : ''}
       </div>
     </div>
 

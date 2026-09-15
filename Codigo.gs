@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.21.5';
+const CODIGO_VERSAO = '2.22.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3878,6 +3878,8 @@ function lerProcessoPagamento(token, tipo, competencia) {
 
     return { ok: true, tipo: tipo, competencia: competencia, competencias: disponiveis,
       sugerida: padrao, titulo: titulo, somenteLeitura: def.somenteLeitura, rotulos: rotulos, grupos: grupos, dinheiro: def.dinheiro,
+      modelos: Object.keys((CONFIG.MODELOS_PAGAMENTO || {})[tipo] || {}).map(n => ({ nome: n, url: 'https://docs.google.com/document/d/' + CONFIG.MODELOS_PAGAMENTO[tipo][n] + '/edit' })),
+      pastaSaida: CONFIG.PASTA_DOCS_PAGAMENTO ? 'https://drive.google.com/drive/folders/' + CONFIG.PASTA_DOCS_PAGAMENTO : '',
       roteiro: _lerRoteiro_(aba, def), etapasFeitas: _etapasFeitas_(tipo, competencia),
       resumo: _resumoProcesso_(tipo, titulo), serie: _serieContratual_(tipo, cab, valores) };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
