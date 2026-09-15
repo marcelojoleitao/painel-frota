@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.34.0';
+const CODIGO_VERSAO = '2.34.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4520,6 +4520,15 @@ function reaisPorExtenso(valor) {
    PGF — Programa de Gerenciamento da Frota (dados de Brasília)
    ============================================================ */
 
+/** Nomes que a planilha de Brasília usa para as mesmas colunas da aba PGF. */
+const EQUIV_PGF = {
+  'PLACA': ['PLACA SIPAC', 'PLACA DO VEICULO', 'PLACA VEICULO'],
+  'UNIDADE': ['UNIDADE SIPAC', 'UNIDADE GESTORA', 'LOTACAO'],
+  'UG': ['UNIDADE GESTORA', 'COD UG', 'CODIGO UG'],
+  'NOTA FINAL': ['NOTA', 'NOTA GERAL', 'PONTUACAO FINAL'],
+  'CONCEITO': ['CONCEITO FINAL', 'CLASSIFICACAO']
+};
+
 /**
  * Atualiza a aba PGF da planilha-mãe a partir de outra planilha.
  * Uso no editor:
@@ -4551,7 +4560,7 @@ function atualizarPGF(urlOuId, nomeAba) {
   for (let i = 0; i < varredura.length; i++) {
     if (varredura[i].some(c => _normCab_(c) === 'PLACA')) { linhaCabOrigem = i; break; }
   }
-  if (linhaCabOrigem < 0) throw new Error('Não encontrei a linha de cabeçalho (com "PLACA") na planilha de origem.');
+  if (linhaCabOrigem < 0) throw new Error('Não encontrei a linha de cabeçalho (uma coluna começando por "PLACA") na planilha de origem.');
   const cabOrigem = varredura[linhaCabOrigem].map(c => _normCab_(c));
 
   // de qual coluna da origem vem cada coluna do destino
@@ -4615,9 +4624,9 @@ function importarPGF(token, urlOuId, nomeAba) {
     const varredura = abaOrigem.getRange(1, 1, Math.min(6, abaOrigem.getLastRow()), abaOrigem.getLastColumn()).getValues();
     let linhaCabOrigem = -1;
     for (let i = 0; i < varredura.length; i++) {
-      if (varredura[i].some(c => _normCab_(c) === 'PLACA')) { linhaCabOrigem = i; break; }
+      if (varredura[i].some(c => /^PLACA\b/.test(_normCab_(c)))) { linhaCabOrigem = i; break; }
     }
-    if (linhaCabOrigem < 0) return { ok: false, erro: 'Não encontrei a linha de cabeçalho (com "PLACA") na planilha de origem.' };
+    if (linhaCabOrigem < 0) return { ok: false, erro: 'Não encontrei a linha de cabeçalho (uma coluna começando por "PLACA") na planilha de origem.' };
     const cabOrigem = varredura[linhaCabOrigem].map(c => _normCab_(c));
 
     const mapa = cabDestino.map(nome => {
@@ -4625,6 +4634,10 @@ function importarPGF(token, urlOuId, nomeAba) {
       const alvo = _normCab_(nome);
       let i = cabOrigem.indexOf(alvo);
       if (i < 0) i = cabOrigem.findIndex(c => c && (c.indexOf(alvo) === 0 || alvo.indexOf(c) === 0));
+      if (i < 0) {
+        const equivalentes = (EQUIV_PGF[alvo] || []).map(_normCab_);
+        i = cabOrigem.findIndex(c => equivalentes.indexOf(c) >= 0);
+      }
       return i;
     });
 
