@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.24.0';
+const CODIGO_VERSAO = '2.25.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -51,6 +51,8 @@ const CONFIG = {
   COLS_TIT_MANUT: 19,   // A:S (até Chave de Acesso)
   // Multas (planilha de acompanhamento dos processos)
   ID_MULTAS: '12gJWTsSfj_TqIAFvlrqsLUpBf2qMlZ9xXmgodA2fVDc',
+  // Antes de 2024 não havia gestão do acompanhamento — os registros ficam de fora
+  MULTAS_ANO_INICIAL: 2024,
   PASTA_DEFESAS: '1eyLGfer7R58-Usw54gTUTWyvoE8WCtiQ',
   PASTA_MODELOS_MULTAS: '1MDuD2wfSBuealux2lVoVTlFpq-BOPNrS',
 
@@ -4182,6 +4184,16 @@ const MULTAS = {
   tipos: [{ sigla: 'NA', nome: 'Notificação de Autuação' }, { sigla: 'NP', nome: 'Notificação de Penalidade' }]
 };
 
+/** Ano de uma data em texto (dd/mm/aaaa ou aaaa-mm-dd). Zero quando não houver. */
+function _anoDaData_(t) {
+  const s = String(t || '');
+  let m = s.match(/\d{1,2}\/\d{1,2}\/(\d{4})/);
+  if (m) return parseInt(m[1], 10);
+  m = s.match(/^(\d{4})-\d{2}-\d{2}/);
+  if (m) return parseInt(m[1], 10);
+  return 0;
+}
+
 function _ssMultas_() { return SpreadsheetApp.openById(CONFIG.ID_MULTAS); }
 
 /** Aba de bases (status, enquadramentos, órgãos) — localizada pelo cabeçalho. */
@@ -4250,10 +4262,15 @@ function lerMultas(token) {
     const bases = _basesMultas_(ss);
     const cadastro = _multasDaFrota_();           // AI → { placa, consultaEm, valor }
     const lista = [];
+    let ignoradas = 0, semData = 0;
     valores.forEach((l, i) => {
       const ai = String(l[MULTAS.col.ai - 1] || '').trim();
       const placa = String(l[MULTAS.col.placa - 1] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
       if (!ai && !placa) return;
+      // corte por ano: só o período com acompanhamento
+      const anoLinha = _anoDaData_(String(l[MULTAS.col.dataInfracao - 1] || '') || String(l[MULTAS.colLancamento - 1] || ''));
+      if (anoLinha && anoLinha < CONFIG.MULTAS_ANO_INICIAL) { ignoradas++; return; }
+      if (!anoLinha) { semData++; }
       const item = { linha: MULTAS.primeiraLinha + i };
       Object.keys(MULTAS.col).forEach(k => { item[k] = String(l[MULTAS.col[k] - 1] || '').trim(); });
       item.placa = placa;
@@ -4285,6 +4302,7 @@ function lerMultas(token) {
     });
 
     return { ok: true, multas: lista, bases: bases, tipos: MULTAS.tipos, rotulos: MULTAS.rotulos,
+      anoInicial: CONFIG.MULTAS_ANO_INICIAL, ignoradas: ignoradas, semData: semData,
       pastaDefesas: CONFIG.PASTA_DEFESAS ? 'https://drive.google.com/drive/folders/' + CONFIG.PASTA_DEFESAS : '',
       pastaModelos: CONFIG.PASTA_MODELOS_MULTAS ? 'https://drive.google.com/drive/folders/' + CONFIG.PASTA_MODELOS_MULTAS : '' };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }

@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.25.0';
+const VERSAO_PAINEL = '2.25.1';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -3261,7 +3261,7 @@ function renderAcompanhamentoMultas(c) {
         </table>
       </div>
       ${filtradas.length > 400 ? `<div class="cartao-dica">Exibindo 400 de ${filtradas.length}. Use a busca ou os filtros.</div>` : ''}
-      <div class="cartao-dica">Linhas em amarelo ainda constam nas multas da viatura na ConsultaBD — seguem sendo cobradas da PRF.</div>
+      <div class="cartao-dica">Linhas em amarelo ainda constam nas multas da viatura na ConsultaBD — seguem sendo cobradas da PRF.${ESTADO.multas.ignoradas ? ` Registros anteriores a ${esc(String(ESTADO.multas.anoInicial))} não entram (${fmtInt(ESTADO.multas.ignoradas)} fora).` : ''}</div>
     </div>`;
 
   c.querySelectorAll('button[data-filtro]').forEach(b => b.addEventListener('click', () => {
@@ -3566,7 +3566,7 @@ function renderAnaliseMultas(c) {
 
   c.innerHTML = `
     <div class="kpis">
-      ${kpi('Total de processos', todas.length, porAno.length + ' ano(s) com registro', '', null, true)}
+      ${kpi('Total de processos', todas.length, 'de ' + esc(String(ESTADO.multas.anoInicial)) + ' em diante', '', null, true)}
       ${kpi('Viaturas envolvidas', new Set(todas.map(m => m.placa).filter(Boolean)).size, 'placas distintas', '', null, true)}
       ${kpi('Unidades atingidas', new Set(todas.map(m => m.unidade)).size, 'com ao menos uma multa', '', null, true)}
       ${kpi('Índice de êxito', julgadas ? fmtDec(deferido / julgadas * 100) + '%' : '—', deferido + ' de ' + julgadas + ' julgadas', julgadas && deferido / julgadas > 0.5 ? 'verde' : 'ambar', null, true)}
