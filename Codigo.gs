@@ -51,7 +51,7 @@ const CONFIG = {
   COLS_TIT_MANUT: 19,   // A:S (até Chave de Acesso)
   // Processo de pagamento
   ABA_CONTROLE_PROC: 'ControleProcesso',        // criada na planilha de títulos
-  PASTA_DOCS_PAGAMENTO: '1eyLGfer7R58-Usw54gTUTWyvoE8WCtiQ',
+  PASTA_DOCS_PAGAMENTO: '1bJVCw-Lkvfi3dyNPHEP6tC9tymAbbZML',
   MODELOS_PAGAMENTO: {
     Abastecimento: {
       'Despacho Abastecimento':       '1efYsQ04Em9qQsZiDvmkifnQ6bpjhoJTnzKepUTHzIpc',
