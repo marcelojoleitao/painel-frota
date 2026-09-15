@@ -1064,6 +1064,14 @@ function autorizarDriveEscrita() {
     try { Logger.log('Pasta de ' + par[1] + ': ' + DriveApp.getFolderById(id).getName() + ' — acessível'); }
     catch (e) { Logger.log('Pasta de ' + par[1] + ': SEM ACESSO (' + e + ')'); }
   });
+  // Documentos: necessário para preencher os modelos
+  try {
+    const doc = DocumentApp.create('teste-doc-painel');
+    doc.getBody().appendParagraph('ok');
+    doc.saveAndClose();
+    DriveApp.getFileById(doc.getId()).setTrashed(true);
+    Logger.log('Editar documentos (Google Docs): OK');
+  } catch (e) { Logger.log('Editar documentos FALHOU: ' + e); }
   Logger.log('Se tudo acima deu OK, faça Implantar → Gerenciar implantações → Nova versão.');
 }
 
