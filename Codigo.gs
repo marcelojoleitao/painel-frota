@@ -1038,6 +1038,31 @@ function anexarCrlv(token, placa, base64) {
 }
 
 /**
+ * Só Google Docs: rode no editor para aceitar o consentimento desse escopo.
+ * Se nenhuma tela de autorização aparecer e o erro persistir, revogue o acesso
+ * do projeto em myaccount.google.com/permissions e rode esta função de novo.
+ */
+function autorizarDocs() {
+  const doc = DocumentApp.create('teste-docs-painel');
+  const id = doc.getId();
+  doc.getBody().appendParagraph('permissão concedida');
+  doc.saveAndClose();
+  Logger.log('Criar e editar documento: OK (' + id + ')');
+  // abrir pelo id é exatamente o que a geração dos documentos faz
+  const aberto = DocumentApp.openById(id);
+  Logger.log('Abrir documento pelo id: OK — ' + aberto.getName());
+  DriveApp.getFileById(id).setTrashed(true);
+  const modelos = CONFIG.MODELOS_PAGAMENTO || {};
+  Object.keys(modelos).forEach(tipo => {
+    Object.keys(modelos[tipo]).forEach(nome => {
+      try { DocumentApp.openById(modelos[tipo][nome]); Logger.log('Modelo "' + nome + '": acessível'); }
+      catch (e) { Logger.log('Modelo "' + nome + '": FALHOU — ' + String(e).substring(0, 120)); }
+    });
+  });
+  Logger.log('Agora faça Implantar → Gerenciar implantações → editar → Nova versão.');
+}
+
+/**
  * Rode no editor para o Google pedir a permissão de ESCRITA no Drive.
  * O autorizarDrive() só lê, e por isso não dispara o consentimento de escrita —
  * era por isso que copiar os modelos falhava mesmo com o escopo no manifesto.
