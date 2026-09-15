@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.23.0';
+const VERSAO_PAINEL = '2.23.1';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -3365,8 +3365,11 @@ function renderCadastrosMultas(c) {
         </tbody></table></div>
       </div>
     </div>
-    ${ESTADO.multas.pastaDefesas ? `<div class="cartao largo" style="margin-top:14px"><div class="cartao-cab"><h3>Onde ficam as defesas</h3></div>
-      <a class="btn claro" href="${escAttr(ESTADO.multas.pastaDefesas)}" target="_blank" rel="noopener" style="text-decoration:none">📁 Abrir a pasta dos documentos gerados</a></div>` : ''}`;
+    <div class="cartao largo" style="margin-top:14px"><div class="cartao-cab"><h3>Pastas</h3></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        ${ESTADO.multas.pastaDefesas ? `<a class="btn claro" href="${escAttr(ESTADO.multas.pastaDefesas)}" target="_blank" rel="noopener" style="text-decoration:none">📁 Defesas geradas</a>` : ''}
+        ${ESTADO.multas.pastaModelos ? `<a class="btn claro" href="${escAttr(ESTADO.multas.pastaModelos)}" target="_blank" rel="noopener" style="text-decoration:none">📁 Modelos das defesas</a>` : ''}
+      </div></div>`;
 
   const cadastrar = (tipo, dados, btn) => {
     const b2 = el(btn); if (b2) { b2.disabled = true; b2.textContent = 'Cadastrando…'; }

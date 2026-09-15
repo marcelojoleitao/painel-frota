@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.23.0';
+const CODIGO_VERSAO = '2.23.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -52,6 +52,7 @@ const CONFIG = {
   // Multas (planilha de acompanhamento dos processos)
   ID_MULTAS: '12gJWTsSfj_TqIAFvlrqsLUpBf2qMlZ9xXmgodA2fVDc',
   PASTA_DEFESAS: '1eyLGfer7R58-Usw54gTUTWyvoE8WCtiQ',
+  PASTA_MODELOS_MULTAS: '1MDuD2wfSBuealux2lVoVTlFpq-BOPNrS',
 
   // Processo de pagamento
   ABA_CONTROLE_PROC: 'ControleProcesso',        // criada na planilha de títulos
@@ -4281,7 +4282,8 @@ function lerMultas(token) {
     });
 
     return { ok: true, multas: lista, bases: bases, tipos: MULTAS.tipos, rotulos: MULTAS.rotulos,
-      pastaDefesas: CONFIG.PASTA_DEFESAS ? 'https://drive.google.com/drive/folders/' + CONFIG.PASTA_DEFESAS : '' };
+      pastaDefesas: CONFIG.PASTA_DEFESAS ? 'https://drive.google.com/drive/folders/' + CONFIG.PASTA_DEFESAS : '',
+      pastaModelos: CONFIG.PASTA_MODELOS_MULTAS ? 'https://drive.google.com/drive/folders/' + CONFIG.PASTA_MODELOS_MULTAS : '' };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 
@@ -4500,6 +4502,59 @@ function gerarDefesaMulta(token, linha) {
     _logAcao_(p.ss, p.sessao.email, 'Gerar defesa', placa, numeroAI, url);
     return { ok: true, url: url, nome: nome, parametros: parametros };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+
+/**
+ * Copia os documentos modelo das defesas para a pasta de modelos e troca os IDs
+ * na base da planilha de multas. Roda uma vez; se rodar de novo, reaproveita a
+ * cópia que já existir na pasta (não duplica).
+ */
+function migrarModelosMultas() {
+  const destino = DriveApp.getFolderById(CONFIG.PASTA_MODELOS_MULTAS);
+  const ss = _ssMultas_();
+  const aba = _abaBasesMultas_(ss);
+  if (!aba) throw new Error('Aba de bases não encontrada na planilha de multas.');
+  const bases = _basesMultas_(ss);
+  const colModelo = bases._cols.modelo;
+  const linhaCab = bases._cols.linhaCab;
+  const n = aba.getLastRow() - linhaCab;
+  if (n < 1) { Logger.log('Nada a migrar.'); return; }
+
+  const faixa = aba.getRange(linhaCab + 1, colModelo, n, 1);
+  const valores = faixa.getValues();
+  const mapa = {}, resumo = [];
+
+  const saida = valores.map(l => {
+    const idAntigo = String(l[0] || '').trim();
+    if (!idAntigo) return [''];
+    if (mapa[idAntigo]) return [mapa[idAntigo]];
+    try {
+      const original = DriveApp.getFileById(idAntigo);
+      const nome = original.getName();
+      // já existe cópia com esse nome na pasta? reaproveita
+      let copia = null;
+      const iguais = destino.getFilesByName(nome);
+      if (iguais.hasNext()) { copia = iguais.next(); resumo.push(nome + ': já existia na pasta'); }
+      else { copia = original.makeCopy(nome, destino); resumo.push(nome + ': copiado'); }
+      try { copia.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+      mapa[idAntigo] = copia.getId();
+      return [copia.getId()];
+    } catch (e) {
+      resumo.push(idAntigo + ': FALHOU — ' + String(e).substring(0, 100));
+      return [idAntigo];
+    }
+  });
+  faixa.setValues(saida);
+  SpreadsheetApp.flush();
+  limparCache();
+
+  Logger.log('Pasta de destino: ' + destino.getName() + ' (' + CONFIG.PASTA_MODELOS_MULTAS + ')');
+  resumo.forEach(r => Logger.log('  ' + r));
+  Logger.log('IDs trocados na base: ' + Object.keys(mapa).length + ' modelo(s) distinto(s).');
+  Object.keys(mapa).forEach(velho => Logger.log('  ' + velho + ' → ' + mapa[velho]));
+  Logger.log('Os documentos originais continuam onde estavam; a base passa a usar as cópias.');
+  return resumo.join(' | ');
 }
 
 function _viaturaPorPlaca_(placa) {
