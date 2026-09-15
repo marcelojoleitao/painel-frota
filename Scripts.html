@@ -2223,6 +2223,19 @@ function renderImportar(c) {
         u ? `<div class="cartao-dica" style="margin:0 0 10px">Base atual: ${fmtInt(u.manutLinhas)} transações, ${brDia(u.manutDe)} a ${brDia(u.manutAte)}</div>` : '')}
     </div>
 
+    <h2 class="secao-titulo">Programa de Gerenciamento da Frota</h2>
+    <div class="grade" style="grid-template-columns:1fr">
+      <div class="acao-cartao">
+        <h4>Planilha PGF</h4>
+        <div class="desc">Cole o link da planilha vinda de Brasília. O painel casa as colunas pelo nome do cabeçalho, limpa os dados atuais da aba PGF (de B3 até P) e grava os novos na ordem de lá. A coluna A, que é fórmula, não é tocada. A data da atualização passa a aparecer no topo do painel.</div>
+        <div class="form-campo" style="margin-bottom:8px"><label>Link da planilha</label><input type="text" id="pgf-link" placeholder="https://docs.google.com/spreadsheets/d/…"></div>
+        <div class="form-campo" style="margin-bottom:10px"><label>Aba (opcional — vazio usa a primeira)</label><input type="text" id="pgf-aba" placeholder="nome da aba na planilha de origem"></div>
+        <button class="btn amarelo" id="btn-imp-pgf">Atualizar PGF</button>
+        <div class="foto-data" id="imp-status-pgf"></div>
+        <div id="imp-result-pgf"></div>
+      </div>
+    </div>
+
     <h2 class="secao-titulo">Notas fiscais e pagamentos</h2>
     <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
       ${cartao('titAbast', 'Título de abastecimento', 'Títulos Abast.', 'PDF da NFS-e. O painel lê título, NF, valor, datas, competência e chave de acesso — com OCR quando o PDF não tem camada de texto.', '', '.pdf')}
@@ -2273,6 +2286,14 @@ function renderImportar(c) {
     if (inp.files && inp.files[0]) enviarImportacao(inp.dataset.imp, inp.files[0]);
     inp.value = '';
   }));
+  ouvir('btn-imp-pgf', 'click', () => {
+    const link = val('pgf-link');
+    if (!link) { toast('Cole o link da planilha do PGF.'); return; }
+    const btn = el('btn-imp-pgf');
+    btn.disabled = true; btn.textContent = 'Atualizando…';
+    chamarImportacao('pgf', () => { btn.disabled = false; btn.textContent = 'Atualizar PGF'; },
+      run => run.importarPGF(ESTADO.token, link, val('pgf-aba')));
+  });
   ouvir('btn-imp-orc', 'click', () => {
     const comp = val('orc-comp'), texto = (el('orc-texto') || {}).value || '';
     if (!comp) { toast('Informe a competência (MM/AAAA).'); return; }
@@ -2342,6 +2363,11 @@ function desenharResultadoImportacao(id, r) {
       ${r.total !== undefined ? dado('Total das OS', fmtMoeda(r.total)) : ''}
       ${r.pecas !== undefined ? dado('Peças · mão de obra', fmtMoeda(r.pecas) + ' · ' + fmtMoeda(r.mo)) : ''}</div>` +
       (r.aviso ? `<div class="cartao-dica">${esc(r.aviso)}</div>` : '');
+    if (r.atualizadoEm) {
+      html += `<div class="cartao-dica">Origem: ${esc(r.origem || '')}. ${r.apagados ? fmtInt(r.apagados) + ' linha(s) anterior(es) removida(s). ' : ''}Atualizado em ${esc(r.atualizadoEm)}.
+        ${r.semCorrespondencia && r.semCorrespondencia.length ? '<br><b style="color:var(--vermelho)">Sem correspondência na origem (ficaram vazias):</b> ' + esc(r.semCorrespondencia.join(', ')) : 'Todas as colunas encontraram correspondência.'}</div>`;
+      if (ESTADO.dados && ESTADO.dados.meta) ESTADO.dados.meta.pgfAtualizado = r.atualizadoEm;
+    }
     toast(fmtInt(r.inseridos || 0) + ' linha(s) inserida(s)' + (r.destino ? ' em ' + r.destino : ''));
     ESTADO.uso = null;
   }

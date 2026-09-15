@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.33.0';
+const CODIGO_VERSAO = '2.34.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4591,6 +4591,71 @@ function atualizarPGF(urlOuId, nomeAba) {
   });
   Logger.log(linhas.length + ' linha(s) gravada(s). Atualização registrada em ' + agora + '.');
   return linhas.length + ' linha(s) atualizada(s) em ' + agora;
+}
+
+
+/** Atualização do PGF pelo painel (aba Dados → Importações). */
+function importarPGF(token, urlOuId, nomeAba) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(60000); } catch (e) { return { ok: false, erro: 'Planilha ocupada. Tente de novo.' }; }
+  try {
+    const id = _idDePlanilha_(urlOuId);
+    if (!id) return { ok: false, erro: 'Cole o link (ou o ID) da planilha do PGF.' };
+    const origem = SpreadsheetApp.openById(id);
+    const abaOrigem = nomeAba ? origem.getSheetByName(nomeAba) : origem.getSheets()[0];
+    if (!abaOrigem) return { ok: false, erro: 'Aba "' + nomeAba + '" não encontrada na planilha de origem.' };
+    const destino = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName('PGF');
+    if (!destino) return { ok: false, erro: 'Aba PGF não encontrada na planilha-mãe.' };
+
+    const PRIMEIRA_COL = 2, ULTIMA_COL = 16, LINHA_CAB = 2, PRIMEIRA_LINHA = 3;
+    const largura = ULTIMA_COL - PRIMEIRA_COL + 1;
+    const cabDestino = destino.getRange(LINHA_CAB, PRIMEIRA_COL, 1, largura).getValues()[0].map(c => String(c || '').trim());
+
+    const varredura = abaOrigem.getRange(1, 1, Math.min(6, abaOrigem.getLastRow()), abaOrigem.getLastColumn()).getValues();
+    let linhaCabOrigem = -1;
+    for (let i = 0; i < varredura.length; i++) {
+      if (varredura[i].some(c => _normCab_(c) === 'PLACA')) { linhaCabOrigem = i; break; }
+    }
+    if (linhaCabOrigem < 0) return { ok: false, erro: 'Não encontrei a linha de cabeçalho (com "PLACA") na planilha de origem.' };
+    const cabOrigem = varredura[linhaCabOrigem].map(c => _normCab_(c));
+
+    const mapa = cabDestino.map(nome => {
+      if (!nome) return -1;
+      const alvo = _normCab_(nome);
+      let i = cabOrigem.indexOf(alvo);
+      if (i < 0) i = cabOrigem.findIndex(c => c && (c.indexOf(alvo) === 0 || alvo.indexOf(c) === 0));
+      return i;
+    });
+
+    const nLinhas = abaOrigem.getLastRow() - (linhaCabOrigem + 1);
+    if (nLinhas < 1) return { ok: false, erro: 'A planilha de origem não tem dados abaixo do cabeçalho.' };
+    const dadosOrigem = abaOrigem.getRange(linhaCabOrigem + 2, 1, nLinhas, abaOrigem.getLastColumn()).getValues();
+
+    const linhas = [];
+    dadosOrigem.forEach(l => {
+      const saida = mapa.map(i => (i >= 0 ? l[i] : ''));
+      if (saida.some(v => String(v).trim() !== '')) linhas.push(saida);
+    });
+
+    const ultimaAtual = Math.max(destino.getLastRow(), PRIMEIRA_LINHA);
+    const apagadas = ultimaAtual - PRIMEIRA_LINHA + 1;
+    destino.getRange(PRIMEIRA_LINHA, PRIMEIRA_COL, apagadas, largura).clearContent();
+    if (linhas.length) destino.getRange(PRIMEIRA_LINHA, PRIMEIRA_COL, linhas.length, largura).setValues(linhas);
+    SpreadsheetApp.flush();
+
+    const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy');
+    PropertiesService.getScriptProperties().setProperty('PGF_ATUALIZADO', agora);
+    limparCache();
+    _logAcao_(p.ss, p.sessao.email, 'Importar PGF', '', linhas.length + ' linhas', origem.getName() + ' / ' + abaOrigem.getName());
+
+    return { ok: true, inseridos: linhas.length, apagados: Math.max(0, apagadas), atualizadoEm: agora,
+      origem: origem.getName() + ' / ' + abaOrigem.getName(),
+      colunas: cabDestino.map((nome, i) => ({ destino: nome, achou: mapa[i] >= 0 })).filter(x => x.destino),
+      semCorrespondencia: cabDestino.filter((nome, i) => nome && mapa[i] < 0) };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  } finally { trava.releaseLock(); }
 }
 
 /** Aceita link completo ou só o ID da planilha. */
