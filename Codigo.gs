@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.26.0';
+const CODIGO_VERSAO = '2.27.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4273,6 +4273,7 @@ function lerMultas(token) {
       if (!anoLinha) { semData++; }
       const item = { linha: MULTAS.primeiraLinha + i };
       Object.keys(MULTAS.col).forEach(k => { item[k] = String(l[MULTAS.col[k] - 1] || '').trim(); });
+      ['dataInfracao', 'dataDefesa'].forEach(k => { item[k] = _dataBR_(item[k]); });
       item.placa = placa;
       // a coluna A nem sempre está preenchida; a coluna R traz o tipo calculado
       const tipoCalculado = String(l[17] || '').trim();
@@ -4335,12 +4336,28 @@ function _multasDaFrota_() {
   return mapa;
 }
 
+/** Normaliza data para dd/mm/aaaa (aceita d/m/aa, dd-mm-aaaa, aaaa-mm-dd e Date). */
+function _dataBR_(v) {
+  if (v instanceof Date && !isNaN(v)) return Utilities.formatDate(v, CONFIG.FUSO, 'dd/MM/yyyy');
+  const t = String(v === null || v === undefined ? '' : v).trim();
+  if (!t) return '';
+  let m = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if (m) {
+    const ano = m[3].length === 2 ? (parseInt(m[3], 10) > 50 ? '19' + m[3] : '20' + m[3]) : m[3];
+    return ('0' + m[1]).slice(-2) + '/' + ('0' + m[2]).slice(-2) + '/' + ano;
+  }
+  m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[3] + '/' + m[2] + '/' + m[1];
+  return t;
+}
+
 /** Lê um único registro de multa já no formato usado pela tela. */
 function _lerUmaMulta_(aba, linha) {
   const nCol = Math.max(aba.getLastColumn(), MULTAS.colLancamento);
   const l = aba.getRange(linha, 1, 1, nCol).getDisplayValues()[0];
   const item = { linha: linha };
   Object.keys(MULTAS.col).forEach(k => { item[k] = String(l[MULTAS.col[k] - 1] || '').trim(); });
+  ['dataInfracao', 'dataDefesa'].forEach(k => { item[k] = _dataBR_(item[k]); });
   item.placa = String(item.placa || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
   const tipoCalculado = String(l[17] || '').trim();
   if (!item.tipo && tipoCalculado) item.tipo = /penalidade/i.test(tipoCalculado) ? 'NP' : (/autua/i.test(tipoCalculado) ? 'NA' : tipoCalculado);
@@ -4384,6 +4401,7 @@ function salvarMulta(token, linha, campos) {
         valor = achado ? achado.sigla : valor;          // a planilha guarda NA/NP
       }
       if (k === 'placa') valor = String(valor || '').toUpperCase();
+      if (/^data/i.test(k)) valor = _dataBR_(valor);
       celula.setValue(valor === null || valor === undefined ? '' : valor);
       gravados.push(MULTAS.rotulos[k] || k);
     });

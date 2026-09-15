@@ -72,7 +72,8 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.26.1';
+const VERSAO_PAINEL = '2.27.0';
+const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -318,9 +319,23 @@ function renderChips() {
 /* ============================================================
    ABAS
    ============================================================ */
+/** Abas que não usam os filtros da frota — o painel lateral some nelas. */
+const ABAS_SEM_FILTRO = ['multas', 'dados'];
+
+function ajustarFiltrosLaterais() {
+  const corpo = el('corpo'); if (!corpo) return;
+  if (window.innerWidth <= 900) return;
+  const semFiltro = ABAS_SEM_FILTRO.indexOf(ESTADO.aba) >= 0;
+  const escolha = lerGuardado(CHAVE_FILTROS_OCULTOS) === '1';
+  cls('corpo', 'sem-filtros', semFiltro || escolha);
+  const botao = el('btn-filtros');
+  if (botao) botao.disabled = semFiltro;
+}
+
 function mudarAba(aba) {
   if ((aba === 'acoes' || aba === 'dados' || aba === 'multas') && !ESTADO.admin) aba = 'painel';
   if (aba === 'os') setTimeout(ajustarAlturasOS, 60);
+  setTimeout(ajustarFiltrosLaterais, 0);
   ESTADO.aba = aba;
   document.querySelectorAll('#abas .topo-aba').forEach(b => b.classList.toggle('ativa', b.dataset.aba === aba));
   ['painel', 'viaturas', 'uso', 'manut', 'os', 'pagamentos', 'patrimonio', 'acoes', 'multas', 'dados'].forEach(a => cls('aba-' + a, 'oculto', a !== aba));
@@ -879,7 +894,11 @@ function iniciarApp() {
   document.addEventListener('click', e => { if (!e.target.closest('.seletor-colunas')) cls('menu-colunas', 'oculto', true); });
   ouvir('btn-filtros', 'click', () => {
     const corpo = el('corpo'), painel = el('painel-filtros');
-    if (window.innerWidth <= 900) painel.classList.toggle('aberta'); else corpo.classList.toggle('sem-filtros');
+    if (window.innerWidth <= 900) painel.classList.toggle('aberta');
+    else {
+      corpo.classList.toggle('sem-filtros');
+      guardar(CHAVE_FILTROS_OCULTOS, corpo.classList.contains('sem-filtros') ? '1' : '');
+    }
   });
   document.querySelectorAll('#alt-alienados button').forEach(b => b.addEventListener('click', () => {
     document.querySelectorAll('#alt-alienados button').forEach(x => x.classList.toggle('ativo', x === b));
@@ -3169,7 +3188,7 @@ function renderAcompanhamentoMultas(c) {
 
   // ordenação — padrão: mais recente primeiro
   const dataOrdem = m => {
-    const t = String(m.dataInfracao || m.lancamento || '');
+    const t = dataBR(m.dataInfracao || m.lancamento || '');
     const d = t.match(/(\d{2})\/(\d{2})\/(\d{4})/);
     return d ? d[3] + d[2] + d[1] : '00000000';
   };
@@ -3246,7 +3265,7 @@ ${cabecalho('protocolo', 'Protocolo')}<th>Observações</th>${cabecalho('status'
           ${filtradas.slice(0, 400).map((m, ord) => `<tr class="${m.cobrada ? 'cobrada' : ''}">
             <td style="color:var(--tinta-suave); font-size:11px">${m.linha}</td>
             <td><span class="tag-tipo ${String(m.tipo || '').toLowerCase()}">${esc(m.tipo || '—')}</span>
-              <div class="vinculo">${esc((m.dataInfracao || '').substring(0, 10))}</div></td>
+              <div class="vinculo">${esc(dataBR(m.dataInfracao))}</div></td>
             <td><b style="font-family:var(--fonte-dados)">${esc(m.ai || '—')}</b>
               ${m.aiOriginario ? `<div class="vinculo">origem: <b>${esc(m.aiOriginario)}</b>${m.origem && m.origem.status ? ' · ' + esc(m.origem.status) : ''}</div>` : ''}
               ${m.derivadas.length ? `<div class="vinculo">gerou: <b>${esc(m.derivadas.join(', '))}</b></div>` : ''}</td>
@@ -3260,7 +3279,7 @@ ${cabecalho('protocolo', 'Protocolo')}<th>Observações</th>${cabecalho('status'
             <td style="font-family:var(--fonte-dados); font-size:11.5px">${esc(m.protocolo || '')}</td>
             <td>${m.observacoes ? `<div class="obs-multa" title="${escAttr(m.observacoes)}">${esc(m.observacoes)}</div>` : ''}</td>
             <td><span class="status-chip ${classeStatus(m.status)}">${esc(m.status || 'sem status')}</span>
-              ${m.dataDefesa ? `<div class="vinculo">defesa em ${esc(m.dataDefesa.substring(0, 10))}</div>` : ''}</td>
+              ${m.dataDefesa ? `<div class="vinculo">defesa em ${esc(dataBR(m.dataDefesa))}</div>` : ''}</td>
             <td>${m.linkDefesa ? `<a class="pdf-link" href="${escAttr(m.linkDefesa)}" target="_blank" rel="noopener">abrir</a>` : ''}
               <div style="margin-top:3px"><button class="link-btn" data-defesa="${m.linha}">${m.linkDefesa ? 'refazer' : 'gerar defesa'}</button></div>
               <div><button class="link-btn" data-editar="${m.linha}">editar</button></div></td>
@@ -3313,7 +3332,8 @@ function abrirFormMulta(linha) {
   const dados = ESTADO.multas;
   const m = linha ? dados.multas.find(x => x.linha === linha) : null;
   const campo = (chave, tipo, opcoes) => {
-    const valor = m ? (m[chave] || '') : '';
+    let valor = m ? (m[chave] || '') : '';
+    if (/^data/i.test(chave)) valor = dataBR(valor);
     const rotulo = dados.rotulos[chave] || chave;
     if (tipo === 'select') {
       return `<div class="form-campo" data-campo="${chave}">
@@ -3349,7 +3369,7 @@ function abrirFormMulta(linha) {
   htm('gaveta-corpo', corpo + `<div class="form-acoes">
       <button class="btn amarelo" id="btn-salvar-multa">${m ? 'Salvar' : 'Cadastrar'}</button>
       <button class="btn claro" onclick="fecharFicha()">Cancelar</button>
-      ${m ? `<span class="form-aviso">Lançada em ${esc(m.lancamento || '—')}</span>` : ''}
+      ${m ? `<span class="form-aviso">Lançada em ${esc(dataBR(m.lancamento) || '—')}</span>` : ''}
     </div>`);
   cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
   document.body.style.overflow = 'hidden';
@@ -3641,6 +3661,21 @@ function recalcularVinculosMultas() {
     m.origem = orig ? { ai: orig.ai, enquadramento: orig.enquadramento, status: orig.status, data: orig.dataInfracao } : null;
     m.derivadas = lista.filter(x => x.aiOriginario && x.aiOriginario === m.ai).map(x => x.ai);
   });
+}
+
+
+/** Datas da planilha em formatos variados (d/m/aaaa, dd/mm/aa, aaaa-mm-dd) → dd/mm/aaaa. */
+function dataBR(valor) {
+  const t = String(valor === null || valor === undefined ? '' : valor).trim();
+  if (!t) return '';
+  let m = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if (m) {
+    const ano = m[3].length === 2 ? (parseInt(m[3], 10) > 50 ? '19' + m[3] : '20' + m[3]) : m[3];
+    return ('0' + m[1]).slice(-2) + '/' + ('0' + m[2]).slice(-2) + '/' + ano;
+  }
+  m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[3] + '/' + m[2] + '/' + m[1];
+  return t;
 }
 
 </script>
