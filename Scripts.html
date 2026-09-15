@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.25.1';
+const VERSAO_PAINEL = '2.26.0';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -82,7 +82,7 @@ const ESTADO = {
   subAcoes: 'executar', lote: null, fila: null, subDados: 'importar', subOS: 'panorama', nivelOS: 'n2', osEditadas: {},
   subPag: 'panorama', processo: null, compProcesso: {}, tituloEditado: {},
   subMultas: 'acompanhar', multas: null, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
-  ordemMulta: { campo: 'data', dir: -1 },
+  ordemMulta: { campo: 'linha', dir: -1 },
   dados: null,
   veiculos: [],
   filtros: {},          // chave -> Set de valores selecionados
@@ -3173,11 +3173,15 @@ function renderAcompanhamentoMultas(c) {
     const d = t.match(/(\d{2})\/(\d{2})\/(\d{4})/);
     return d ? d[3] + d[2] + d[1] : '00000000';
   };
-  const valorOrdem = { data: dataOrdem, tipo: m => m.tipo, ai: m => m.ai, placa: m => m.placa,
+  const valorOrdem = { linha: m => m.linha, data: dataOrdem, tipo: m => m.tipo, ai: m => m.ai, placa: m => m.placa,
     orgao: m => m.orgao, processo: m => m.processo, enquadramento: m => m.enquadramento, status: m => m.status };
   const o = ESTADO.ordemMulta;
-  const extrai = valorOrdem[o.campo] || dataOrdem;
-  filtradas.sort((a, b) => String(extrai(a)).localeCompare(String(extrai(b)), 'pt-BR', { numeric: true }) * o.dir);
+  const extrai = valorOrdem[o.campo] || (m => m.linha);
+  filtradas.sort((a, b) => {
+    const x = extrai(a), y = extrai(b);
+    if (typeof x === 'number' && typeof y === 'number') return (x - y) * o.dir;
+    return String(x).localeCompare(String(y), 'pt-BR', { numeric: true }) * o.dir;
+  });
 
   const contar = chave => {
     const mapa = new Map();
@@ -3228,15 +3232,16 @@ function renderAcompanhamentoMultas(c) {
       </div>
       <div class="tabela-rol os-rol" style="max-height:640px">
         <table class="tabela-multas">
-          <colgroup><col style="width:92px"><col style="width:118px"><col style="width:92px"><col style="width:108px">
-            <col style="width:146px"><col style="width:126px"><col><col style="width:126px"><col style="width:112px"></colgroup>
+          <colgroup><col style="width:40px"><col style="width:88px"><col style="width:116px"><col style="width:92px"><col style="width:106px">
+            <col style="width:142px"><col style="width:124px"><col><col style="width:122px"><col style="width:110px"></colgroup>
           <thead><tr>
-            ${cabecalho('tipo', 'Tipo')}${cabecalho('ai', 'AI')}${cabecalho('placa', 'Placa')}${cabecalho('orgao', 'Órgão')}
+${cabecalho('linha', '#')}${cabecalho('tipo', 'Tipo')}${cabecalho('ai', 'AI')}${cabecalho('placa', 'Placa')}${cabecalho('orgao', 'Órgão')}
             ${cabecalho('processo', 'Processo')}${cabecalho('enquadramento', 'Enquadramento')}
-            <th>Protocolo e observações</th>${cabecalho('status', 'Status')}<th>Defesa</th>
+<th>Protocolo e observações</th>${cabecalho('status', 'Status')}<th>Defesa</th>
           </tr></thead>
           <tbody>
-          ${filtradas.slice(0, 400).map(m => `<tr class="${m.cobrada ? 'cobrada' : ''}">
+          ${filtradas.slice(0, 400).map((m, ord) => `<tr class="${m.cobrada ? 'cobrada' : ''}">
+            <td style="color:var(--tinta-suave); font-size:11px">${m.linha}</td>
             <td><span class="tag-tipo ${String(m.tipo || '').toLowerCase()}">${esc(m.tipo || '—')}</span>
               <div class="vinculo">${esc((m.dataInfracao || '').substring(0, 10))}</div></td>
             <td><b style="font-family:var(--fonte-dados)">${esc(m.ai || '—')}</b>
@@ -3256,7 +3261,7 @@ function renderAcompanhamentoMultas(c) {
             <td>${m.linkDefesa ? `<a class="pdf-link" href="${escAttr(m.linkDefesa)}" target="_blank" rel="noopener">abrir</a>` : ''}
               <div style="margin-top:3px"><button class="link-btn" data-defesa="${m.linha}">${m.linkDefesa ? 'refazer' : 'gerar defesa'}</button></div>
               <div><button class="link-btn" data-editar="${m.linha}">editar</button></div></td>
-          </tr>`).join('') || '<tr><td colspan="9"><div class="vazio">Nenhum registro com esses filtros</div></td></tr>'}
+          </tr>`).join('') || '<tr><td colspan="10"><div class="vazio">Nenhum registro com esses filtros</div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -3358,7 +3363,8 @@ function abrirFormMulta(linha) {
       r => {
         if (!r || !r.ok) { btn.disabled = false; btn.textContent = 'Salvar'; toast((r && r.erro) || 'Falha ao gravar.', true); return; }
         toast(r.novo ? 'Multa cadastrada.' : r.gravados.length + ' campo(s) gravado(s).');
-        fecharFicha(); ESTADO.multas = null; renderMultas();
+        aplicarMultaLocal(r.item);          // atualiza a tela sem reler a planilha inteira
+        fecharFicha(); renderMultas();
       },
       e => { btn.disabled = false; btn.textContent = 'Salvar'; toast('Erro: ' + (e && e.message ? e.message : e), true); });
     if (run) run.salvarMulta(ESTADO.token, linha || 0, campos);
@@ -3373,7 +3379,9 @@ function gerarDefesa(linha, botao) {
       if (!r || !r.ok) { toast((r && r.erro) || 'Falha ao gerar a defesa.', true); return; }
       toast('Defesa gerada: ' + r.nome);
       window.open(r.url, '_blank');
-      ESTADO.multas = null; renderMultas();
+      const alvo = ESTADO.multas.multas.find(x => x.linha === linha);
+      if (alvo) { alvo.linkDefesa = r.url; if (!alvo.dataDefesa) alvo.dataDefesa = new Date().toLocaleDateString('pt-BR'); }
+      renderMultas();
     },
     e => { if (botao) { botao.disabled = false; botao.textContent = 'gerar'; } toast('Erro: ' + (e && e.message ? e.message : e), true); });
   if (run) run.gerarDefesaMulta(ESTADO.token, linha);
@@ -3438,7 +3446,9 @@ function renderCadastrosMultas(c) {
     const run = servidor(fn,
       r => { if (b2) b2.disabled = false;
         if (!r || !r.ok) { toast((r && r.erro) || 'Falha.', true); return; }
-        toast('Gravado.'); ESTADO.multas = null; if (aoOk) aoOk(); renderMultas(); },
+        toast('Gravado.');
+        if (r.bases) ESTADO.multas.bases = r.bases; else ESTADO.multas = null;
+        if (aoOk) aoOk(); renderMultas(); },
       e => { if (b2) b2.disabled = false; toast('Erro: ' + (e && e.message ? e.message : e), true); });
     if (run) run[fn].apply(run, [ESTADO.token].concat(args));
   };
@@ -3494,7 +3504,9 @@ function editarItemBase(tipo, item) {
     const run = servidor('editarBaseMulta',
       r => {
         if (!r || !r.ok) { btn.disabled = false; btn.textContent = 'Salvar'; toast((r && r.erro) || 'Falha.', true); return; }
-        toast('Cadastro atualizado.'); fecharFicha(); ESTADO.multas = null; renderMultas();
+        toast('Cadastro atualizado.');
+        if (r.bases) ESTADO.multas.bases = r.bases; else ESTADO.multas = null;
+        fecharFicha(); renderMultas();
       },
       e => { btn.disabled = false; btn.textContent = 'Salvar'; toast('Erro: ' + (e && e.message ? e.message : e), true); });
     if (run) run.editarBaseMulta(ESTADO.token, tipo, chaveOriginal, dados);
@@ -3596,6 +3608,36 @@ function renderAnaliseMultas(c) {
         }).join('')}</tbody></table></div>
     </div>`;
   ajustarKpis();
+}
+
+
+/** Insere ou substitui um registro na lista já carregada, refazendo os vínculos. */
+function aplicarMultaLocal(item) {
+  if (!item || !ESTADO.multas) return;
+  const lista = ESTADO.multas.multas;
+  const i = lista.findIndex(x => x.linha === item.linha);
+  const anterior = i >= 0 ? lista[i] : null;
+  if (anterior) {   // preserva o que o servidor não recalcula neste retorno
+    item.cobrada = anterior.cobrada; item.consultaEm = anterior.consultaEm; item.valorMulta = anterior.valorMulta;
+  }
+  if (i >= 0) lista[i] = item; else lista.push(item);
+  recalcularVinculosMultas();
+}
+
+/** Recalcula, no navegador, os vínculos entre autuação, penalidade e AI originário. */
+function recalcularVinculosMultas() {
+  const lista = ESTADO.multas.multas;
+  const porProcesso = {}, porAi = {};
+  lista.forEach(m => {
+    if (m.processo) (porProcesso[m.processo] = porProcesso[m.processo] || []).push(m.ai);
+    if (m.ai) porAi[m.ai] = m;
+  });
+  lista.forEach(m => {
+    m.irmas = (porProcesso[m.processo] || []).filter(x => x && x !== m.ai);
+    const orig = m.aiOriginario ? porAi[m.aiOriginario] : null;
+    m.origem = orig ? { ai: orig.ai, enquadramento: orig.enquadramento, status: orig.status, data: orig.dataInfracao } : null;
+    m.derivadas = lista.filter(x => x.aiOriginario && x.aiOriginario === m.ai).map(x => x.ai);
+  });
 }
 
 </script>

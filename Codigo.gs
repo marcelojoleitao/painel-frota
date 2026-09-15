@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.25.1';
+const CODIGO_VERSAO = '2.26.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4335,6 +4335,24 @@ function _multasDaFrota_() {
   return mapa;
 }
 
+/** Lê um único registro de multa já no formato usado pela tela. */
+function _lerUmaMulta_(aba, linha) {
+  const nCol = Math.max(aba.getLastColumn(), MULTAS.colLancamento);
+  const l = aba.getRange(linha, 1, 1, nCol).getDisplayValues()[0];
+  const item = { linha: linha };
+  Object.keys(MULTAS.col).forEach(k => { item[k] = String(l[MULTAS.col[k] - 1] || '').trim(); });
+  item.placa = String(item.placa || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  const tipoCalculado = String(l[17] || '').trim();
+  if (!item.tipo && tipoCalculado) item.tipo = /penalidade/i.test(tipoCalculado) ? 'NP' : (/autua/i.test(tipoCalculado) ? 'NA' : tipoCalculado);
+  item.tipoNome = (MULTAS.tipos.find(t => t.sigla === String(item.tipo).toUpperCase()) || {}).nome || tipoCalculado || item.tipo;
+  item.lancamento = String(l[MULTAS.colLancamento - 1] || '').trim() || item.dataInfracao;
+  const link = String(l[MULTAS.colLinkDefesa - 1] || '').trim();
+  item.linkDefesa = /^https?:\/\//i.test(link) ? link : '';
+  item.irmas = []; item.derivadas = []; item.origem = null;
+  item.cobrada = false; item.consultaEm = ''; item.valorMulta = 0;
+  return item;
+}
+
 /** Cria ou atualiza um registro de multa. */
 function salvarMulta(token, linha, campos) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
@@ -4372,7 +4390,8 @@ function salvarMulta(token, linha, campos) {
     SpreadsheetApp.flush();
     _logAcao_(p.ss, p.sessao.email, novo ? 'Cadastrar multa' : 'Editar multa', String(campos.placa || ''),
       String(campos.ai || ''), gravados.join(', '));
-    return { ok: true, linha: alvo, novo: novo, gravados: gravados, recusados: recusados };
+    return { ok: true, linha: alvo, novo: novo, gravados: gravados, recusados: recusados,
+             item: _lerUmaMulta_(aba, alvo) };   // devolve só este registro, sem reler a planilha
   } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
 }
 
@@ -4410,7 +4429,7 @@ function cadastrarBaseMulta(token, tipo, dados) {
     }
     SpreadsheetApp.flush();
     _logAcao_(p.ss, p.sessao.email, 'Cadastrar ' + tipo + ' (multas)', '', 'OK', JSON.stringify(dados).substring(0, 200));
-    return { ok: true };
+    return { ok: true, bases: _basesMultas_(ss) };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
 }
 
@@ -4542,7 +4561,7 @@ function editarBaseMulta(token, tipo, chaveOriginal, dados) {
         if (String(valores[i][0] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase() === String(chaveOriginal).toUpperCase()) {
           aba.getRange(i + 2, 1, 1, 3).setValues([[String(dados.placa || '').toUpperCase(), dados.renavam || valores[i][1], dados.modelo || '']]);
           SpreadsheetApp.flush();
-          return { ok: true };
+          return { ok: true, bases: _basesMultas_(ss) };
         }
       }
       return { ok: false, erro: 'Placa não encontrada na base.' };
@@ -4566,7 +4585,7 @@ function editarBaseMulta(token, tipo, chaveOriginal, dados) {
         }
         SpreadsheetApp.flush();
         _logAcao_(p.ss, p.sessao.email, 'Editar ' + tipo + ' (multas)', '', chaveOriginal, JSON.stringify(dados).substring(0, 200));
-        return { ok: true, linha: linha };
+        return { ok: true, linha: linha, bases: _basesMultas_(ss) };
       }
     }
     return { ok: false, erro: 'Item não encontrado na base.' };
