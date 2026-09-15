@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.21.0';
+const VERSAO_PAINEL = '2.21.1';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
   token: null, usuario: null, admin: false,
@@ -2900,10 +2900,10 @@ function renderProcessoPagamento() {
     const run = servidor('lerProcessoPagamento',
       r => {
         if (!r || !r.ok) {
-          if (r && r.competencias) { ESTADO.compProcesso[tipo] = r.competencias[0]; ESTADO.processo = null; renderProcessoPagamento(); return; }
+          if (r && r.competencias && r.competencias.length) { ESTADO.compProcesso[tipo] = r.sugerida || r.competencias[0]; ESTADO.processo = null; renderProcessoPagamento(); return; }
           c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha ao ler.') + '</div></div>'; return;
         }
-        if (!r.competencia) { ESTADO.compProcesso[tipo] = r.competencias[0]; ESTADO.processo = null; renderProcessoPagamento(); return; }
+        if (!r.competencia) { ESTADO.compProcesso[tipo] = r.sugerida || r.competencias[0]; ESTADO.processo = null; renderProcessoPagamento(); return; }
         ESTADO.processo = r; ESTADO.tituloEditado = {};
         desenharProcesso(c, r);
       },
@@ -2917,16 +2917,21 @@ function renderProcessoPagamento() {
 function desenharProcesso(c, r) {
   const t = r.titulo, res = r.resumo;
   const somenteLeitura = r.somenteLeitura || [];
-  const campo = (chave, largo) => {
+  const ehDinheiro = chave => (r.dinheiro || []).indexOf(chave) >= 0;
+  const campo = chave => {
     const rotulo = r.rotulos[chave];
     if (!rotulo) return '';
     const bloqueado = somenteLeitura.indexOf(chave) >= 0;
-    const valor = t[chave] === null || t[chave] === undefined ? '' : (typeof t[chave] === 'number' ? fmtDec(t[chave]) : t[chave]);
-    return `<div class="form-campo ${largo ? 'largo' : ''}" data-campo="${escAttr(chave)}" data-original="${escAttr(valor)}">
-      <label>${esc(rotulo)}${bloqueado ? ' <span style="color:var(--tinta-suave)">(fórmula)</span>' : ''}</label>
-      <input type="text" value="${escAttr(valor)}" ${bloqueado ? 'disabled' : 'data-t'}></div>`;
+    const bruto = t[chave];
+    // valores em dinheiro com duas casas; título, NF e números do SEI são identificadores, não moeda
+    const valor = bruto === null || bruto === undefined ? ''
+      : (ehDinheiro(chave) ? (bruto === '' ? '' : fmtDec(_num(bruto)))
+                           : String(bruto).replace(/\.0$/, ''));
+    return `<div class="form-campo ${chave === 'chave' ? 'largo' : ''}" data-campo="${escAttr(chave)}" data-original="${escAttr(valor)}">
+      <label>${esc(rotulo)}${bloqueado ? ' <span style="color:var(--tinta-suave)">fórmula</span>' : ''}</label>
+      <input type="text" value="${escAttr(valor)}" class="${ehDinheiro(chave) ? 'num-campo' : ''}" ${bloqueado ? 'disabled' : 'data-t'}></div>`;
   };
-  const ordem = Object.keys(r.rotulos);
+  const grupos = r.grupos && r.grupos.length ? r.grupos : [['Dados', Object.keys(r.rotulos)]];
   const etapas = (r.roteiro || []).map(e => {
     const feito = r.etapasFeitas[e.numero];
     return `<div class="etapa ${feito ? 'feita' : ''}">
@@ -2963,7 +2968,8 @@ function desenharProcesso(c, r) {
     <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">
       <div class="cartao largo" style="grid-column:1/-1">
         <div class="cartao-cab"><h3>Dados do título</h3><small>edite e salve — grava direto na planilha de pagamentos</small></div>
-        <div class="form-grade">${ordem.map(k => campo(k, k === 'chave')).join('')}</div>
+        ${grupos.map(g => `<div class="grupo-campos"><div class="grupo-titulo">${esc(g[0])}</div>
+          <div class="form-grade">${g[1].map(campo).join('')}</div></div>`).join('')}
         <div class="form-acoes">
           <button class="btn amarelo" id="btn-salvar-titulo" disabled>Salvar alterações</button>
           <span class="form-aviso" id="titulo-pendentes">Nenhuma alteração pendente.</span>
@@ -3063,6 +3069,14 @@ function gerarDocsProcesso(tipo, competencia) {
 }
 
 /** Valor por extenso (mesma regra do servidor) para exibir na tela. */
+/** Número a partir de texto em formato brasileiro. */
+function _num(v) {
+  if (typeof v === 'number') return v;
+  const t = String(v === null || v === undefined ? '' : v).replace(/[R$\s]/g, '');
+  if (!t) return 0;
+  return parseFloat(t.indexOf(',') >= 0 ? t.replace(/\./g, '').replace(',', '.') : t) || 0;
+}
+
 function extensoLocal(valor) {
   const u = ['', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove'];
   const e = ['dez', 'onze', 'doze', 'treze', 'quatorze', 'quinze', 'dezesseis', 'dezessete', 'dezoito', 'dezenove'];

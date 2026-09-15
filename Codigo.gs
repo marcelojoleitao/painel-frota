@@ -3695,7 +3695,15 @@ const PROC = {
     },
     // colunas com fórmula na planilha — o painel nunca grava nelas
     somenteLeitura: ['desconto', 'glosaPrecos'],
-    roteiroCols: { numero: 25, rotulo: 26, valor: 27 }   // Z, AA, AB (1-based)
+    roteiroCols: { numero: 25, rotulo: 26, valor: 27 },   // Z, AA, AB (1-based)
+    grupos: [
+      ['Identificação', ['titulo', 'nf', 'competencia', 'chave']],
+      ['Valores', ['bruto', 'desconto', 'glosaIMR', 'glosaPrecos', 'outrosDescontos', 'juros']],
+      ['Datas', ['emissao', 'vencimento']],
+      ['Processo', ['sei', 'notaPagamento', 'seiNF', 'seiAtesto', 'seiRelatorio', 'seiRelGlosa', 'seiIMR']]
+    ],
+    dinheiro: ['bruto', 'desconto', 'glosaIMR', 'glosaPrecos', 'outrosDescontos', 'juros'],
+    opcionais: { outrosDescontos: 'Outros Descontos' }
   },
   'Manutenção': {
     aba: 'Títulos Manut.', cols: 19,
@@ -3708,7 +3716,15 @@ const PROC = {
       seiAtesto: 'SEI Atesto Manutenção', seiRelatorio: 'SEI Relatório Manutenção', chave: 'Chave de Acesso'
     },
     somenteLeitura: [],
-    roteiroCols: { numero: 27, rotulo: 28, valor: 29 }   // AA, AB, AC
+    roteiroCols: { numero: 27, rotulo: 28, valor: 29 },   // AA, AB, AC
+    grupos: [
+      ['Identificação', ['titulo', 'nf', 'competencia', 'chave']],
+      ['Valores', ['bruto', 'pecas', 'mo', 'pecasAcid', 'moAcid', 'glosaIMR', 'outrosDescontos', 'juros']],
+      ['Datas', ['emissao', 'vencimento']],
+      ['Processo', ['sei', 'notaPagamento', 'seiNF', 'seiAtesto', 'seiRelatorio', 'seiIMR']]
+    ],
+    dinheiro: ['bruto', 'pecas', 'mo', 'pecasAcid', 'moAcid', 'glosaIMR', 'outrosDescontos', 'juros'],
+    opcionais: { outrosDescontos: 'Outros Descontos' }
   }
 };
 
@@ -3728,6 +3744,10 @@ function _cabTitulos_(aba, def) {
       const cab = valores[i].map(c => String(c || '').trim());
       const col = {};
       Object.keys(def.campos).forEach(k => { col[k] = cab.indexOf(def.campos[k]); });
+      Object.keys(def.opcionais || {}).forEach(k => {
+        const c = cab.indexOf(def.opcionais[k]);
+        if (c >= 0) col[k] = c;                    // só existe se a coluna estiver na planilha
+      });
       return { linha: i + 1, cab: cab, col: col };
     }
   }
@@ -3771,21 +3791,30 @@ function lerProcessoPagamento(token, tipo, competencia) {
       comps.push(comp);
       if (competencia && comp === competencia) { linhaAlvo = cab.linha + 1 + i; dados = l; }
     });
-    const disponiveis = comps.filter((c, i) => comps.indexOf(c) === i).sort().reverse();
-    if (!competencia) return { ok: true, competencias: disponiveis, roteiro: _lerRoteiro_(aba, def) };
-    if (!dados) return { ok: false, erro: 'Competência ' + competencia + ' não encontrada em ' + def.aba + '.', competencias: disponiveis };
+    const chave = c => c.substring(3) + c.substring(0, 2);   // AAAAMM, para ordenar de verdade
+    const disponiveis = comps.filter((c, i) => comps.indexOf(c) === i).sort((a, b) => chave(b).localeCompare(chave(a)));
+    const hoje = new Date();
+    const anterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+    const sugerida = ('0' + (anterior.getMonth() + 1)).slice(-2) + '/' + anterior.getFullYear();
+    const padrao = disponiveis.indexOf(sugerida) >= 0 ? sugerida : (disponiveis[0] || '');
+    if (!competencia) return { ok: true, competencias: disponiveis, sugerida: padrao, roteiro: _lerRoteiro_(aba, def) };
+    if (!dados) return { ok: false, erro: 'Competência ' + competencia + ' não encontrada em ' + def.aba + '.', competencias: disponiveis, sugerida: padrao };
 
-    const titulo = {};
-    Object.keys(def.campos).forEach(k => {
+    const titulo = {}, rotulos = {};
+    const todos = Object.keys(def.campos).concat(Object.keys(def.opcionais || {}).filter(k => cab.col[k] >= 0));
+    todos.forEach(k => {
+      rotulos[k] = def.campos[k] || def.opcionais[k];
       const c = cab.col[k];
-      if (c < 0) { titulo[k] = ''; return; }
+      if (c === undefined || c < 0) { titulo[k] = ''; return; }
       const v = dados[c];
       titulo[k] = (v instanceof Date) ? _dataTxt_(v) : (typeof v === 'number' ? v : String(v === null || v === undefined ? '' : v).trim());
     });
     titulo._linha = linhaAlvo;
+    // grupos, sem os campos que não existem nesta planilha
+    const grupos = (def.grupos || []).map(g => [g[0], g[1].filter(k => todos.indexOf(k) >= 0)]).filter(g => g[1].length);
 
     return { ok: true, tipo: tipo, competencia: competencia, competencias: disponiveis,
-      titulo: titulo, somenteLeitura: def.somenteLeitura, rotulos: def.campos,
+      sugerida: padrao, titulo: titulo, somenteLeitura: def.somenteLeitura, rotulos: rotulos, grupos: grupos, dinheiro: def.dinheiro,
       roteiro: _lerRoteiro_(aba, def), etapasFeitas: _etapasFeitas_(tipo, competencia),
       resumo: _resumoProcesso_(tipo, titulo), serie: _serieContratual_(tipo, cab, valores) };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
@@ -3795,21 +3824,24 @@ function lerProcessoPagamento(token, tipo, competencia) {
 function _resumoProcesso_(tipo, t) {
   const n = x => _num_(x) || 0;
   if (tipo === 'Abastecimento') {
-    const bruto = n(t.bruto), desconto = n(t.desconto), imr = n(t.glosaIMR), precos = n(t.glosaPrecos);
-    const liquido = Math.round((bruto - desconto - imr - precos) * 100) / 100;
-    return { bruto: bruto, desconto: desconto, glosaIMR: imr, glosaPrecos: precos, liquido: liquido,
-      linhas: [['(+) Valor bruto da Nota Fiscal', bruto], ['(-) Desconto contratual (4,67%)', desconto],
-               ['(-) Glosa do IMR', imr], ['(-) Glosa de preços abusivos', precos],
-               ['(=) Valor líquido após desconto e glosas', liquido]] };
+    const bruto = n(t.bruto), desconto = n(t.desconto), imr = n(t.glosaIMR), precos = n(t.glosaPrecos), outros = n(t.outrosDescontos);
+    const liquido = Math.round((bruto - desconto - imr - precos - outros) * 100) / 100;
+    const linhas = [['(+) Valor bruto da Nota Fiscal', bruto], ['(-) Desconto contratual (4,67%)', desconto],
+                    ['(-) Glosa do IMR', imr], ['(-) Glosa de preços abusivos', precos]];
+    if (outros) linhas.push(['(-) Outros descontos', outros]);
+    linhas.push(['(=) Valor líquido após desconto e glosas', liquido]);
+    return { bruto: bruto, desconto: desconto, glosaIMR: imr, glosaPrecos: precos, outros: outros, liquido: liquido, linhas: linhas };
   }
   const pecas = n(t.pecas), mo = n(t.mo), pecasAcid = n(t.pecasAcid), moAcid = n(t.moAcid);
   const bruto = n(t.bruto) || Math.round((pecas + mo + pecasAcid + moAcid) * 100) / 100;
-  const imr = n(t.glosaIMR);
-  const liquido = Math.round((bruto - imr) * 100) / 100;
-  return { bruto: bruto, pecas: pecas, mo: mo, pecasAcid: pecasAcid, moAcid: moAcid, glosaIMR: imr, liquido: liquido,
-    linhas: [['(+) Peças (Manutenção)', pecas], ['(+) Mão de obra/Serviços (Manutenção)', mo],
-             ['(+) Peças (Acidente)', pecasAcid], ['(+) Mão de obra/Serviços (Acidente)', moAcid],
-             ['(=) Valor bruto da NF', bruto], ['(-) Glosa (IMR)', imr], ['(=) Valor líquido após glosa', liquido]] };
+  const imr = n(t.glosaIMR), outros = n(t.outrosDescontos);
+  const liquido = Math.round((bruto - imr - outros) * 100) / 100;
+  const linhas = [['(+) Peças (Manutenção)', pecas], ['(+) Mão de obra/Serviços (Manutenção)', mo],
+                  ['(+) Peças (Acidente)', pecasAcid], ['(+) Mão de obra/Serviços (Acidente)', moAcid],
+                  ['(=) Valor bruto da NF', bruto], ['(-) Glosa (IMR)', imr]];
+  if (outros) linhas.push(['(-) Outros descontos', outros]);
+  linhas.push(['(=) Valor líquido após glosa', liquido]);
+  return { bruto: bruto, pecas: pecas, mo: mo, pecasAcid: pecasAcid, moAcid: moAcid, glosaIMR: imr, outros: outros, liquido: liquido, linhas: linhas };
 }
 
 /** Série usada na tabela de execução contratual do relatório (12 competências). */
@@ -3848,7 +3880,7 @@ function salvarTituloPagamento(token, tipo, competencia, campos) {
       const celula = aba.getRange(linha, col + 1);
       if (celula.getFormula()) { recusados.push(def.campos[k] + ' (fórmula)'); return; }
       const bruto = campos[k];
-      const numerico = ['bruto', 'juros', 'glosaIMR', 'pecas', 'mo', 'pecasAcid', 'moAcid'].indexOf(k) >= 0;
+      const numerico = (def.dinheiro || []).indexOf(k) >= 0;
       celula.setValue(numerico ? (bruto === '' ? '' : _num_(bruto)) : String(bruto === null || bruto === undefined ? '' : bruto));
       gravados.push(def.campos[k]);
     });
