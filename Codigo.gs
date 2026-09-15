@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.34.1';
+const CODIGO_VERSAO = '2.34.2';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -53,7 +53,7 @@ const CONFIG = {
   ID_MULTAS: '12gJWTsSfj_TqIAFvlrqsLUpBf2qMlZ9xXmgodA2fVDc',
   // Antes de 2024 não havia gestão do acompanhamento — os registros ficam de fora
   MULTAS_ANO_INICIAL: 2024,
-  PASTA_DEFESAS: '1eyLGfer7R58-Usw54gTUTWyvoE8WCtiQ',
+  PASTA_DEFESAS: '1bJVCw-Lkvfi3dyNPHEP6tC9tymAbbZML',
   // Mesma pasta guarda os modelos das defesas e os do processo de pagamento
   PASTA_MODELOS_MULTAS: '1MDuD2wfSBuealux2lVoVTlFpq-BOPNrS',
   PASTA_MODELOS_PAGAMENTO: '1MDuD2wfSBuealux2lVoVTlFpq-BOPNrS',
