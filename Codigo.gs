@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.27.1';
+const CODIGO_VERSAO = '2.28.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -54,7 +54,9 @@ const CONFIG = {
   // Antes de 2024 não havia gestão do acompanhamento — os registros ficam de fora
   MULTAS_ANO_INICIAL: 2024,
   PASTA_DEFESAS: '1eyLGfer7R58-Usw54gTUTWyvoE8WCtiQ',
+  // Mesma pasta guarda os modelos das defesas e os do processo de pagamento
   PASTA_MODELOS_MULTAS: '1MDuD2wfSBuealux2lVoVTlFpq-BOPNrS',
+  PASTA_MODELOS_PAGAMENTO: '1MDuD2wfSBuealux2lVoVTlFpq-BOPNrS',
 
   // Processo de pagamento
   ABA_CONTROLE_PROC: 'ControleProcesso',        // criada na planilha de títulos
@@ -1059,7 +1061,7 @@ function autorizarDocs() {
   const aberto = DocumentApp.openById(id);
   Logger.log('Abrir documento pelo id: OK — ' + aberto.getName());
   DriveApp.getFileById(id).setTrashed(true);
-  const modelos = CONFIG.MODELOS_PAGAMENTO || {};
+  const modelos = _modelosPagamento_() || {};
   Object.keys(modelos).forEach(tipo => {
     Object.keys(modelos[tipo]).forEach(nome => {
       try { DocumentApp.openById(modelos[tipo][nome]); Logger.log('Modelo "' + nome + '": acessível'); }
@@ -1081,7 +1083,7 @@ function autorizarDriveEscrita() {
   Logger.log('Criar arquivo: OK (' + temp.getId() + ')');
   temp.setTrashed(true);
 
-  const modelos = CONFIG.MODELOS_PAGAMENTO || {};
+  const modelos = _modelosPagamento_() || {};
   const primeiro = Object.keys(modelos).map(t => Object.keys(modelos[t]).map(n => ({ t: t, n: n, id: modelos[t][n] }))[0]).filter(Boolean)[0];
   if (primeiro) {
     try {
@@ -3885,7 +3887,8 @@ function lerProcessoPagamento(token, tipo, competencia) {
 
     return { ok: true, tipo: tipo, competencia: competencia, competencias: disponiveis,
       sugerida: padrao, titulo: titulo, somenteLeitura: def.somenteLeitura, rotulos: rotulos, grupos: grupos, dinheiro: def.dinheiro,
-      modelos: Object.keys((CONFIG.MODELOS_PAGAMENTO || {})[tipo] || {}).map(n => ({ nome: n, url: 'https://docs.google.com/document/d/' + CONFIG.MODELOS_PAGAMENTO[tipo][n] + '/edit' })),
+      modelos: Object.keys((_modelosPagamento_() || {})[tipo] || {}).map(n => ({ nome: n, url: 'https://docs.google.com/document/d/' + _modelosPagamento_()[tipo][n] + '/edit' })),
+      pastaModelos: CONFIG.PASTA_MODELOS_PAGAMENTO ? 'https://drive.google.com/drive/folders/' + CONFIG.PASTA_MODELOS_PAGAMENTO : '',
       pastaSaida: CONFIG.PASTA_DOCS_PAGAMENTO ? 'https://drive.google.com/drive/folders/' + CONFIG.PASTA_DOCS_PAGAMENTO : '',
       roteiro: _lerRoteiro_(aba, def), etapasFeitas: _etapasFeitas_(tipo, competencia),
       resumo: _resumoProcesso_(tipo, titulo), serie: _serieContratual_(tipo, cab, valores) };
@@ -3899,9 +3902,9 @@ function _resumoProcesso_(tipo, t) {
     const bruto = n(t.bruto), desconto = n(t.desconto), imr = n(t.glosaIMR), precos = n(t.glosaPrecos), outros = n(t.outrosDescontos);
     const liquido = Math.round((bruto - desconto - imr - precos - outros) * 100) / 100;
     const linhas = [['(+) Valor bruto da Nota Fiscal', bruto], ['(-) Desconto contratual (4,67%)', desconto],
-                    ['(-) Glosa do IMR', imr], ['(-) Glosa de preços abusivos', precos]];
-    if (outros) linhas.push(['(-) Outros descontos', outros]);
-    linhas.push(['(=) Valor líquido após desconto e glosas', liquido]);
+                    ['(-) Glosa do IMR', imr], ['(-) Glosa de preços abusivos', precos],
+                    ['(-) Outros descontos', outros],
+                    ['(=) Valor líquido após desconto e glosas', liquido]];
     return { bruto: bruto, desconto: desconto, glosaIMR: imr, glosaPrecos: precos, outros: outros, liquido: liquido, linhas: linhas };
   }
   const pecas = n(t.pecas), mo = n(t.mo), pecasAcid = n(t.pecasAcid), moAcid = n(t.moAcid);
@@ -3910,9 +3913,9 @@ function _resumoProcesso_(tipo, t) {
   const liquido = Math.round((bruto - imr - outros) * 100) / 100;
   const linhas = [['(+) Peças (Manutenção)', pecas], ['(+) Mão de obra/Serviços (Manutenção)', mo],
                   ['(+) Peças (Acidente)', pecasAcid], ['(+) Mão de obra/Serviços (Acidente)', moAcid],
-                  ['(=) Valor bruto da NF', bruto], ['(-) Glosa (IMR)', imr]];
-  if (outros) linhas.push(['(-) Outros descontos', outros]);
-  linhas.push(['(=) Valor líquido após glosa', liquido]);
+                  ['(=) Valor bruto da NF', bruto], ['(-) Glosa (IMR)', imr],
+                  ['(-) Outros descontos', outros],
+                  ['(=) Valor líquido após glosa', liquido]];
   return { bruto: bruto, pecas: pecas, mo: mo, pecasAcid: pecasAcid, moAcid: moAcid, glosaIMR: imr, outros: outros, liquido: liquido, linhas: linhas };
 }
 
@@ -4025,6 +4028,7 @@ function _parametrosPagamento_(tipo, t, resumo, competencia) {
       '{{valorglosaprecoabusivoabastecimento}}': moeda(resumo.glosaPrecos),
       '{{percentualdescontoabastecimento}}': '4,67%',
       '{{valordescontoabastecimento}}': moeda(resumo.desconto),
+      '{{outrosdescontosabastecimento}}': moeda(resumo.outros || 0),
       '{{valorliquidoabastecimento}}': moeda(resumo.liquido),
       '{{valorextensoliquidoabastecimento}}': extenso(resumo.liquido),
       '{{houveglosaabastecimento}}': resumo.glosaPrecos > 0 ? 'Sim' : 'Não',
@@ -4046,6 +4050,7 @@ function _parametrosPagamento_(tipo, t, resumo, competencia) {
       '{{valorpecasmanutencao}}': moeda(resumo.pecas),
       '{{valormaodeobramanutencao}}': moeda(resumo.mo),
       '{{valorglosaimrmanutencao}}': moeda(resumo.glosaIMR),
+      '{{outrosdescontosmanutencao}}': moeda(resumo.outros || 0),
       '{{valorliquidomanutencao}}': moeda(resumo.liquido),
       '{{valorextensoliquidomanutencao}}': extenso(resumo.liquido),
       '{{seiatestomanutencao}}': String(t.seiAtesto || ''),
@@ -4063,6 +4068,18 @@ function _preencherTabelas_(corpo, resumo, serie) {
   const normaliza = t => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
   const porRotulo = {};
   resumo.linhas.forEach(l => { porRotulo[normaliza(l[0])] = l[1]; });
+  // o modelo pode escrever o rótulo de outra forma; aceitamos variações
+  const sinonimos = {
+    'outros descontos': ['(-) outros descontos', 'outros descontos', 'outras deducoes', '(-) outras deducoes'],
+    'glosa (imr)': ['(-) glosa (imr)', 'glosa imr', '(-) glosa do imr'],
+    'valor liquido apos glosa': ['(=) valor liquido apos glosa', 'valor liquido'],
+    'valor liquido apos desconto e glosas': ['(=) valor liquido apos desconto e glosas', 'valor liquido']
+  };
+  Object.keys(sinonimos).forEach(base => {
+    const achado = Object.keys(porRotulo).find(k => k.indexOf(base) >= 0);
+    if (achado === undefined) return;
+    sinonimos[base].forEach(alt => { if (porRotulo[alt] === undefined) porRotulo[alt] = porRotulo[achado]; });
+  });
 
   const tabelas = corpo.getTables();
   for (let t = 0; t < tabelas.length; t++) {
@@ -4100,12 +4117,62 @@ function _preencherTabelas_(corpo, resumo, serie) {
   return ajustadas;
 }
 
+
+/**
+ * Copia os seis modelos do processo de pagamento para a pasta de modelos e
+ * passa a usar as cópias. Rode uma vez no editor; se já houver cópia com o
+ * mesmo nome na pasta, ela é reaproveitada.
+ *
+ * Os novos IDs ficam guardados em PropertiesService (MODELOS_PAGAMENTO), então
+ * não é preciso editar o Codigo.gs depois.
+ */
+function migrarModelosPagamento() {
+  const destino = DriveApp.getFolderById(CONFIG.PASTA_MODELOS_PAGAMENTO);
+  const atuais = _modelosPagamento_();
+  const novos = {};
+  Object.keys(atuais).forEach(tipo => {
+    novos[tipo] = {};
+    Object.keys(atuais[tipo]).forEach(nome => {
+      const id = atuais[tipo][nome];
+      try {
+        const original = DriveApp.getFileById(id);
+        let copia = null;
+        const iguais = destino.getFilesByName(original.getName());
+        if (iguais.hasNext()) { copia = iguais.next(); Logger.log(nome + ': já existia na pasta'); }
+        else { copia = original.makeCopy(original.getName(), destino); Logger.log(nome + ': copiado'); }
+        try { copia.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+        novos[tipo][nome] = copia.getId();
+        Logger.log('   ' + id + ' → ' + copia.getId());
+      } catch (e) {
+        novos[tipo][nome] = id;
+        Logger.log(nome + ': FALHOU — ' + String(e).substring(0, 120));
+      }
+    });
+  });
+  PropertiesService.getScriptProperties().setProperty('MODELOS_PAGAMENTO', JSON.stringify(novos));
+  Logger.log('Modelos do pagamento agora vêm da pasta ' + destino.getName() + '.');
+  Logger.log('Os originais continuam onde estavam; para voltar atrás, apague a propriedade MODELOS_PAGAMENTO.');
+  return 'OK';
+}
+
+/** Modelos em uso: os copiados (PropertiesService) ou, se não houver, os originais do CONFIG. */
+function _modelosPagamento_() {
+  try {
+    const guardado = PropertiesService.getScriptProperties().getProperty('MODELOS_PAGAMENTO');
+    if (guardado) {
+      const obj = JSON.parse(guardado);
+      if (obj && Object.keys(obj).length) return obj;
+    }
+  } catch (e) { Logger.log('MODELOS_PAGAMENTO inválido: ' + e); }
+  return CONFIG.MODELOS_PAGAMENTO;
+}
+
 function gerarDocumentosPagamento(token, tipo, competencia, quais) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
   try {
     const leitura = lerProcessoPagamento(token, tipo, competencia);
     if (!leitura.ok) return leitura;
-    const modelos = CONFIG.MODELOS_PAGAMENTO[tipo];
+    const modelos = _modelosPagamento_()[tipo];
     if (!modelos) return { ok: false, erro: 'Modelos não configurados para ' + tipo + '.' };
     const escolhidos = Object.keys(modelos).filter(n => !quais || !quais.length || quais.indexOf(n) >= 0);
     if (!escolhidos.length) return { ok: false, erro: 'Escolha ao menos um documento.' };
