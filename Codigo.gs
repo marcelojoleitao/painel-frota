@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.36.0';
+const CODIGO_VERSAO = '2.36.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -2809,6 +2809,62 @@ function migrarDadosGlosa() {
   Logger.log('Migração concluída: ' + (linhasAnp.length - 1) + ' linhas no ' + CONFIG.ABA_ANP +
              ' e ' + nResumo + ' competências no ' + CONFIG.ABA_RESUMO_GLOSA + '. A planilha antiga pode ser arquivada.');
   return 'Migrado.';
+}
+
+
+/**
+ * Refaz a migração do histórico de glosa da planilha antiga para o ResumoGlosa
+ * da planilha-mãe. Rode sem argumento para apenas conferir o que seria trazido:
+ *     migrarResumoGlosa()        → só mostra
+ *     migrarResumoGlosa(true)    → grava
+ * Aceita a competência como data ou texto e o valor em qualquer coluna à direita.
+ */
+function migrarResumoGlosa(aplicar) {
+  const origem = SpreadsheetApp.openById(CONFIG.ID_GLOSA_ANTIGA);
+  const aba = origem.getSheetByName('Resumo Glosa');
+  if (!aba) { Logger.log('Aba "Resumo Glosa" não encontrada na planilha antiga.'); return; }
+  const valores = aba.getDataRange().getValues();
+  Logger.log('Aba lida: ' + valores.length + ' linha(s), ' + (valores[0] ? valores[0].length : 0) + ' coluna(s).');
+
+  const pares = [];
+  valores.forEach((l, i) => {
+    // procura, em qualquer coluna, algo que seja competência; o valor é o
+    // primeiro número à direita dela
+    for (let c = 0; c < l.length; c++) {
+      const comp = _compSegura_(l[c]);
+      if (!comp) continue;
+      let valor = 0;
+      for (let d = c + 1; d < l.length; d++) {
+        const n = _num_(l[d]);
+        if (n !== null && n !== '' && !isNaN(n) && String(l[d]).trim() !== '') { valor = n; break; }
+      }
+      pares.push({ comp: comp, valor: valor || 0, linha: i + 1 });
+      break;
+    }
+  });
+
+  const vistos = {}, limpos = [];
+  pares.forEach(p => { if (!vistos[p.comp]) { vistos[p.comp] = true; limpos.push(p); } });
+  limpos.sort((a, b) => (a.comp.substring(3) + a.comp.substring(0, 2)).localeCompare(b.comp.substring(3) + b.comp.substring(0, 2)));
+
+  Logger.log('Competências reconhecidas: ' + limpos.length);
+  limpos.slice(0, 8).forEach(p => Logger.log('   ' + p.comp + ' → ' + _moedaBR_(p.valor) + ' (linha ' + p.linha + ')'));
+  if (limpos.length > 8) Logger.log('   … e mais ' + (limpos.length - 8));
+  const total = limpos.reduce((s, p) => s + p.valor, 0);
+  Logger.log('Soma do histórico: ' + _moedaBR_(total));
+
+  if (!aplicar) { Logger.log('Nada gravado. Rode migrarResumoGlosa(true) para escrever na planilha-mãe.'); return; }
+  const destino = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  let alvo = destino.getSheetByName(CONFIG.ABA_RESUMO_GLOSA);
+  if (alvo) destino.deleteSheet(alvo);
+  alvo = destino.insertSheet(CONFIG.ABA_RESUMO_GLOSA);
+  alvo.getRange(1, 1, 1, 2).setValues([['Competência', 'Valor da Glosa']]);
+  if (limpos.length) alvo.getRange(2, 1, limpos.length, 2).setValues(limpos.map(p => [p.comp, p.valor]));
+  alvo.setFrozenRows(1);
+  SpreadsheetApp.flush();
+  limparCache();
+  Logger.log(limpos.length + ' competência(s) gravada(s) em ' + CONFIG.ABA_RESUMO_GLOSA + '.');
+  return limpos.length + ' competências';
 }
 
 /** Tetos da ANP no formato { 'MM/AAAA|UF|PRODUTO': preçoMáximo }. */
