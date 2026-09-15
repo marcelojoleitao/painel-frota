@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.34.2';
+const CODIGO_VERSAO = '2.35.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1831,12 +1831,7 @@ function _guardarNotaFiscal_(arquivo, tipo, competencia, numeroNf) {
     const comp = String(competencia || '').replace('/', '-') || 'sem-competencia';
     const nome = 'NF ' + tipo + ' ' + comp + (numeroNf ? ' - ' + numeroNf : '') + '.pdf';
     // remove versões anteriores da mesma competência, qualquer que seja o número da nota
-    const prefixo = 'NF ' + tipo + ' ' + comp;
-    const existentes = pasta.getFiles();
-    while (existentes.hasNext()) {
-      const f = existentes.next();
-      if (f.getName().indexOf(prefixo) === 0) { try { f.setTrashed(true); } catch (e) {} }
-    }
+    _descartarPorPrefixo_(pasta, 'NF ' + tipo + ' ' + comp);
     const blob = Utilities.newBlob(Utilities.base64Decode(arquivo.base64), 'application/pdf', nome);
     const arq = pasta.createFile(blob);
     try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
@@ -4471,8 +4466,8 @@ function gerarDocumentosPagamento(token, tipo, competencia, quais) {
 
     escolhidos.forEach(nomeModelo => {
       const novoNome = nomeModelo + ' - ' + competencia;
-      const antigos = pasta.getFilesByName(novoNome);
-      while (antigos.hasNext()) { try { antigos.next().setTrashed(true); } catch (e) {} }
+      // substitui qualquer versão anterior da mesma competência
+      const substituidos = _descartarPorPrefixo_(pasta, nomeModelo + ' - ' + competencia);
       const copia = DriveApp.getFileById(modelos[nomeModelo]).makeCopy(novoNome, pasta);
       const doc = DocumentApp.openById(copia.getId());
       const corpo = doc.getBody();
@@ -4480,12 +4475,30 @@ function gerarDocumentosPagamento(token, tipo, competencia, quais) {
       const ajustadas = _preencherTabelas_(corpo, leitura.resumo, leitura.serie);
       doc.saveAndClose();
       try { copia.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
-      gerados.push({ nome: novoNome, url: copia.getUrl(), celulas: ajustadas });
+      gerados.push({ nome: novoNome, url: copia.getUrl(), celulas: ajustadas, substituidos: substituidos });
     });
 
     _logAcao_(p.ss, p.sessao.email, 'Gerar documentos ' + tipo, '', competencia, gerados.map(g => g.nome).join(' | '));
     return { ok: true, gerados: gerados, parametros: Object.keys(parametros).length };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/**
+ * Manda para a lixeira os arquivos da pasta cujo nome começa com o prefixo.
+ * getFilesByName exige nome exato; como os nomes trazem data ou número da NF,
+ * a varredura por prefixo é o que realmente substitui a versão anterior.
+ */
+function _descartarPorPrefixo_(pasta, prefixo, manterId) {
+  let descartados = 0;
+  try {
+    const arquivos = pasta.getFiles();
+    while (arquivos.hasNext()) {
+      const f = arquivos.next();
+      if (manterId && f.getId() === manterId) continue;
+      if (f.getName().indexOf(prefixo) === 0) { try { f.setTrashed(true); descartados++; } catch (e) {} }
+    }
+  } catch (e) { Logger.log('Descarte por prefixo: ' + e); }
+  return descartados;
 }
 
 /** Valor por extenso em reais (portado da planilha de pagamentos). */
@@ -5063,10 +5076,7 @@ function gerarDefesaMulta(token, linha) {
     const pasta = DriveApp.getFolderById(CONFIG.PASTA_DEFESAS);
     const nome = 'Defesa ' + numeroAI + ' - ' + Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy');
     // substitui a defesa anterior da mesma multa, em vez de acumular
-    ['Defesa ' + numeroAI, nome].forEach(prefixo => {
-      const antigos = pasta.getFilesByName(prefixo);
-      while (antigos.hasNext()) { try { antigos.next().setTrashed(true); } catch (e) {} }
-    });
+    const substituidas = _descartarPorPrefixo_(pasta, 'Defesa ' + numeroAI);
     const linkAnterior = String(dados[MULTAS.colLinkDefesa - 1] || '');
     const idAnterior = (linkAnterior.match(/\/d\/([\w-]{20,})/) || [])[1];
     if (idAnterior) { try { DriveApp.getFileById(idAnterior).setTrashed(true); } catch (e) {} }
@@ -5084,7 +5094,7 @@ function gerarDefesaMulta(token, linha) {
     }
     SpreadsheetApp.flush();
     _logAcao_(p.ss, p.sessao.email, 'Gerar defesa', placa, numeroAI, url);
-    return { ok: true, url: url, nome: nome, parametros: parametros };
+    return { ok: true, url: url, nome: nome, parametros: parametros, substituidas: substituidas };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 

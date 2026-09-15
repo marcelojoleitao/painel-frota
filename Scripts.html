@@ -3123,7 +3123,7 @@ function gerarDocsProcesso(tipo, competencia) {
       if (status) status.textContent = r.parametros + ' parâmetros aplicados.';
       if (resultado) resultado.innerHTML = r.gerados.map(g => `<div style="margin-top:8px">
         <a class="btn claro" href="${escAttr(g.url)}" target="_blank" rel="noopener" style="text-decoration:none; width:100%; justify-content:flex-start">${icoPdf()} ${esc(g.nome)}</a>
-        <div class="cartao-dica" style="margin:2px 0 0">${g.celulas} célula(s) de tabela preenchida(s)</div></div>`).join('');
+        <div class="cartao-dica" style="margin:2px 0 0">${g.celulas} célula(s) de tabela preenchida(s)${g.substituidos ? ` • ${g.substituidos} versão(ões) anterior(es) para a lixeira` : ''}</div></div>`).join('');
       toast(r.gerados.length + ' documento(s) gerado(s) na pasta do Drive.');
     },
     e => { btn.disabled = false; btn.textContent = 'Gerar documentos'; if (status) status.textContent = ''; falhaNoCartao('docs-result', e); });
@@ -3439,7 +3439,7 @@ function gerarDefesa(linha, botao) {
     r => {
       if (botao) { botao.disabled = false; botao.textContent = 'gerar'; }
       if (!r || !r.ok) { toast((r && r.erro) || 'Falha ao gerar a defesa.', true); return; }
-      toast('Defesa gerada: ' + r.nome);
+      toast('Defesa gerada: ' + r.nome + (r.substituidas ? ' (substituiu ' + r.substituidas + ' anterior)' : ''));
       window.open(r.url, '_blank');
       const alvo = ESTADO.multas.multas.find(x => x.linha === linha);
       if (alvo) { alvo.linkDefesa = r.url; if (!alvo.dataDefesa) alvo.dataDefesa = new Date().toLocaleDateString('pt-BR'); }
