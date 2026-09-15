@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.27.0';
+const VERSAO_PAINEL = '2.27.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -3340,6 +3340,16 @@ function abrirFormMulta(linha) {
         <label>${esc(rotulo)}</label>
         <select data-m><option value=""></option>${opcoes.map(o => `<option value="${escAttr(o.valor)}" ${o.valor === valor || o.sigla === valor ? 'selected' : ''}>${esc(o.nome)}</option>`).join('')}</select></div>`;
     }
+    if (tipo === 'opcoes') {   // lista fechada vinda da base de dados
+      const tem = opcoes.some(o => o === valor);
+      return `<div class="form-campo ${chave === 'enquadramento' ? 'largo' : ''}" data-campo="${chave}">
+        <label>${esc(rotulo)} <span style="color:var(--tinta-suave); font-weight:500">${opcoes.length} opção(ões)</span></label>
+        <select data-m>
+          <option value="">— selecione —</option>
+          ${opcoes.map(o => `<option value="${escAttr(o)}" ${o === valor ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+          ${valor && !tem ? `<option value="${escAttr(valor)}" selected>${esc(valor)} (fora da lista)</option>` : ''}
+        </select></div>`;
+    }
     if (tipo === 'lista') {
       return `<div class="form-campo" data-campo="${chave}">
         <label>${esc(rotulo)}</label>
@@ -3354,12 +3364,12 @@ function abrirFormMulta(linha) {
       ${campo('tipo', 'select', dados.tipos.map(t => ({ valor: t.sigla, sigla: t.sigla, nome: t.nome })))}
       ${campo('dataInfracao')}${campo('ai')}${campo('aiOriginario')}
       ${campo('placa', 'lista', dados.bases.outrasVtrs.map(o => o.placa).concat(ESTADO.veiculos.map(v => v.placa)))}
-      ${campo('orgao', 'lista', dados.bases.orgaos.map(o => o.orgao))}
-      ${campo('enquadramento', 'lista', dados.bases.enquadramentos.map(e => e.enquadramento))}
+      ${campo('orgao', 'opcoes', dados.bases.orgaos.map(o => o.orgao))}
+      ${campo('enquadramento', 'opcoes', dados.bases.enquadramentos.map(e => e.enquadramento))}
     </div>`) +
     secao('Processo', `<div class="form-grade">
       ${campo('processo')}${campo('protocolo')}${campo('dataDefesa')}
-      ${campo('status', 'lista', dados.bases.status)}${campo('observacoes')}
+      ${campo('status', 'opcoes', dados.bases.status)}${campo('observacoes')}
     </div>`) +
     (m ? blocoViaturaMulta(m) : '');
 

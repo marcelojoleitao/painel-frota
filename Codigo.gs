@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.27.0';
+const CODIGO_VERSAO = '2.27.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4223,16 +4223,18 @@ function _basesMultas_(ss) {
     const c = re => cab.findIndex(x => re.test(x));
     const iStatus = c(/^STATUS$/), iEnq = c(/^ENQUADRAMENTO$/), iDesc = c(/DESCRICAO/),
           iModelo = c(/DOCUMENTO MODELO/), iOrgao = c(/^ORGAO$/), iGestor = c(/^GESTOR$/);
+    // cada coluna tem a sua própria quantidade de itens; lemos todas as linhas
+    // da aba e ignoramos apenas as células vazias, sem parar na primeira lacuna.
     for (let r = linhaCab + 1; r < valores.length; r++) {
       const l = valores[r];
       const st = iStatus >= 0 ? String(l[iStatus] || '').trim() : '';
-      if (st) bases.status.push(st);
+      if (st && bases.status.indexOf(st) < 0) bases.status.push(st);
       const enq = iEnq >= 0 ? String(l[iEnq] || '').trim() : '';
-      if (enq) bases.enquadramentos.push({ enquadramento: enq,
+      if (enq && !bases.enquadramentos.some(x => x.enquadramento === enq)) bases.enquadramentos.push({ enquadramento: enq,
         descricao: iDesc >= 0 ? String(l[iDesc] || '').trim() : '',
         modelo: iModelo >= 0 ? String(l[iModelo] || '').trim() : '' });
       const org = iOrgao >= 0 ? String(l[iOrgao] || '').trim() : '';
-      if (org) bases.orgaos.push({ orgao: org, gestor: iGestor >= 0 ? String(l[iGestor] || '').trim() : '' });
+      if (org && !bases.orgaos.some(x => x.orgao === org)) bases.orgaos.push({ orgao: org, gestor: iGestor >= 0 ? String(l[iGestor] || '').trim() : '' });
     }
     bases._aba = aba.getName();
     bases._cols = { linhaCab: linhaCab + 1, status: iStatus + 1, enq: iEnq + 1, desc: iDesc + 1, modelo: iModelo + 1, orgao: iOrgao + 1, gestor: iGestor + 1 };
