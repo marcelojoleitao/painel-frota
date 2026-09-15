@@ -2346,13 +2346,13 @@ function desenharResultadoImportacao(id, r) {
       ${c.reembolsoMaoObra ? dado('Mão de obra', esc(c.reembolsoMaoObra)) : ''}
       ${c.outrosValor ? dado('Outros itens', fmtMoeda(c.outrosValor), 'alerta-txt') : ''}
       ${dado('Emissão', esc(c.dataEmissao || '—'))}${dado('Vencimento', esc(c.vencimento || '—'))}
-      ${dado('Competência', esc(c.competencia || '—'))}${r.linha ? dado('Linha gravada', r.linha, 'ok-txt') : ''}</div>` +
+      ${dado('Competência', esc(c.competencia || '—'))}${r.linha ? dado(r.atualizou ? 'Linha atualizada' : 'Linha criada', r.linha, 'ok-txt') : ''}</div>` +
       (r.conferencia ? `<div class="cartao-dica" style="${r.conferencia.confere ? '' : 'border-left:3px solid var(--vermelho)'}">
          ${r.conferencia.confere ? '✓ Itens conferem com o total da nota' : '⚠ Os itens somam ' + fmtMoeda(r.conferencia.soma) + ' e o total é ' + fmtMoeda(r.conferencia.total)}
          ${r.conferencia.itens.length ? '<br>Além de peças e mão de obra: ' + esc(r.conferencia.itens.join(' · ')) + ' — gravado em Outros Descontos.' : ''}
        </div>` : '') +
       (r.linkNota ? `<a class="btn claro" href="${escAttr(r.linkNota)}" target="_blank" rel="noopener" style="margin-top:8px; text-decoration:none">${icoPdf()} Abrir a nota guardada</a>` : '');
-    toast('Título ' + (c.titulo || '') + ' gravado.');
+    toast('Título ' + (c.titulo || '') + (r.atualizou ? ' atualizado na linha ' + r.linha + '.' : ' gravado em nova linha.'));
   } else {
     html = `<div class="grade-dados" style="margin-top:10px">
       ${r.lidos !== undefined ? dado('Lidos', fmtInt(r.lidos)) : ''}

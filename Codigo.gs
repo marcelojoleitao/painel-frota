@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.35.0';
+const CODIGO_VERSAO = '2.36.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1859,6 +1859,30 @@ function _gravarLinkNota_(aba, linha, link) {
   } catch (e) { Logger.log('Link da NF não gravado: ' + e); return ''; }
 }
 
+/**
+ * Onde gravar o título: se a competência (ou o número do título) já existir,
+ * devolve a linha dela para ser atualizada; caso contrário, a primeira livre.
+ */
+function _linhaDoTitulo_(aba, tipo, competencia, numeroTitulo) {
+  const def = PROC[tipo];
+  const cab = _cabTitulos_(aba, def);
+  const nLin = aba.getLastRow();
+  if (nLin > cab.linha) {
+    const nCols = Math.max(_colunasTitulos_(def), aba.getLastColumn());
+    const valores = aba.getRange(cab.linha + 1, 1, nLin - cab.linha, nCols).getValues();
+    const comp = _formatarCompetencia_(competencia || '', false);
+    const titulo = String(numeroTitulo || '').replace(/\D/g, '');
+    for (let i = 0; i < valores.length; i++) {
+      const linhaComp = _compSegura_(valores[i][cab.col.competencia]);
+      const linhaTit = String(valores[i][cab.col.titulo] || '').replace(/\D/g, '');
+      if ((comp && linhaComp === comp) || (titulo && linhaTit && linhaTit === titulo)) {
+        return { linha: cab.linha + 1 + i, existente: true, porTitulo: !!(titulo && linhaTit === titulo) };
+      }
+    }
+  }
+  return { linha: _primeiraLinhaVaziaNaColuna_(aba, 1, 3), existente: false };
+}
+
 /** PDF da NF de abastecimento → aba "Títulos Abast." (A:G + R). */
 function importarTituloAbast(token, arquivo) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
@@ -1872,15 +1896,16 @@ function importarTituloAbast(token, arquivo) {
     if (!c.titulo) return { ok: false, erro: 'Não localizei o Nº do Título (TITULO NRO.) no PDF.' };
     const aba = SpreadsheetApp.openById(CONFIG.ID_TITULOS).getSheetByName(CONFIG.ABA_TIT_ABAST);
     if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_TIT_ABAST + '" não encontrada.' };
-    const linha = _primeiraLinhaVaziaNaColuna_(aba, 1, 3);
+    const destinoLinha = _linhaDoTitulo_(aba, 'Abastecimento', c.competencia, c.titulo);
+    const linha = destinoLinha.linha;
     aba.getRange(linha, 1, 1, 7).setValues([[c.titulo, c.numeroNfse, _parseNumeroBR_(c.valorTotal), '',
       _parseDataBR_(c.dataEmissao), _parseDataBR_(c.vencimento), _formatarCompetencia_(c.competencia, false)]]);
     aba.getRange(linha, 18).setValue(String(c.chave || ''));
     const linkNota = _guardarNotaFiscal_(arquivo, 'Abastecimento', c.competencia, c.numeroNfse);
     _gravarLinkNota_(aba, linha, linkNota);
     SpreadsheetApp.flush(); limparCache();
-    _logAcao_(p.ss, p.sessao.email, 'Importar título abastecimento', '', 'Título ' + c.titulo, 'NF ' + c.numeroNfse + ' | ' + c.valorTotal + ' | comp. ' + c.competencia);
-    return { ok: true, linha: linha, campos: c, linkNota: linkNota };
+    _logAcao_(p.ss, p.sessao.email, (destinoLinha.existente ? 'Atualizar' : 'Importar') + ' título abastecimento', '', 'Título ' + c.titulo, 'NF ' + c.numeroNfse + ' | ' + c.valorTotal + ' | comp. ' + c.competencia);
+    return { ok: true, linha: linha, campos: c, linkNota: linkNota, atualizou: destinoLinha.existente };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
 }
 
@@ -1897,7 +1922,8 @@ function importarTituloManut(token, arquivo) {
     if (!c.titulo) return { ok: false, erro: 'Não localizei o Nº do Título (TITULO NRO.) no PDF.' };
     const aba = SpreadsheetApp.openById(CONFIG.ID_TITULOS).getSheetByName(CONFIG.ABA_TIT_MANUT);
     if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_TIT_MANUT + '" não encontrada.' };
-    const linha = _primeiraLinhaVaziaNaColuna_(aba, 1, 3);
+    const destinoLinha = _linhaDoTitulo_(aba, 'Manutenção', c.competencia, c.titulo);
+    const linha = destinoLinha.linha;
     aba.getRange(linha, 1, 1, 5).setValues([[c.titulo, c.numeroNfse, _parseNumeroBR_(c.valorTotal),
       _parseNumeroBR_(c.reembolsoPecas), _parseNumeroBR_(c.reembolsoMaoObra)]]);   // F e G são fórmulas
     // terceiro item da nota (juros/acerto) vai para Outros Descontos
@@ -1911,8 +1937,8 @@ function importarTituloManut(token, arquivo) {
     const linkNota = _guardarNotaFiscal_(arquivo, 'Manutenção', c.competencia, c.numeroNfse);
     _gravarLinkNota_(aba, linha, linkNota);
     SpreadsheetApp.flush(); limparCache();
-    _logAcao_(p.ss, p.sessao.email, 'Importar título manutenção', '', 'Título ' + c.titulo, 'NF ' + c.numeroNfse + ' | peças ' + c.reembolsoPecas + ' | MO ' + c.reembolsoMaoObra);
-    return { ok: true, linha: linha, campos: c, linkNota: linkNota, conferencia: _conferirNf_(c) };
+    _logAcao_(p.ss, p.sessao.email, (destinoLinha.existente ? 'Atualizar' : 'Importar') + ' título manutenção', '', 'Título ' + c.titulo, 'NF ' + c.numeroNfse + ' | peças ' + c.reembolsoPecas + ' | MO ' + c.reembolsoMaoObra);
+    return { ok: true, linha: linha, campos: c, linkNota: linkNota, conferencia: _conferirNf_(c), atualizou: destinoLinha.existente };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
 }
 
