@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.32.0';
+const CODIGO_VERSAO = '2.33.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -309,7 +309,8 @@ function carregarDados(token, forcarAtualizacao) {
       meta: {
         atualizadoEm: Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm'),
         statusOcultosPadrao: CONFIG.STATUS_OCULTOS_PADRAO,
-        versaoCodigo: CODIGO_VERSAO
+        versaoCodigo: CODIGO_VERSAO,
+        pgfAtualizado: _pgfAtualizado_()
       }
     };
     if (CONFIG.CACHE_SEG > 0) _cacheGravar_(chave, payload, CONFIG.CACHE_SEG);
@@ -318,6 +319,7 @@ function carregarDados(token, forcarAtualizacao) {
 
   payload.usuario = { email: sessao.email, nome: sessao.nome || '', lotacao: sessao.lotacao || '', admin: !!sessao.admin };
   payload.meta.versaoCodigo = CODIGO_VERSAO;   // mesmo vindo do cache, informa a versão em execução
+  payload.meta.pgfAtualizado = _pgfAtualizado_();
   if (!sessao.admin) { payload.solicitacoes = []; payload.edicao = null; }
   else {
     try {
@@ -4511,6 +4513,97 @@ function reaisPorExtenso(valor) {
   const r = reais === 0 ? '' : porExtenso(reais) + (reais === 1 ? ' real' : ' reais');
   const c = centavos === 0 ? '' : porExtenso(centavos) + (centavos === 1 ? ' centavo' : ' centavos');
   return r + (c ? (r ? ' e ' : '') + c : '');
+}
+
+
+/* ============================================================
+   PGF — Programa de Gerenciamento da Frota (dados de Brasília)
+   ============================================================ */
+
+/**
+ * Atualiza a aba PGF da planilha-mãe a partir de outra planilha.
+ * Uso no editor:
+ *     atualizarPGF('https://docs.google.com/spreadsheets/d/XXXX/edit')
+ *     atualizarPGF('XXXX', 'Nome da aba')      // se houver mais de uma aba
+ *
+ * Como funciona: lê o cabeçalho da aba PGF (linha 2, colunas B a P), procura
+ * na planilha de origem colunas com o mesmo nome (ignorando maiúsculas e
+ * acentos), limpa B3:P e grava os dados na ordem daqui. Coluna sem
+ * correspondência fica vazia. A coluna A não é tocada, por ser fórmula.
+ */
+function atualizarPGF(urlOuId, nomeAba) {
+  const id = _idDePlanilha_(urlOuId);
+  if (!id) throw new Error('Informe o link ou o ID da planilha de origem.');
+  const origem = SpreadsheetApp.openById(id);
+  const abaOrigem = nomeAba ? origem.getSheetByName(nomeAba) : origem.getSheets()[0];
+  if (!abaOrigem) throw new Error('Aba "' + nomeAba + '" não encontrada na origem.');
+
+  const destino = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName('PGF');
+  if (!destino) throw new Error('Aba PGF não encontrada na planilha-mãe.');
+
+  const PRIMEIRA_COL = 2, ULTIMA_COL = 16, LINHA_CAB = 2, PRIMEIRA_LINHA = 3;   // B..P
+  const largura = ULTIMA_COL - PRIMEIRA_COL + 1;
+  const cabDestino = destino.getRange(LINHA_CAB, PRIMEIRA_COL, 1, largura).getValues()[0].map(c => String(c || '').trim());
+
+  // cabeçalho da origem: primeira linha (até a 6ª) que tenha PLACA
+  const varredura = abaOrigem.getRange(1, 1, Math.min(6, abaOrigem.getLastRow()), abaOrigem.getLastColumn()).getValues();
+  let linhaCabOrigem = -1;
+  for (let i = 0; i < varredura.length; i++) {
+    if (varredura[i].some(c => _normCab_(c) === 'PLACA')) { linhaCabOrigem = i; break; }
+  }
+  if (linhaCabOrigem < 0) throw new Error('Não encontrei a linha de cabeçalho (com "PLACA") na planilha de origem.');
+  const cabOrigem = varredura[linhaCabOrigem].map(c => _normCab_(c));
+
+  // de qual coluna da origem vem cada coluna do destino
+  const mapa = cabDestino.map(nome => {
+    if (!nome) return -1;
+    const alvo = _normCab_(nome);
+    let i = cabOrigem.indexOf(alvo);
+    if (i < 0) i = cabOrigem.findIndex(c => c && (c.indexOf(alvo) === 0 || alvo.indexOf(c) === 0));
+    return i;
+  });
+
+  const nLinhas = abaOrigem.getLastRow() - (linhaCabOrigem + 1);
+  if (nLinhas < 1) throw new Error('A planilha de origem não tem dados abaixo do cabeçalho.');
+  const dadosOrigem = abaOrigem.getRange(linhaCabOrigem + 2, 1, nLinhas, abaOrigem.getLastColumn()).getValues();
+
+  const linhas = [];
+  dadosOrigem.forEach(l => {
+    const saida = mapa.map(i => (i >= 0 ? l[i] : ''));
+    if (saida.some(v => String(v).trim() !== '')) linhas.push(saida);
+  });
+
+  // limpa B3:P e grava
+  const ultimaAtual = Math.max(destino.getLastRow(), PRIMEIRA_LINHA);
+  destino.getRange(PRIMEIRA_LINHA, PRIMEIRA_COL, ultimaAtual - PRIMEIRA_LINHA + 1, largura).clearContent();
+  if (linhas.length) destino.getRange(PRIMEIRA_LINHA, PRIMEIRA_COL, linhas.length, largura).setValues(linhas);
+  SpreadsheetApp.flush();
+
+  const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy');
+  PropertiesService.getScriptProperties().setProperty('PGF_ATUALIZADO', agora);
+  limparCache();
+
+  Logger.log('Origem: ' + origem.getName() + ' / ' + abaOrigem.getName() + ' (cabeçalho na linha ' + (linhaCabOrigem + 1) + ')');
+  cabDestino.forEach((nome, i) => {
+    if (!nome) return;
+    Logger.log('   ' + _letraColuna_(PRIMEIRA_COL + i) + ' ' + nome + ' ← ' +
+      (mapa[i] >= 0 ? 'coluna ' + _letraColuna_(mapa[i] + 1) + ' da origem' : 'SEM CORRESPONDÊNCIA (ficou vazia)'));
+  });
+  Logger.log(linhas.length + ' linha(s) gravada(s). Atualização registrada em ' + agora + '.');
+  return linhas.length + ' linha(s) atualizada(s) em ' + agora;
+}
+
+/** Aceita link completo ou só o ID da planilha. */
+function _idDePlanilha_(t) {
+  const s = String(t || '').trim();
+  const m = s.match(/\/d\/([\w-]{20,})/);
+  if (m) return m[1];
+  return /^[\w-]{20,}$/.test(s) ? s : '';
+}
+
+/** Data da última atualização do PGF, para o painel exibir. */
+function _pgfAtualizado_() {
+  try { return PropertiesService.getScriptProperties().getProperty('PGF_ATUALIZADO') || ''; } catch (e) { return ''; }
 }
 
 /* ============================================================

@@ -1004,7 +1004,8 @@ function iniciar(dados) {
   ESTADO.veiculos = dados.veiculos || [];
   ESTADO.usuario = dados.usuario || {}; ESTADO.admin = !!(dados.usuario && dados.usuario.admin);
   txt('meta-usuario', (primeiroNome(ESTADO.usuario.nome) || ESTADO.usuario.email || '') + (ESTADO.usuario.lotacao ? ' • ' + ESTADO.usuario.lotacao : '') + (ESTADO.admin ? ' • administrador' : ''));
-  txt('meta-atualizado', 'Dados de ' + dados.meta.atualizadoEm + (dados.meta.doCache ? ' (cache)' : '') + ' • v' + VERSAO_PAINEL);
+  txt('meta-atualizado', 'Dados de ' + dados.meta.atualizadoEm + (dados.meta.doCache ? ' (cache)' : '') +
+    (dados.meta.pgfAtualizado ? ' • PGF de ' + dados.meta.pgfAtualizado : '') + ' • v' + VERSAO_PAINEL);
   document.querySelectorAll('.so-admin').forEach(e => e.classList.toggle('oculto', !ESTADO.admin));
   indexarPdfs(dados.pdfsOS || []);
   if (!ESTADO.colunasVisiveis) ESTADO.colunasVisiveis = new Set(COLUNAS.filter(c => c.on).map(c => c.k));
