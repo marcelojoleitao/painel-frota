@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.29.1';
+const CODIGO_VERSAO = '2.30.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3775,7 +3775,8 @@ const PROC = {
       ['Processo', ['sei', 'notaPagamento', 'seiNF', 'seiAtesto', 'seiRelatorio', 'seiRelGlosa', 'seiIMR']]
     ],
     dinheiro: ['bruto', 'desconto', 'glosaIMR', 'glosaPrecos', 'outrosDescontos', 'juros'],
-    opcionais: { outrosDescontos: 'Outros Descontos' }
+    opcionais: { outrosDescontos: 'Outros Descontos' },
+    colunaReserva: {}
   },
   'Manutenção': {
     aba: 'Títulos Manut.', cols: 19,
@@ -3796,9 +3797,16 @@ const PROC = {
       ['Processo', ['sei', 'notaPagamento', 'seiNF', 'seiAtesto', 'seiRelatorio', 'seiIMR']]
     ],
     dinheiro: ['bruto', 'pecas', 'mo', 'pecasAcid', 'moAcid', 'glosaIMR', 'outrosDescontos', 'juros'],
-    opcionais: { outrosDescontos: 'Outros Descontos' }
+    opcionais: { outrosDescontos: 'Outros Descontos' },
+    colunaReserva: { outrosDescontos: 20 }   // coluna T da aba Títulos Manut.
   }
 };
+
+function _colunasTitulos_(def) {
+  let n = def.cols;
+  Object.keys(def.colunaReserva || {}).forEach(k => { n = Math.max(n, def.colunaReserva[k]); });
+  return n;
+}
 
 function _abaTitulos_(tipo) {
   const def = PROC[tipo];
@@ -3810,15 +3818,27 @@ function _abaTitulos_(tipo) {
 
 /** Linha de cabeçalho (é a 2 nas duas abas, mas procuramos por segurança). */
 function _cabTitulos_(aba, def) {
-  const valores = aba.getRange(1, 1, Math.min(6, aba.getLastRow()), def.cols).getValues();
+  const valores = aba.getRange(1, 1, Math.min(6, aba.getLastRow()), Math.max(_colunasTitulos_(def), aba.getLastColumn())).getValues();
   for (let i = 0; i < valores.length; i++) {
     if (valores[i].some(c => String(c).trim() === 'Título')) {
       const cab = valores[i].map(c => String(c || '').trim());
+      const chave = t => _normCab_(t);
+      const normalizado = cab.map(chave);
+      const achar = rotulo => {
+        const exato = cab.indexOf(rotulo);
+        if (exato >= 0) return exato;
+        return normalizado.indexOf(chave(rotulo));    // ignora maiúsculas e acentos
+      };
       const col = {};
-      Object.keys(def.campos).forEach(k => { col[k] = cab.indexOf(def.campos[k]); });
+      Object.keys(def.campos).forEach(k => { col[k] = achar(def.campos[k]); });
       Object.keys(def.opcionais || {}).forEach(k => {
-        const c = cab.indexOf(def.opcionais[k]);
-        if (c >= 0) col[k] = c;                    // só existe se a coluna estiver na planilha
+        let c = achar(def.opcionais[k]);
+        // reserva: coluna conhecida, usada quando o cabeçalho estiver escrito de outro jeito
+        if (c < 0 && def.colunaReserva && def.colunaReserva[k]) {
+          const fixa = def.colunaReserva[k] - 1;
+          if (fixa < cab.length && (!cab[fixa] || /desconto/i.test(cab[fixa]))) c = fixa;
+        }
+        if (c >= 0) col[k] = c;
       });
       return { linha: i + 1, cab: cab, col: col };
     }
@@ -3853,7 +3873,8 @@ function lerProcessoPagamento(token, tipo, competencia) {
     const { def, aba } = _abaTitulos_(tipo);
     const cab = _cabTitulos_(aba, def);
     const nLin = aba.getLastRow();
-    const valores = aba.getRange(cab.linha + 1, 1, Math.max(1, nLin - cab.linha), def.cols).getValues();
+    const nCols = Math.max(_colunasTitulos_(def), aba.getLastColumn());
+    const valores = aba.getRange(cab.linha + 1, 1, Math.max(1, nLin - cab.linha), nCols).getValues();
     const comps = [];
     let linhaAlvo = -1, dados = null;
 
@@ -3942,7 +3963,7 @@ function salvarTituloPagamento(token, tipo, competencia, campos) {
     const { def, aba } = _abaTitulos_(tipo);
     const cab = _cabTitulos_(aba, def);
     const nLin = aba.getLastRow();
-    const valores = aba.getRange(cab.linha + 1, 1, Math.max(1, nLin - cab.linha), def.cols).getValues();
+    const valores = aba.getRange(cab.linha + 1, 1, Math.max(1, nLin - cab.linha), Math.max(_colunasTitulos_(def), aba.getLastColumn())).getValues();
     let linha = -1;
     valores.forEach((l, i) => { if (_compSegura_(l[cab.col.competencia]) === competencia) linha = cab.linha + 1 + i; });
     if (linha < 0) return { ok: false, erro: 'Competência não encontrada.' };
