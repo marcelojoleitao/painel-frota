@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.36.4';
+const CODIGO_VERSAO = '2.36.5';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4800,6 +4800,17 @@ function _idDePlanilha_(t) {
 function _pgfAtualizado_() {
   try { return PropertiesService.getScriptProperties().getProperty('PGF_ATUALIZADO') || ''; } catch (e) { return ''; }
 }
+
+
+/* ------------------------------------------------------------ */
+/*  Atalhos sem argumento — para aparecerem na lista do editor    */
+/* ------------------------------------------------------------ */
+
+/** Grava o histórico da glosa na planilha-mãe (equivale a migrarResumoGlosa(true)). */
+function migrarResumoGlosaGravar() { return migrarResumoGlosa(true); }
+
+/** Insere a linha "Outros descontos" nas tabelas dos termos de atesto. */
+function ajustarTabelasModelosPagamentoAplicar() { return ajustarTabelasModelosPagamento(true); }
 
 /* ============================================================
    MULTAS — acompanhamento dos processos e geração das defesas
