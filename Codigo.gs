@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.36.1';
+const CODIGO_VERSAO = '2.36.2';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -156,7 +156,16 @@ function doGet() {
   pagina = pagina.replace(/<\?!=\s*incluir\(\s*'([^']+)'\s*\);?\s*\?>/g, function (m, nome) { return _arquivoHtml_(nome); });
   // carimbo escrito pelo servidor: aparece mesmo que o JavaScript falhe
   Logger.log('doGet: ' + pagina.length + ' caracteres servidos (o código do painel vai à parte).');
-  const v = (pagina.match(/VERSAO_PAINEL\s*=\s*'([^']+)'/) || [])[1] || '?';
+  // O código do painel não vem mais dentro da página, então a versão da
+  // interface é lida do VERSAO.txt; se a leitura falhar, usamos a do servidor,
+  // que é sempre conhecida — nunca mais "v?".
+  let v = CODIGO_VERSAO;
+  try {
+    const t = _baixarDoGitHub_('VERSAO.txt');
+    if (t && /^\d+\.\d+/.test(String(t).trim())) v = String(t).trim();
+  } catch (e) { Logger.log('Versão da interface não lida: ' + e); }
+  const naPagina = (pagina.match(/VERSAO_PAINEL\s*=\s*'([^']+)'/) || [])[1];
+  if (naPagina) v = naPagina;
   const origem = (PropertiesService.getScriptProperties().getProperty('HTML_ORIGEM') || HTML_ORIGEM_PADRAO) === 'github' ? 'GitHub' : 'projeto';
   pagina = pagina.replace(/\{\{VERSAO\}\}/g, 'v' + v + ' — ' + origem);
   return HtmlService.createHtmlOutput(pagina)
