@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.36.2';
+const CODIGO_VERSAO = '2.36.3';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -2830,8 +2830,21 @@ function migrarDadosGlosa() {
  */
 function migrarResumoGlosa(aplicar) {
   const origem = SpreadsheetApp.openById(CONFIG.ID_GLOSA_ANTIGA);
-  const aba = origem.getSheetByName('Resumo Glosa');
-  if (!aba) { Logger.log('Aba "Resumo Glosa" não encontrada na planilha antiga.'); return; }
+  const abas = origem.getSheets();
+  Logger.log('Abas da planilha antiga: ' + abas.map(a => a.getName()).join(' | '));
+  // procura pelo nome e, se não achar, pelo conteúdo ("Valor da Glosa")
+  let aba = abas.find(a => /RESUMO.*GLOSA/.test(_normCab_(a.getName())));
+  if (!aba) {
+    aba = abas.find(a => {
+      try {
+        if (a.getLastRow() < 2) return false;
+        const topo = a.getRange(1, 1, Math.min(5, a.getLastRow()), Math.min(4, a.getLastColumn())).getValues();
+        return topo.some(l => l.some(c => /VALOR DA GLOSA|RESUMO GLOSA/.test(_normCab_(c))));
+      } catch (e) { return false; }
+    });
+  }
+  if (!aba) { Logger.log('Não encontrei a aba do resumo da glosa — veja os nomes acima e me diga qual é.'); return; }
+  Logger.log('Aba usada: "' + aba.getName() + '"');
   const valores = aba.getDataRange().getValues();
   Logger.log('Aba lida: ' + valores.length + ' linha(s), ' + (valores[0] ? valores[0].length : 0) + ' coluna(s).');
 
