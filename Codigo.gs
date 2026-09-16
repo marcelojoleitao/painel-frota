@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.36.5';
+const CODIGO_VERSAO = '2.37.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1413,6 +1413,27 @@ function criarViatura(token, dados) {
  * O arquivo novo não apaga o antigo (histórico fica na pasta); o link da planilha
  * passa a apontar para o novo.
  */
+
+/** Devolve a foto atual em base64, para o navegador poder girá-la. */
+function obterFotoViatura(token, placa, angulo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
+    const alvo = _linhaDaPlaca_(aba, String(placa || '').trim().toUpperCase());
+    if (alvo.linha < 0) return { ok: false, erro: 'Placa não encontrada.' };
+    const campo = 'foto' + String(angulo || '').toUpperCase();
+    const idx = alvo.idx[campo];
+    if (idx === undefined) return { ok: false, erro: 'Ângulo inválido.' };
+    const url = String(aba.getRange(alvo.linha, idx + 1).getValue() || '');
+    const id = (url.match(/[-\w]{25,}/) || [])[0];
+    if (!id) return { ok: false, erro: 'Esta viatura não tem foto neste ângulo.' };
+    const blob = DriveApp.getFileById(id).getBlob();
+    const bytes = blob.getBytes();
+    if (bytes.length > 9 * 1024 * 1024) return { ok: false, erro: 'Imagem muito grande para girar pelo painel.' };
+    return { ok: true, base64: Utilities.base64Encode(bytes), tipoMime: blob.getContentType() || 'image/jpeg' };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
 function salvarFotoViatura(token, placa, angulo, base64, tipoMime) {
   const sessao = _sessao_(token);
   if (!sessao) return { expirado: true };

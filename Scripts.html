@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.36.5';
+const VERSAO_PAINEL = '2.37.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -1725,6 +1725,7 @@ function abrirFormViatura(placa) {
   cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
   document.body.style.overflow = 'hidden';
   const corpoEl = el('gaveta-corpo'); if (corpoEl) corpoEl.scrollTop = 0;
+  document.querySelectorAll('#gaveta-corpo button[data-girar]').forEach(b => b.addEventListener('click', () => girarFoto(placa, b.dataset.girar, b)));
   document.querySelectorAll('#gaveta-corpo .foto-slot input[type=file]').forEach(inp => inp.addEventListener('change', () => {
     if (inp.files && inp.files[0]) enviarFoto(placa, inp.dataset.ang, inp.files[0]);
     inp.value = '';
@@ -1805,8 +1806,11 @@ function secaoFotosEdicao(v, porCampo) {
     return `<div class="foto-slot" data-ang="${ang}">
       <div class="foto ${img ? '' : 'sem'}">${img ? `<img src="${escAttr(img)}" alt="${nomes[ang]}">` : nomes[ang] + '<br>sem foto'}<span class="rotulo">${nomes[ang]}</span></div>
       ${bloqueada ? `<div class="foto-data" title="${escAttr(info.motivo)}">coluna bloqueada por fórmula</div>` :
-        `<label class="btn claro foto-btn">${url ? 'Trocar' : 'Enviar'} foto
-          <input type="file" accept="image/*" capture="environment" class="oculto" data-ang="${ang}"></label>
+        `<div class="foto-acoes">
+          <label class="btn claro foto-btn">${url ? 'Trocar' : 'Enviar'} foto
+            <input type="file" accept="image/*" capture="environment" class="oculto" data-ang="${ang}"></label>
+          ${url ? `<button class="btn claro" data-girar="${ang}" title="Girar 90° à direita e salvar">⟳ Girar</button>` : ''}
+        </div>
         <div class="foto-data foto-status" id="foto-status-${ang}"></div>`}
     </div>`;
   }).join('');
@@ -3726,6 +3730,50 @@ function dataBR(valor) {
   m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (m) return m[3] + '/' + m[2] + '/' + m[1];
   return t;
+}
+
+
+/** Gira a foto 90° à direita e regrava. A imagem vem do servidor porque o
+    Drive não permite ler a imagem direto no navegador (política de origem). */
+function girarFoto(placa, ang, botao) {
+  const status = el('foto-status-' + ang);
+  const diga = t => { if (status) status.textContent = t; };
+  if (botao) { botao.disabled = true; botao.textContent = 'girando…'; }
+  diga('Baixando a foto…');
+  const restaurar = () => { if (botao) { botao.disabled = false; botao.textContent = '⟳ Girar'; } };
+
+  const run = servidor('obterFotoViatura',
+    r => {
+      if (!r || !r.ok) { restaurar(); diga(''); toast((r && r.erro) || 'Não consegui ler a foto.', true); return; }
+      const img = new Image();
+      img.onerror = () => { restaurar(); diga(''); toast('Arquivo não é uma imagem válida.', true); };
+      img.onload = () => {
+        const c = document.createElement('canvas');
+        c.width = img.height; c.height = img.width;               // 90° troca largura e altura
+        const ctx = c.getContext('2d');
+        ctx.translate(c.width / 2, c.height / 2);
+        ctx.rotate(Math.PI / 2);
+        ctx.drawImage(img, -img.width / 2, -img.height / 2);
+        const dataUrl = c.toDataURL('image/jpeg', 0.85);
+        const base64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+        diga('Salvando…');
+        const run2 = servidor('salvarFotoViatura',
+          r2 => {
+            restaurar();
+            if (!r2 || !r2.ok) { diga(''); toast((r2 && r2.erro) || 'Falha ao salvar.', true); return; }
+            diga('Girada ✓');
+            const slot = document.querySelector('.foto-slot[data-ang="' + ang + '"] .foto img');
+            if (slot) slot.src = dataUrl;                          // mostra o resultado sem esperar o Drive
+            toast(placa + ': foto ' + ang + ' girada.');
+            recarregarAposEdicao(placa);
+          },
+          e => { restaurar(); diga(''); toast('Erro: ' + (e && e.message ? e.message : e), true); });
+        if (run2) run2.salvarFotoViatura(ESTADO.token, placa, ang, base64, 'image/jpeg');
+      };
+      img.src = 'data:' + (r.tipoMime || 'image/jpeg') + ';base64,' + r.base64;
+    },
+    e => { restaurar(); diga(''); toast('Erro: ' + (e && e.message ? e.message : e), true); });
+  if (run) run.obterFotoViatura(ESTADO.token, placa, ang);
 }
 
 </script>
