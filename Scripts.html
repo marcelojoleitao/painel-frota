@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.36.3';
+const VERSAO_PAINEL = '2.36.4';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -1597,7 +1597,18 @@ function renderPagamentos() {
     T.glosaHist.forEach(x => { const m = x.comp.match(/(\d{1,2})\/(\d{4})/); if (!m) return; const k = m[2] + '-' + ('0' + m[1]).slice(-2); gh[k] = x.valor; mh.push(k); });
     mh.sort();
     const mhSel = mh.filter(m => m >= ini && m <= fim);      // respeita o período escolhido acima
-    if (mhSel.length) g.appendChild(cartaoColunas('Glosa de preços abusivos — aba Resumo Glosa (' + rotMes(mhSel[0]) + ' a ' + rotMes(mhSel[mhSel.length - 1]) + ')', mhSel, gh, null, fmtMoeda, null, 'Glosa preços abusivos (R$)', ''));
+    if (mhSel.length) {
+      const cartao = cartaoColunas('Glosa de preços abusivos — histórico (' + rotMes(mhSel[0]) + ' a ' + rotMes(mhSel[mhSel.length - 1]) + ')', mhSel, gh, null, fmtMoeda, null, 'Glosa preços abusivos (R$)', '');
+      // deixa claro quando o histórico tem menos competências do que o período pede
+      const esperadas = mm.length, obtidas = mhSel.length;
+      if (obtidas < esperadas) {
+        const aviso = document.createElement('div');
+        aviso.className = 'cartao-dica';
+        aviso.textContent = 'O histórico tem ' + obtidas + ' de ' + esperadas + ' competência(s) do período selecionado. As que faltam ainda não foram apuradas nem importadas para a aba ResumoGlosa.';
+        cartao.appendChild(aviso);
+      }
+      g.appendChild(cartao);
+    }
   }
   g.appendChild(cartaoAgregado('Por ano (bruto)', sel, t => t.mes.substring(0, 4), t => t.bruto, fmtMoeda, null));
   g.appendChild(cartaoDeducoes(sel));
