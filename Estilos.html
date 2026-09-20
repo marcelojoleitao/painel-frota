@@ -624,6 +624,13 @@ table.tabela td.acoes { text-align: right; }
 .tag-tipo.np { background: #FDECEA; color: var(--vermelho); }
 .vinculo { font-size: 11px; color: var(--tinta-suave); margin-top: 2px; }
 .vinculo b { font-family: var(--fonte-dados); }
+.status-sel { width: 100%; border-radius: 10px; padding: 3px 6px; font-size: 11px; font-weight: 700; cursor: pointer;
+  border: 1.5px solid var(--borda); background: #EEF1F6; color: var(--tinta-suave); font-family: inherit; }
+.status-sel:hover { border-color: var(--azul-claro); }
+.status-sel:disabled { opacity: .6; cursor: wait; }
+.status-sel.deferido { background: #E9F7EF; border-color: var(--verde); color: #1E7A4D; }
+.status-sel.indeferido { background: #FDECEA; border-color: var(--vermelho); color: #9A2F24; }
+.status-sel.andamento { background: #FFF6E5; border-color: var(--ambar); color: #8A6200; }
 .status-chip { display: inline-block; border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 700; background: #EEF1F6; color: var(--tinta-suave); }
 .status-chip.deferido { background: #E9F7EF; color: #1E7A4D; }
 .status-chip.indeferido { background: #FDECEA; color: #9A2F24; }

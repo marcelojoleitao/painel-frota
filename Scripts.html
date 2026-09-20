@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.37.0';
+const VERSAO_PAINEL = '2.38.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -3199,6 +3199,22 @@ function renderMultas() {
   renderAcompanhamentoMultas(c);
 }
 
+
+/** Cor do status conforme a formatação condicional da planilha. */
+function estiloStatus(status) {
+  const cores = (ESTADO.multas && ESTADO.multas.coresStatus) || [];
+  const alvo = String(status || '').trim().toLowerCase();
+  if (!alvo) return '';
+  let achou = cores.find(c => String(c.texto).trim().toLowerCase() === alvo);
+  if (!achou) achou = cores.find(c => c.contem && alvo.indexOf(String(c.texto).trim().toLowerCase()) >= 0);
+  if (!achou) return '';
+  const partes = [];
+  if (achou.fundo) partes.push('background:' + achou.fundo);
+  if (achou.fonte) partes.push('color:' + achou.fonte);
+  if (achou.fundo) partes.push('border-color:' + achou.fundo);
+  return partes.join(';');
+}
+
 function classeStatus(st) {
   const t = String(st || '').toLowerCase();
   if (/^deferido/.test(t)) return 'deferido';
@@ -3322,7 +3338,11 @@ ${cabecalho('protocolo', 'Protocolo')}<th>Observações</th>${cabecalho('status'
             <td>${esc(m.enquadramento || '—')}</td>
             <td style="font-family:var(--fonte-dados); font-size:11.5px">${esc(m.protocolo || '')}</td>
             <td>${m.observacoes ? `<div class="obs-multa" title="${escAttr(m.observacoes)}">${esc(m.observacoes)}</div>` : ''}</td>
-            <td><span class="status-chip ${classeStatus(m.status)}">${esc(m.status || 'sem status')}</span>
+            <td><select class="status-sel ${classeStatus(m.status)}" data-status="${m.linha}" style="${escAttr(estiloStatus(m.status))}" title="Alterar o status grava na planilha na hora">
+                <option value="">sem status</option>
+                ${(ESTADO.multas.bases.status || []).map(st => `<option value="${escAttr(st)}" ${st === m.status ? 'selected' : ''}>${esc(st)}</option>`).join('')}
+                ${m.status && (ESTADO.multas.bases.status || []).indexOf(m.status) < 0 ? `<option value="${escAttr(m.status)}" selected>${esc(m.status)}</option>` : ''}
+              </select>
               ${m.dataDefesa ? `<div class="vinculo">defesa em ${esc(dataBR(m.dataDefesa))}</div>` : ''}</td>
             <td>${m.linkDefesa ? `<a class="pdf-link" href="${escAttr(m.linkDefesa)}" target="_blank" rel="noopener">abrir</a>` : ''}
               <div style="margin-top:3px"><button class="link-btn" data-defesa="${m.linha}">${m.linkDefesa ? 'refazer' : 'gerar defesa'}</button></div>
@@ -3368,7 +3388,38 @@ ${cabecalho('protocolo', 'Protocolo')}<th>Observações</th>${cabecalho('status'
   ouvir('btn-nova-multa', 'click', () => abrirFormMulta(null));
   c.querySelectorAll('button[data-editar]').forEach(b => b.addEventListener('click', () => abrirFormMulta(parseInt(b.dataset.editar, 10))));
   c.querySelectorAll('button[data-defesa]').forEach(b => b.addEventListener('click', () => gerarDefesa(parseInt(b.dataset.defesa, 10), b)));
+  c.querySelectorAll('select[data-status]').forEach(sel => sel.addEventListener('change', () => alterarStatusMulta(parseInt(sel.dataset.status, 10), sel)));
   ajustarKpis();
+}
+
+/** Troca o status direto na tabela e grava na planilha na hora. */
+function alterarStatusMulta(linha, sel) {
+  const anterior = ESTADO.multas.multas.find(m => m.linha === linha);
+  const valorAnterior = anterior ? anterior.status : '';
+  const novo = sel.value;
+  sel.disabled = true;
+  sel.style.cssText = estiloStatus(novo);
+  const run = servidor('salvarMulta',
+    r => {
+      sel.disabled = false;
+      if (!r || !r.ok) {
+        sel.value = valorAnterior;
+        sel.style.cssText = estiloStatus(valorAnterior);
+        toast((r && r.erro) || 'Falha ao gravar o status.', true);
+        return;
+      }
+      if (r.item) aplicarMultaLocal(r.item);
+      else if (anterior) anterior.status = novo;
+      toast('Status de ' + (anterior ? anterior.ai || 'multa' : 'multa') + ': ' + (novo || 'sem status'));
+      renderMultas();
+    },
+    e => {
+      sel.disabled = false;
+      sel.value = valorAnterior;
+      sel.style.cssText = estiloStatus(valorAnterior);
+      toast('Erro: ' + (e && e.message ? e.message : e), true);
+    });
+  if (run) run.salvarMulta(ESTADO.token, linha, { status: novo });
 }
 
 /* ---------------- formulário de multa ---------------- */

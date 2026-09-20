@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.37.0';
+const CODIGO_VERSAO = '2.38.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4922,6 +4922,51 @@ function _basesMultas_(ss) {
   return bases;
 }
 
+
+/**
+ * Lê as cores que a própria planilha usa na coluna de status (formatação
+ * condicional da coluna L da aba Multas) para o painel exibir igual.
+ * Entende regras de texto igual/contém e fórmulas do tipo =$L3="Deferido".
+ */
+function _coresStatusMultas_(aba) {
+  const cores = [];
+  try {
+    const regras = aba.getConditionalFormatRules();
+    regras.forEach(regra => {
+      const faixas = regra.getRanges().map(r => r.getA1Notation());
+      const naColunaStatus = faixas.some(a => /(^|[^A-Z])L\d*/i.test(a) || /^L/i.test(a));
+      const cond = regra.getBooleanCondition();
+      if (!cond) return;
+      const fundo = cond.getBackground(), fonte = cond.getFontColor();
+      if (!fundo && !fonte) return;
+      const tipo = String(cond.getCriteriaType());
+      const valores = cond.getCriteriaValues() || [];
+      let textos = [];
+      if (/TEXT_EQUAL_TO|TEXT_CONTAINS|TEXT_STARTS_WITH/.test(tipo)) {
+        textos = valores.map(v => String(v)).filter(Boolean);
+      } else if (/CUSTOM_FORMULA/.test(tipo)) {
+        const f = String(valores[0] || '');
+        (f.match(/"([^"]{2,})"/g) || []).forEach(m => textos.push(m.replace(/"/g, '')));
+      }
+      textos.forEach(t => {
+        if (!t || t.length < 2) return;
+        cores.push({ texto: t, fundo: fundo || '', fonte: fonte || '', coluna: naColunaStatus,
+          contem: /TEXT_CONTAINS|CUSTOM_FORMULA/.test(tipo) });
+      });
+    });
+  } catch (e) { Logger.log('Cores do status: ' + e); }
+  return cores;
+}
+
+/** Mostra no log as cores encontradas — útil para conferir a equalização. */
+function verCoresStatusMultas() {
+  const aba = _ssMultas_().getSheetByName(MULTAS.aba);
+  const cores = _coresStatusMultas_(aba);
+  if (!cores.length) { Logger.log('Nenhuma formatação condicional reconhecida na aba Multas.'); return; }
+  Logger.log(cores.length + ' regra(s) reconhecida(s):');
+  cores.forEach(c => Logger.log('   "' + c.texto + '" → fundo ' + (c.fundo || '—') + ', fonte ' + (c.fonte || '—') + (c.contem ? ' (por conter)' : '')));
+}
+
 /** Multas cadastradas + vínculos + conferência com as multas da viatura na ConsultaBD. */
 function lerMultas(token) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
@@ -4978,6 +5023,7 @@ function lerMultas(token) {
     });
 
     return { ok: true, multas: lista, bases: bases, tipos: MULTAS.tipos, rotulos: MULTAS.rotulos,
+      coresStatus: _coresStatusMultas_(aba),
       anoInicial: CONFIG.MULTAS_ANO_INICIAL, ignoradas: ignoradas, semData: semData,
       pastaDefesas: CONFIG.PASTA_DEFESAS ? 'https://drive.google.com/drive/folders/' + CONFIG.PASTA_DEFESAS : '',
       pastaModelos: CONFIG.PASTA_MODELOS_MULTAS ? 'https://drive.google.com/drive/folders/' + CONFIG.PASTA_MODELOS_MULTAS : '' };
