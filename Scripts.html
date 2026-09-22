@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.40.0';
+const VERSAO_PAINEL = '2.40.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2832,10 +2832,13 @@ function renderOSAcompanhar(lista) {
             <td title="${escAttr(x.o.oficina)}">${esc((x.o.oficina || '').substring(0, 26))}</td>
             <td style="white-space:nowrap">${esc((x.o.data || '').substring(0, 10))}</td>
             <td class="num" style="text-align:right; white-space:nowrap">${fmtMoeda(x.o.valor || 0)}</td>
-            <td><select class="situacao-sel" data-situacao="${escAttr(x.o.os)}" title="Alterar grava na planilha na hora">
-                ${statusOSDisponiveis().map(st => `<option value="${escAttr(st)}" ${st === x.o.status ? 'selected' : ''}>${esc(st)}</option>`).join('')}
-                ${x.o.status && statusOSDisponiveis().indexOf(x.o.status) < 0 ? `<option value="${escAttr(x.o.status)}" selected>${esc(x.o.status)}</option>` : ''}
-              </select></td>
+            <td><div class="situacao-campo" title="Clique para alterar — grava na planilha na hora">
+                ${badgeStatusOS(x.o.status)}<span class="seta">▾</span>
+                <select class="situacao-sel" data-situacao="${escAttr(x.o.os)}">
+                  ${statusOSDisponiveis().map(st => `<option value="${escAttr(st)}" ${st === x.o.status ? 'selected' : ''}>${esc(st)}</option>`).join('')}
+                  ${x.o.status && statusOSDisponiveis().indexOf(x.o.status) < 0 ? `<option value="${escAttr(x.o.status)}" selected>${esc(x.o.status)}</option>` : ''}
+                </select>
+              </div></td>
             <td>${x.o.aprovacao ? `<span class="etiqueta-aprov ${classeAprovacao(x.o.aprovacao)}">${esc(x.o.aprovacao)}</span>` : '<span style="color:var(--tinta-suave)">—</span>'}</td>
             <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="obs">${esc(x.o.obs || '')}</textarea></td>
             <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="relato">${esc(x.o.relato || '')}</textarea></td>
@@ -3853,9 +3856,12 @@ function alterarSituacaoOS(os, sel) {
   const novo = sel.value;
   if (novo === anterior) return;
   sel.disabled = true;
+  const campo = sel.closest('.situacao-campo');
+  if (campo) campo.classList.add('gravando');
   const run = servidor('salvarCamposOS',
     r => {
       sel.disabled = false;
+      if (campo) campo.classList.remove('gravando');
       if (!r || !r.ok) { sel.value = anterior; toast((r && r.erro) || 'Falha ao gravar a situação.', true); return; }
       if (r.recusados && r.recusados.length) { sel.value = anterior; toast('OS ' + os + ': ' + r.recusados.join(', '), true); return; }
       if (registro) registro.status = novo;
@@ -3863,7 +3869,7 @@ function alterarSituacaoOS(os, sel) {
       toast('OS ' + os + ': ' + (novo || 'sem situação'));
       renderOS(ESTADO.filtrado);
     },
-    e => { sel.disabled = false; sel.value = anterior; toast('Erro: ' + (e && e.message ? e.message : e), true); });
+    e => { sel.disabled = false; if (campo) campo.classList.remove('gravando'); sel.value = anterior; toast('Erro: ' + (e && e.message ? e.message : e), true); });
   if (run) run.salvarCamposOS(ESTADO.token, os, { status: novo });
 }
 
