@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.39.0';
+const VERSAO_PAINEL = '2.40.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2832,7 +2832,10 @@ function renderOSAcompanhar(lista) {
             <td title="${escAttr(x.o.oficina)}">${esc((x.o.oficina || '').substring(0, 26))}</td>
             <td style="white-space:nowrap">${esc((x.o.data || '').substring(0, 10))}</td>
             <td class="num" style="text-align:right; white-space:nowrap">${fmtMoeda(x.o.valor || 0)}</td>
-            <td>${badgeStatusOS(x.o.status)}</td>
+            <td><select class="situacao-sel" data-situacao="${escAttr(x.o.os)}" title="Alterar grava na planilha na hora">
+                ${statusOSDisponiveis().map(st => `<option value="${escAttr(st)}" ${st === x.o.status ? 'selected' : ''}>${esc(st)}</option>`).join('')}
+                ${x.o.status && statusOSDisponiveis().indexOf(x.o.status) < 0 ? `<option value="${escAttr(x.o.status)}" selected>${esc(x.o.status)}</option>` : ''}
+              </select></td>
             <td>${x.o.aprovacao ? `<span class="etiqueta-aprov ${classeAprovacao(x.o.aprovacao)}">${esc(x.o.aprovacao)}</span>` : '<span style="color:var(--tinta-suave)">—</span>'}</td>
             <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="obs">${esc(x.o.obs || '')}</textarea></td>
             <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="relato">${esc(x.o.relato || '')}</textarea></td>
@@ -2863,6 +2866,7 @@ function renderOSAcompanhar(lista) {
     t.addEventListener('input', aoMudar);
     t.addEventListener('change', aoMudar);
   });
+  c.querySelectorAll('select[data-situacao]').forEach(sel => sel.addEventListener('change', () => alterarSituacaoOS(sel.dataset.situacao, sel)));
   ouvir('btn-salvar-os', 'click', salvarAlteracoesOS);
   atualizarBotaoSalvarOS();
   ajustarKpis();
@@ -3826,6 +3830,41 @@ function girarFoto(placa, ang, botao) {
     },
     e => { restaurar(); diga(''); toast('Erro: ' + (e && e.message ? e.message : e), true); });
   if (run) run.obterFotoViatura(ESTADO.token, placa, ang);
+}
+
+
+/** Situações existentes na aba OS, para a lista de seleção da tabela. */
+function statusOSDisponiveis() {
+  if (ESTADO._statusOS) return ESTADO._statusOS;
+  const vistos = new Set();
+  (ESTADO.dados.os || []).forEach(o => { if (o.status) vistos.add(o.status); });
+  NIVEIS_OS.forEach(n => {
+    const achado = Array.from(vistos).find(s => n.re.test(s));
+    if (!achado) return;
+  });
+  ESTADO._statusOS = Array.from(vistos).sort((a, b) => pesoNivel(nivelDaOS(a)) - pesoNivel(nivelDaOS(b)) || a.localeCompare(b, 'pt-BR'));
+  return ESTADO._statusOS;
+}
+
+/** Troca a situação da OS e grava na planilha imediatamente. */
+function alterarSituacaoOS(os, sel) {
+  const registro = (ESTADO.dados.os || []).find(o => String(o.os) === String(os) && o.origem === 'PENDENTE');
+  const anterior = registro ? registro.status : '';
+  const novo = sel.value;
+  if (novo === anterior) return;
+  sel.disabled = true;
+  const run = servidor('salvarCamposOS',
+    r => {
+      sel.disabled = false;
+      if (!r || !r.ok) { sel.value = anterior; toast((r && r.erro) || 'Falha ao gravar a situação.', true); return; }
+      if (r.recusados && r.recusados.length) { sel.value = anterior; toast('OS ' + os + ': ' + r.recusados.join(', '), true); return; }
+      if (registro) registro.status = novo;
+      ESTADO._statusOS = null;
+      toast('OS ' + os + ': ' + (novo || 'sem situação'));
+      renderOS(ESTADO.filtrado);
+    },
+    e => { sel.disabled = false; sel.value = anterior; toast('Erro: ' + (e && e.message ? e.message : e), true); });
+  if (run) run.salvarCamposOS(ESTADO.token, os, { status: novo });
 }
 
 </script>

@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.39.0';
+const CODIGO_VERSAO = '2.40.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1223,10 +1223,11 @@ function instalarGatilho() {
 /*  Edição de campos da aba OS (observações, relato, justificativa) */
 /* ------------------------------------------------------------ */
 
-const CAMPOS_OS_EDITAVEIS = { obs: 'Observações', relato: 'Relato', diligencia: 'Diligência', justificativa: 'Justificativa' };
+const CAMPOS_OS_EDITAVEIS = { obs: 'Observações', relato: 'Relato', diligencia: 'Diligência', justificativa: 'Justificativa', status: 'Status' };
 /** Rótulos alternativos aceitos para cada campo editável da aba OS. */
 const ALTERNATIVAS_OS = { aprovacao: ['Aprovação', 'Aprovacao', 'Análise', 'Analise'], obs: ['Observações', 'Observacoes'],
-  relato: ['Relato'], diligencia: ['Diligência', 'Diligencia'], justificativa: ['Justificativa'] };
+  relato: ['Relato'], diligencia: ['Diligência', 'Diligencia'], justificativa: ['Justificativa'],
+  status: ['Status', 'Situação', 'Situacao'] };
 
 function salvarCamposOS(token, os, campos) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
