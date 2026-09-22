@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.38.0';
+const CODIGO_VERSAO = '2.39.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1223,9 +1223,10 @@ function instalarGatilho() {
 /*  Edição de campos da aba OS (observações, relato, justificativa) */
 /* ------------------------------------------------------------ */
 
-const CAMPOS_OS_EDITAVEIS = { obs: 'Observações', relato: 'Relato', justificativa: 'Justificativa' };
+const CAMPOS_OS_EDITAVEIS = { obs: 'Observações', relato: 'Relato', diligencia: 'Diligência', justificativa: 'Justificativa' };
 /** Rótulos alternativos aceitos para cada campo editável da aba OS. */
-const ALTERNATIVAS_OS = { aprovacao: ['Aprovação', 'Aprovacao', 'Análise', 'Analise'], obs: ['Observações', 'Observacoes'], relato: ['Relato'], justificativa: ['Justificativa'] };
+const ALTERNATIVAS_OS = { aprovacao: ['Aprovação', 'Aprovacao', 'Análise', 'Analise'], obs: ['Observações', 'Observacoes'],
+  relato: ['Relato'], diligencia: ['Diligência', 'Diligencia'], justificativa: ['Justificativa'] };
 
 function salvarCamposOS(token, os, campos) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
@@ -5704,6 +5705,7 @@ function _lerOS_(ss) {
     valor: _num_(o['Orçado']), aprovado: _num_(o['Aprovado']), data: _dataTxt_(o['Data']), oficina: _txt_(o['Oficina']), status: _txt_(o['Status']),
     unidade: _txt_(o['Unidade SIPAC']), obs: _txt_(o['Observações']), relato: _txt_(o['Relato']), justificativa: _txt_(o['Justificativa']),
     modelo: _txt_(o['Marca/Modelo']),
+    diligencia: _txt_(o['Diligência'] !== undefined ? o['Diligência'] : o['Diligencia']),
     aprovacao: _txt_(o['Aprovação'] !== undefined ? o['Aprovação'] : o['Aprovacao']),
     linkAnalise: _txt_(o['Relatório da Análise'] !== undefined ? o['Relatório da Análise'] : o['Relatorio da Analise']) || _urlDaLinha_(o) }));
   if (ace) _linhasComoObjetos_(ace).forEach(o => lista.push({ origem: 'ACEITE', os: _txt_(o['OS']), placa: _txt_(o['Placa']).toUpperCase(),

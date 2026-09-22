@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.38.0';
+const VERSAO_PAINEL = '2.39.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2815,14 +2815,14 @@ function renderOSAcompanhar(lista) {
       <div class="tabela-rol os-rol" style="max-height:620px">
         <table class="tabela-os">
           <colgroup>
-            <col style="width:132px"><col style="width:74px"><col style="width:104px"><col style="width:86px">
-            <col style="width:104px"><col style="width:70px"><col style="width:86px">
-            <col style="width:132px"><col style="width:124px">
-            <col><col><col>
+            <col style="width:120px"><col style="width:70px"><col style="width:96px"><col style="width:80px">
+            <col style="width:96px"><col style="width:66px"><col style="width:82px">
+            <col style="width:124px"><col style="width:116px">
+            <col><col><col><col>
           </colgroup>
           <thead><tr><th>OS</th><th>Placa</th><th>Marca/Modelo</th><th>Unidade</th><th>Oficina</th><th>Data</th>
             <th style="text-align:right">Orçado</th><th>Situação</th><th>Aprovação</th>
-            <th>Observações</th><th>Relato</th><th>Justificativa</th></tr></thead>
+            <th>Observações</th><th>Relato</th><th>Diligência</th><th>Justificativa</th></tr></thead>
           <tbody>
           ${selecionadas.slice(0, 400).map(x => `<tr class="${x.nivel === 'n2' ? 'n2' : ''}">
             <td><b style="font-family:var(--fonte-dados)">${esc(x.o.os)}</b><div style="margin-top:3px; display:flex; gap:4px; flex-wrap:wrap">${pdfLinkHtml(x.o.os)}${x.o.linkAnalise ? `<a class="pdf-link analise" href="${escAttr(x.o.linkAnalise)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Relatório de análise">${icoPdf()} análise</a>` : ''}</div></td>
@@ -2836,13 +2836,14 @@ function renderOSAcompanhar(lista) {
             <td>${x.o.aprovacao ? `<span class="etiqueta-aprov ${classeAprovacao(x.o.aprovacao)}">${esc(x.o.aprovacao)}</span>` : '<span style="color:var(--tinta-suave)">—</span>'}</td>
             <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="obs">${esc(x.o.obs || '')}</textarea></td>
             <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="relato">${esc(x.o.relato || '')}</textarea></td>
+            <td><textarea class="campo-os ${/diligen/i.test(x.o.aprovacao || '') ? 'destaque' : ''}" data-os="${escAttr(x.o.os)}" data-campo="diligencia">${esc(x.o.diligencia || '')}</textarea></td>
             <td><textarea class="campo-os" data-os="${escAttr(x.o.os)}" data-campo="justificativa">${esc(x.o.justificativa || '')}</textarea></td>
-          </tr>`).join('') || '<tr><td colspan="11"><div class="vazio">Nenhuma ordem de serviço nesta situação</div></td></tr>'}
+          </tr>`).join('') || '<tr><td colspan="12"><div class="vazio">Nenhuma ordem de serviço nesta situação</div></td></tr>'}
           </tbody>
         </table>
       </div>
       ${selecionadas.length > 400 ? '<div class="cartao-dica">Exibindo 400 de ' + selecionadas.length + '. Use os filtros da esquerda para reduzir.</div>' : ''}
-      <div class="cartao-dica">Marca/modelo e unidade vêm da ConsultaBD, cruzando pela placa. As colunas Observações, Relato e Justificativa são gravadas na planilha; Aprovação e Relatório da Análise são só leitura.${ESTADO.dados.meta && ESTADO.dados.meta.doCache ? ' <b>Dados do cache de ' + esc(ESTADO.dados.meta.atualizadoEm) + ' — use o ⟳ no topo para reler a planilha.</b>' : ''}</div>
+      <div class="cartao-dica">Marca/modelo e unidade vêm da ConsultaBD, cruzando pela placa. As colunas Observações, Relato, Diligência e Justificativa são gravadas na planilha; Aprovação e Relatório da Análise são só leitura.${ESTADO.dados.meta && ESTADO.dados.meta.doCache ? ' <b>Dados do cache de ' + esc(ESTADO.dados.meta.atualizadoEm) + ' — use o ⟳ no topo para reler a planilha.</b>' : ''}</div>
     </div>`;
 
   c.querySelectorAll('button[data-nivel]').forEach(b => b.addEventListener('click', () => { ESTADO.nivelOS = b.dataset.nivel; renderOSAcompanhar(ESTADO.filtrado); }));

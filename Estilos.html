@@ -559,7 +559,7 @@ table.tabela td.acoes { text-align: right; }
 .tabela-os td { padding: 5px 8px; border-bottom: 1px solid var(--borda); font-size: 12.5px; vertical-align: top; }
 .tabela-os tr.n2 td { background: #FFFBF0; }
 .tabela-os tr:hover td { background: #F1F5FC; }
-.tabela-os { table-layout: fixed; min-width: 1150px; }
+.tabela-os { table-layout: fixed; min-width: 1260px; }
 /* Em tela estreita a tabela não encolhe: ganha rolagem horizontal, para nenhuma
    coluna ficar inacessível. A rolagem vale inclusive no celular. */
 .os-rol { overflow: auto !important; -webkit-overflow-scrolling: touch; }
@@ -582,6 +582,9 @@ table.tabela td.acoes { text-align: right; }
 .tabela-os .campo-os:hover { border-color: var(--borda-forte); background: #fff; }
 .tabela-os .campo-os:focus { outline: none; border-color: var(--azul-claro); background: #fff; box-shadow: 0 0 0 2px rgba(46,111,217,.15); }
 .tabela-os .campo-os.sujo { border-color: var(--ambar); background: #FFFBF3; }
+/* diligência pendente: a OS foi marcada como "Diligenciar" na aprovação */
+.tabela-os .campo-os.destaque { border-color: var(--ambar); background: #FFF9EC; }
+.tabela-os .campo-os.destaque:empty::before { content: 'anotar diligência'; color: var(--tinta-suave); font-style: italic; }
 .tabela-os .salvo { color: var(--verde); font-size: 11px; }
 .os-barra-acoes { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
 
