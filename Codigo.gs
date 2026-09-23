@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.40.2';
+const CODIGO_VERSAO = '2.41.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1218,6 +1218,112 @@ function instalarGatilho() {
   return 'Gatilho instalado.';
 }
 
+
+
+/* ============================================================
+   PROJEÇÃO DE FATURAMENTO DA MANUTENÇÃO
+   A fatura do mês é formada pelas OS que chegam a "cobradas".
+   O caminho é: aguardando aprovação → aprovada → executada →
+   concluída → cobrada. Cada estágio tem uma chance diferente de
+   entrar na próxima fatura, e é isso que a projeção usa.
+   ============================================================ */
+
+/** Quanto de cada estágio costuma entrar na fatura do mês seguinte e do outro. */
+const PESOS_PROJECAO = {
+  'Concluídas e Não Cobradas':  { proximo: 1.00, seguinte: 0.00 },
+  'Aprovadas e Não Iniciadas':  { proximo: 0.50, seguinte: 0.45 },
+  'Aguardando CLIENTE NIVEL 2': { proximo: 0.25, seguinte: 0.50 },
+  'Aguardando CLIENTE NIVEL 1': { proximo: 0.15, seguinte: 0.50 },
+  'Aguardando VISTORIADOR':     { proximo: 0.10, seguinte: 0.40 },
+  'Pedidos de Revisão':         { proximo: 0.00, seguinte: 0.30 },
+  'Não Enviadas ao Cliente':    { proximo: 0.00, seguinte: 0.20 }
+};
+
+function projecaoOS(token) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    const tab = _abaPorCabecalho_(ss, CONFIG.ABA_OS_PENDENTES, ['OS', 'Placa', 'Orçado', 'Status']);
+    if (!tab) return { ok: false, erro: 'Aba OS não encontrada.' };
+    const linhas = _linhasComoObjetos_(tab);
+
+    // taxa de aprovação: quanto do orçado costuma virar valor aprovado
+    const razoes = [];
+    linhas.forEach(o => {
+      const orc = _num_(o['Orçado']) || 0, apr = _num_(o['Aprovado']) || 0;
+      const st = _txt_(o['Status']);
+      if (orc > 0 && apr > 0 && /COBRADAS|CONCLU|APROVADAS/i.test(_normCab_(st))) razoes.push(apr / orc);
+    });
+    razoes.sort((a, b) => a - b);
+    const taxa = razoes.length ? razoes[Math.floor(razoes.length / 2)] : 1;
+
+    // pipeline por estágio
+    const estagios = {};
+    linhas.forEach(o => {
+      const st = _txt_(o['Status']) || 'Sem status';
+      if (/COBRADAS/i.test(_normCab_(st))) return;             // já faturadas
+      const orc = _num_(o['Orçado']) || 0, apr = _num_(o['Aprovado']) || 0;
+      // o valor de referência é o aprovado; sem ele, o orçado ajustado pela taxa
+      const valor = apr > 0 ? apr : Math.round(orc * taxa * 100) / 100;
+      const e = estagios[st] || (estagios[st] = { status: st, qtd: 0, orcado: 0, aprovado: 0, referencia: 0 });
+      e.qtd++; e.orcado += orc; e.aprovado += apr; e.referencia += valor;
+    });
+
+    let proximo = 0, seguinte = 0;
+    const detalhe = Object.keys(estagios).map(st => {
+      const e = estagios[st];
+      const peso = PESOS_PROJECAO[st] || { proximo: 0.10, seguinte: 0.30 };
+      const noProximo = Math.round(e.referencia * peso.proximo * 100) / 100;
+      const noSeguinte = Math.round(e.referencia * peso.seguinte * 100) / 100;
+      proximo += noProximo; seguinte += noSeguinte;
+      return { status: st, qtd: e.qtd, orcado: e.orcado, aprovado: e.aprovado, referencia: e.referencia,
+        pesoProximo: peso.proximo, pesoSeguinte: peso.seguinte, noProximo: noProximo, noSeguinte: noSeguinte };
+    }).sort((a, b) => b.referencia - a.referencia);
+
+    // histórico real das faturas, do OrçamentosDB
+    const historico = [];
+    try {
+      const abaOrc = _ssManut_().getSheetByName(CONFIG.ABA_ORCAMENTOS);
+      if (abaOrc && abaOrc.getLastRow() > 2) {
+        const valores = abaOrc.getDataRange().getValues();
+        let cab = 0;
+        for (let i = 0; i < Math.min(6, valores.length); i++) {
+          if (valores[i].some(c => /ORDEM\s*SERVI/i.test(String(c)))) { cab = i; break; }
+        }
+        const nomes = valores[cab].map(c => _normCab_(c));
+        const iTotal = nomes.findIndex(c => /TOTAL O ?S|TOTAL OS|^TOTAL/.test(c));
+        const iComp = nomes.findIndex(c => /COMPET/.test(c));
+        if (iTotal >= 0 && iComp >= 0) {
+          const porComp = {};
+          for (let r = cab + 1; r < valores.length; r++) {
+            const comp = _compSegura_(valores[r][iComp]);
+            if (!comp) continue;
+            porComp[comp] = (porComp[comp] || 0) + (_num_(valores[r][iTotal]) || 0);
+          }
+          Object.keys(porComp)
+            .sort((a, b) => (a.substring(3) + a.substring(0, 2)).localeCompare(b.substring(3) + b.substring(0, 2)))
+            .slice(-12)
+            .forEach(c => historico.push({ comp: c, valor: Math.round(porComp[c] * 100) / 100 }));
+        }
+      }
+    } catch (e) { Logger.log('Histórico de faturas: ' + e); }
+
+    const ultimos = historico.slice(-6);
+    const media = ultimos.length ? ultimos.reduce((s, x) => s + x.valor, 0) / ultimos.length : 0;
+    const hoje = new Date();
+    const rot = n => {
+      const d = new Date(hoje.getFullYear(), hoje.getMonth() + n, 1);
+      return ('0' + (d.getMonth() + 1)).slice(-2) + '/' + d.getFullYear();
+    };
+
+    return { ok: true, taxa: taxa, amostraTaxa: razoes.length,
+      proximo: { comp: rot(1), valor: Math.round(proximo * 100) / 100 },
+      seguinte: { comp: rot(2), valor: Math.round(seguinte * 100) / 100 },
+      emFila: Math.round(detalhe.reduce((s, d) => s + d.referencia, 0) * 100) / 100,
+      detalhe: detalhe, historico: historico, media: Math.round(media * 100) / 100,
+      mesesDeFila: media ? Math.round(detalhe.reduce((s, d) => s + d.referencia, 0) / media * 10) / 10 : 0 };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
 
 /* ------------------------------------------------------------ */
 /*  Edição de campos da aba OS (observações, relato, justificativa) */

@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.40.2';
+const VERSAO_PAINEL = '2.41.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -82,7 +82,7 @@ const ESTADO = {
   pdfsPorOS: {}, pdfsPorPlaca: {}, filtroStatusOS: '', filtroStatusAceite: '',
   subAcoes: 'executar', lote: null, fila: null, subDados: 'importar', subOS: 'panorama', nivelOS: 'n2', osEditadas: {},
   subPag: 'panorama', processo: null, compProcesso: {}, tituloEditado: {},
-  subMultas: 'acompanhar', multas: null, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
+  subMultas: 'acompanhar', multas: null, projecao: null, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
   ordemMulta: { campo: 'linha', dir: -1 },
   dados: null,
   veiculos: [],
@@ -2799,6 +2799,7 @@ function renderOSAcompanhar(lista) {
       ${kpi('Viaturas', new Set(selecionadas.map(x => x.o.placa)).size, 'distintas na seleção', '', null, true)}
       ${kpi('Unidades', porUnidade.size, 'com OS na seleção', 'ciano', null, true)}
     </div>
+    <div class="kpis" id="kpis-projecao"></div>
 
     <div class="os-nivel">
       ${NIVEIS_OS.filter(n => contagem[n.k]).map(n => `<button class="subaba ${nivel === n.k ? 'ativa' : ''}" data-nivel="${n.k}">${esc(n.rotulo)}<span class="n">${contagem[n.k]}</span></button>`).join('')}
@@ -2876,6 +2877,7 @@ function renderOSAcompanhar(lista) {
   });
   c.querySelectorAll('select[data-situacao]').forEach(sel => sel.addEventListener('change', () => alterarSituacaoOS(sel.dataset.situacao, sel)));
   ouvir('btn-salvar-os', 'click', salvarAlteracoesOS);
+  desenharProjecaoOS();
   atualizarBotaoSalvarOS();
   ajustarKpis();
   // a seção pode estar oculta na hora de montar: remede quando ela aparece
@@ -3870,12 +3872,76 @@ function alterarSituacaoOS(os, sel) {
       if (!r || !r.ok) { sel.value = anterior; toast((r && r.erro) || 'Falha ao gravar a situação.', true); return; }
       if (r.recusados && r.recusados.length) { sel.value = anterior; toast('OS ' + os + ': ' + r.recusados.join(', '), true); return; }
       if (registro) registro.status = novo;
-      ESTADO._statusOS = null;
+      ESTADO._statusOS = null; ESTADO.projecao = null;
       toast('OS ' + os + ': ' + (novo || 'sem situação'));
       renderOS(ESTADO.filtrado);
     },
     e => { sel.disabled = false; if (campo) campo.classList.remove('gravando'); sel.value = anterior; toast('Erro: ' + (e && e.message ? e.message : e), true); });
   if (run) run.salvarCamposOS(ESTADO.token, os, { status: novo });
+}
+
+
+/* ---------------- projeção de faturamento ---------------- */
+function desenharProjecaoOS() {
+  const caixa = el('kpis-projecao'); if (!caixa) return;
+  if (ESTADO.projecao) return pintarProjecao(caixa, ESTADO.projecao);
+  caixa.innerHTML = '<div class="kpi"><div class="kpi-rotulo">Projeção</div><div class="kpi-valor" style="font-size:14px">calculando…</div></div>';
+  const run = servidor('projecaoOS',
+    r => {
+      if (!r || !r.ok) { caixa.innerHTML = ''; return; }
+      ESTADO.projecao = r;
+      pintarProjecao(caixa, r);
+    },
+    () => { caixa.innerHTML = ''; });
+  if (run) run.projecaoOS(ESTADO.token);
+}
+
+function pintarProjecao(caixa, r) {
+  const cor = (valor) => !r.media ? '' : (valor > r.media * 1.15 ? 'vermelho' : valor < r.media * 0.85 ? 'verde' : 'ambar');
+  caixa.innerHTML = `
+    ${kpi('Projeção ' + esc(r.proximo.comp), fmtMoeda(r.proximo.valor), r.media ? 'média recente ' + fmtMoeda(r.media) : 'sem histórico', cor(r.proximo.valor), null, true)}
+    ${kpi('Projeção ' + esc(r.seguinte.comp), fmtMoeda(r.seguinte.valor), 'estimativa mais aberta', '', null, true)}
+    ${kpi('Em fila (não cobrado)', fmtMoeda(r.emFila), r.mesesDeFila ? r.mesesDeFila + ' mês(es) de fatura' : '', 'ciano', null, true)}
+    <div class="kpi" id="kpi-detalhe-proj" style="cursor:pointer">
+      <div class="kpi-rotulo">Como foi calculado</div>
+      <div class="kpi-valor" style="font-size:15px">ver composição</div>
+      <div class="kpi-sub">${r.detalhe.length} estágio(s)</div>
+    </div>`;
+  ajustarKpis();
+  ouvir('kpi-detalhe-proj', 'click', () => mostrarComposicaoProjecao(r));
+}
+
+function mostrarComposicaoProjecao(r) {
+  htm('gaveta-cab', `<div class="titulo"><h2>Projeção de faturamento</h2>
+    <div class="sub">manutenção — ${esc(r.proximo.comp)} e ${esc(r.seguinte.comp)}</div></div>
+    <button class="gaveta-fechar" onclick="fecharFicha()">×</button>`);
+  htm('gaveta-corpo', secao('Como a conta é feita', `
+      <div class="cartao-dica" style="margin:0 0 10px">A fatura do mês é formada pelas OS que chegam a "cobradas".
+      Cada estágio entra com um peso diferente: o que já está concluído entra quase todo na próxima fatura,
+      o que ainda depende de aprovação entra aos poucos. O valor de referência é o aprovado; quando a OS ainda
+      não tem valor aprovado, usamos o orçado ajustado pela taxa histórica de ${fmtDec(r.taxa * 100)}%
+      (medida em ${r.amostraTaxa} OS já aprovadas).</div>
+      <div class="tabela-rol" style="max-height:300px"><table class="tabela-simples" style="width:100%">
+        <thead><tr><th>Estágio</th><th class="num">OS</th><th class="num">Referência</th>
+          <th class="num">${esc(r.proximo.comp)}</th><th class="num">${esc(r.seguinte.comp)}</th></tr></thead>
+        <tbody>${r.detalhe.map(d => `<tr><td>${esc(d.status)}</td><td class="num">${d.qtd}</td>
+          <td class="num">${fmtMoeda(d.referencia)}</td>
+          <td class="num">${fmtMoeda(d.noProximo)} <small style="color:var(--tinta-suave)">${Math.round(d.pesoProximo * 100)}%</small></td>
+          <td class="num">${fmtMoeda(d.noSeguinte)} <small style="color:var(--tinta-suave)">${Math.round(d.pesoSeguinte * 100)}%</small></td></tr>`).join('')}
+        </tbody>
+        <tfoot><tr><td colspan="3">Total projetado</td><td class="num forte">${fmtMoeda(r.proximo.valor)}</td><td class="num forte">${fmtMoeda(r.seguinte.valor)}</td></tr></tfoot>
+      </table></div>`) +
+    (r.historico.length ? secao('Faturas já emitidas', `
+      <div class="barras compacto">${(() => {
+        const maximo = Math.max(1, ...r.historico.map(h => h.valor));
+        return r.historico.map(h => `<button class="barra" style="cursor:default"><span class="rotulo">${esc(h.comp)}</span>
+          <span class="trilha"><span class="preench" style="width:${Math.round(h.valor / maximo * 100)}%; background:var(--azul)"></span></span>
+          <span class="valor">${fmtMoeda(h.valor)}</span></button>`).join('');
+      })()}</div>
+      <div class="cartao-dica">Média dos últimos ${Math.min(6, r.historico.length)} meses: ${fmtMoeda(r.media)}. A projeção do próximo mês fica ${r.media ? (r.proximo.valor > r.media ? 'acima' : 'abaixo') : '—'} dessa média.</div>`) : '') +
+    `<div class="form-acoes"><button class="btn claro" onclick="fecharFicha()">Fechar</button></div>`);
+  cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
+  document.body.style.overflow = 'hidden';
 }
 
 </script>
