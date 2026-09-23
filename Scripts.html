@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.41.0';
+const VERSAO_PAINEL = '2.42.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -3897,15 +3897,17 @@ function desenharProjecaoOS() {
 }
 
 function pintarProjecao(caixa, r) {
-  const cor = (valor) => !r.media ? '' : (valor > r.media * 1.15 ? 'vermelho' : valor < r.media * 0.85 ? 'verde' : 'ambar');
+  const cor = valor => !r.media ? '' : (valor > r.media * 1.15 ? 'vermelho' : valor < r.media * 0.85 ? 'verde' : 'ambar');
+  const certo = r.composicao[0];
   caixa.innerHTML = `
     ${kpi('Projeção ' + esc(r.proximo.comp), fmtMoeda(r.proximo.valor), r.media ? 'média recente ' + fmtMoeda(r.media) : 'sem histórico', cor(r.proximo.valor), null, true)}
-    ${kpi('Projeção ' + esc(r.seguinte.comp), fmtMoeda(r.seguinte.valor), 'estimativa mais aberta', '', null, true)}
-    ${kpi('Em fila (não cobrado)', fmtMoeda(r.emFila), r.mesesDeFila ? r.mesesDeFila + ' mês(es) de fatura' : '', 'ciano', null, true)}
+    ${kpi('Projeção ' + esc(r.seguinte.comp), fmtMoeda(r.seguinte.valor), 'o que ainda depende de execução', '', null, true)}
+    ${kpi('Cobradas sem fatura', fmtMoeda(certo.valor), certo.qtd + ' OS — entram na próxima', certo.valor ? 'ciano' : '', null, true)}
+    ${kpi('Sem previsão', fmtMoeda(r.semPrevisao.valor), r.semPrevisao.qtd + ' OS ainda em aprovação', '', null, true)}
     <div class="kpi" id="kpi-detalhe-proj" style="cursor:pointer">
       <div class="kpi-rotulo">Como foi calculado</div>
       <div class="kpi-valor" style="font-size:15px">ver composição</div>
-      <div class="kpi-sub">${r.detalhe.length} estágio(s)</div>
+      <div class="kpi-sub">cruzando com as faturas</div>
     </div>`;
   ajustarKpis();
   ouvir('kpi-detalhe-proj', 'click', () => mostrarComposicaoProjecao(r));
@@ -3915,22 +3917,25 @@ function mostrarComposicaoProjecao(r) {
   htm('gaveta-cab', `<div class="titulo"><h2>Projeção de faturamento</h2>
     <div class="sub">manutenção — ${esc(r.proximo.comp)} e ${esc(r.seguinte.comp)}</div></div>
     <button class="gaveta-fechar" onclick="fecharFicha()">×</button>`);
-  htm('gaveta-corpo', secao('Como a conta é feita', `
-      <div class="cartao-dica" style="margin:0 0 10px">A fatura do mês é formada pelas OS que chegam a "cobradas".
-      Cada estágio entra com um peso diferente: o que já está concluído entra quase todo na próxima fatura,
-      o que ainda depende de aprovação entra aos poucos. O valor de referência é o aprovado; quando a OS ainda
-      não tem valor aprovado, usamos o orçado ajustado pela taxa histórica de ${fmtDec(r.taxa * 100)}%
-      (medida em ${r.amostraTaxa} OS já aprovadas).</div>
-      <div class="tabela-rol" style="max-height:300px"><table class="tabela-simples" style="width:100%">
-        <thead><tr><th>Estágio</th><th class="num">OS</th><th class="num">Referência</th>
+  htm('gaveta-corpo', secao('O caminho da OS até a fatura', `
+      <div class="cartao-dica" style="margin:0 0 10px">A fatura de uma competência é o conjunto de OS que aparece no
+      OrçamentosDB com aquela competência. Então a projeção parte do que já virou cobrança e ainda não entrou em
+      nenhuma fatura, e depois considera o que ainda precisa de aceite, nota fiscal ou execução.
+      Hoje é dia ${r.diaDoMes}, por isso ${r.diaDoMes <= 15 ? 'ainda há prazo para boa parte concluir no mês' : 'sobra pouco prazo para concluir dentro do mês'}.</div>
+      <div class="tabela-rol" style="max-height:280px"><table class="tabela-simples" style="width:100%">
+        <thead><tr><th>Origem</th><th class="num">OS</th><th class="num">Valor</th>
           <th class="num">${esc(r.proximo.comp)}</th><th class="num">${esc(r.seguinte.comp)}</th></tr></thead>
-        <tbody>${r.detalhe.map(d => `<tr><td>${esc(d.status)}</td><td class="num">${d.qtd}</td>
-          <td class="num">${fmtMoeda(d.referencia)}</td>
-          <td class="num">${fmtMoeda(d.noProximo)} <small style="color:var(--tinta-suave)">${Math.round(d.pesoProximo * 100)}%</small></td>
-          <td class="num">${fmtMoeda(d.noSeguinte)} <small style="color:var(--tinta-suave)">${Math.round(d.pesoSeguinte * 100)}%</small></td></tr>`).join('')}
-        </tbody>
+        <tbody>${r.composicao.map(c => `<tr><td>${esc(c.rotulo)}<div class="vinculo">${esc(c.nota)}</div></td>
+          <td class="num">${c.qtd}</td><td class="num">${fmtMoeda(c.valor)}</td>
+          <td class="num forte">${fmtMoeda(c.noProximo)}</td><td class="num">${fmtMoeda(c.noSeguinte)}</td></tr>`).join('')}</tbody>
         <tfoot><tr><td colspan="3">Total projetado</td><td class="num forte">${fmtMoeda(r.proximo.valor)}</td><td class="num forte">${fmtMoeda(r.seguinte.valor)}</td></tr></tfoot>
       </table></div>`) +
+    secao('Fora da projeção', `
+      <div class="cartao-dica" style="margin:0 0 8px">Ainda dependem de aprovação, revisão ou envio ao cliente. Não entram na conta porque não há previsão de quando serão executadas.</div>
+      <table class="tabela-simples" style="width:100%"><tbody>
+        ${r.semPrevisao.porStatus.map(x => `<tr><td>${esc(x.status)}</td><td class="num">${x.qtd} OS</td><td class="num">${fmtMoeda(x.valor)}</td></tr>`).join('')}
+        <tr><td><b>Total</b></td><td class="num"><b>${r.semPrevisao.qtd}</b></td><td class="num"><b>${fmtMoeda(r.semPrevisao.valor)}</b></td></tr>
+      </tbody></table>`) +
     (r.historico.length ? secao('Faturas já emitidas', `
       <div class="barras compacto">${(() => {
         const maximo = Math.max(1, ...r.historico.map(h => h.valor));
@@ -3938,10 +3943,9 @@ function mostrarComposicaoProjecao(r) {
           <span class="trilha"><span class="preench" style="width:${Math.round(h.valor / maximo * 100)}%; background:var(--azul)"></span></span>
           <span class="valor">${fmtMoeda(h.valor)}</span></button>`).join('');
       })()}</div>
-      <div class="cartao-dica">Média dos últimos ${Math.min(6, r.historico.length)} meses: ${fmtMoeda(r.media)}. A projeção do próximo mês fica ${r.media ? (r.proximo.valor > r.media ? 'acima' : 'abaixo') : '—'} dessa média.</div>`) : '') +
+      <div class="cartao-dica">Média dos últimos ${Math.min(6, r.historico.length)} meses: ${fmtMoeda(r.media)}. ${r.jaFaturadas} OS com status "Cobradas" já constam em faturas anteriores.</div>`) : '') +
     `<div class="form-acoes"><button class="btn claro" onclick="fecharFicha()">Fechar</button></div>`);
   cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
   document.body.style.overflow = 'hidden';
 }
-
 </script>

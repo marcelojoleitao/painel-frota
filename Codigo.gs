@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.41.0';
+const CODIGO_VERSAO = '2.42.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1228,102 +1228,175 @@ function instalarGatilho() {
    entrar na próxima fatura, e é isso que a projeção usa.
    ============================================================ */
 
-/** Quanto de cada estágio costuma entrar na fatura do mês seguinte e do outro. */
-const PESOS_PROJECAO = {
-  'Concluídas e Não Cobradas':  { proximo: 1.00, seguinte: 0.00 },
-  'Aprovadas e Não Iniciadas':  { proximo: 0.50, seguinte: 0.45 },
-  'Aguardando CLIENTE NIVEL 2': { proximo: 0.25, seguinte: 0.50 },
-  'Aguardando CLIENTE NIVEL 1': { proximo: 0.15, seguinte: 0.50 },
-  'Aguardando VISTORIADOR':     { proximo: 0.10, seguinte: 0.40 },
-  'Pedidos de Revisão':         { proximo: 0.00, seguinte: 0.30 },
-  'Não Enviadas ao Cliente':    { proximo: 0.00, seguinte: 0.20 }
-};
+/**
+ * O fluxo real de uma OS até virar fatura:
+ *   aguardando nível 1 → nível 2 → aprovada e não iniciada → oficina executa
+ *   → concluída → aceite → oficina anexa a NF → Ticket cobra → "Cobrada"
+ * A fatura de uma competência é o conjunto de OS que consta no OrçamentosDB
+ * com aquela competência. Logo, a projeção não é sobre o que está "orçado":
+ * é sobre as OS que já viraram cobrança e ainda não entraram em nenhuma fatura.
+ */
 
+/** Cruza a aba OS com o OrçamentosDB e explica como a fatura se forma. */
+function analisarFormacaoFatura(token, competencia) {
+  const p = token ? _prepararAcao_(token) : { ss: SpreadsheetApp.openById(CONFIG.ID_BASE) };
+  if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const dados = _dadosFatura_();
+    const comps = Object.keys(dados.porComp).sort((a, b) => _ordemComp_(a).localeCompare(_ordemComp_(b)));
+    const alvo = competencia || comps[comps.length - 1];
+    const daComp = dados.porComp[alvo] || [];
+    const cobradasNaAba = dados.osPorStatus['Cobradas'] || [];
+    const jaFaturadas = cobradasNaAba.filter(o => dados.faturadas[o.os]);
+    const aFaturar = cobradasNaAba.filter(o => !dados.faturadas[o.os]);
+
+    const linhas = [];
+    linhas.push('Competências no OrçamentosDB: ' + comps.length + ' (de ' + comps[0] + ' a ' + comps[comps.length - 1] + ')');
+    linhas.push('Fatura ' + alvo + ': ' + daComp.length + ' OS, total ' + _moedaBR_(daComp.reduce((s, x) => s + x.valor, 0)));
+    linhas.push('');
+    linhas.push('Na aba OS, status "Cobradas": ' + cobradasNaAba.length + ' OS');
+    linhas.push('   já constam em alguma fatura: ' + jaFaturadas.length + ' (' + _moedaBR_(jaFaturadas.reduce((s, o) => s + o.valor, 0)) + ')');
+    linhas.push('   ainda NÃO faturadas:        ' + aFaturar.length + ' (' + _moedaBR_(aFaturar.reduce((s, o) => s + o.valor, 0)) + ') ← entram na próxima');
+    linhas.push('');
+    // de onde vieram as OS da fatura: qual era o status delas na aba OS
+    const statusDaFatura = {};
+    daComp.forEach(x => {
+      const naAba = dados.osPorNumero[x.os];
+      const st = naAba ? naAba.status : '(não está na aba OS)';
+      const e = statusDaFatura[st] || (statusDaFatura[st] = { qtd: 0, valor: 0 });
+      e.qtd++; e.valor += x.valor;
+    });
+    linhas.push('Status, na aba OS, das ' + daComp.length + ' OS da fatura ' + alvo + ':');
+    Object.keys(statusDaFatura).forEach(st => linhas.push('   ' + st + ': ' + statusDaFatura[st].qtd + ' OS, ' + _moedaBR_(statusDaFatura[st].valor)));
+    linhas.push('');
+    // tempo entre conclusão e competência faturada
+    const atrasos = [];
+    daComp.forEach(x => {
+      if (!x.conclusao) return;
+      const m = String(x.conclusao).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (!m) return;
+      const concl = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+      const comp = new Date(Number(alvo.substring(3)), Number(alvo.substring(0, 2)) - 1, 1);
+      atrasos.push(Math.round((comp - concl) / 86400000));
+    });
+    if (atrasos.length) {
+      atrasos.sort((a, b) => a - b);
+      linhas.push('Dias entre a conclusão do serviço e a competência faturada:');
+      linhas.push('   mínimo ' + atrasos[0] + ' | mediana ' + atrasos[Math.floor(atrasos.length / 2)] + ' | máximo ' + atrasos[atrasos.length - 1]);
+      linhas.push('   concluídas no próprio mês da competência: ' + atrasos.filter(d => d >= 0 && d <= 31).length + ' de ' + atrasos.length);
+    }
+    linhas.forEach(l => Logger.log(l));
+    return { ok: true, relatorio: linhas, competencia: alvo, competencias: comps };
+  } catch (e) { Logger.log('Erro: ' + e); return { ok: false, erro: String(e.message || e) }; }
+}
+
+function _ordemComp_(c) { return c.substring(3) + c.substring(0, 2); }
+
+/** Lê, de uma vez, o OrçamentosDB (faturas) e a aba OS (situação atual). */
+function _dadosFatura_() {
+  const saida = { porComp: {}, faturadas: {}, osPorNumero: {}, osPorStatus: {} };
+  // faturas
+  const abaOrc = _ssManut_().getSheetByName(CONFIG.ABA_ORCAMENTOS);
+  if (abaOrc && abaOrc.getLastRow() > 2) {
+    const valores = abaOrc.getDataRange().getValues();
+    let cab = 0;
+    for (let i = 0; i < Math.min(6, valores.length); i++) {
+      if (valores[i].some(c => /ORDEM\s*SERVI/i.test(String(c)))) { cab = i; break; }
+    }
+    const nomes = valores[cab].map(c => _normCab_(c));
+    const iOs = nomes.findIndex(c => /ORDEM SERVICO|^OS$/.test(c));
+    const iTot = nomes.findIndex(c => /TOTAL O ?S|TOTAL OS|^TOTAL/.test(c));
+    const iComp = nomes.findIndex(c => /COMPET/.test(c));
+    const iConcl = nomes.findIndex(c => /DATA CONCLUS/.test(c));
+    for (let r = cab + 1; r < valores.length; r++) {
+      const os = String(valores[r][iOs] || '').replace(/\D/g, '');
+      if (!os) continue;
+      const comp = _compSegura_(valores[r][iComp]);
+      const item = { os: os, valor: _num_(valores[r][iTot]) || 0, conclusao: iConcl >= 0 ? _dataTxt_(valores[r][iConcl]) : '' };
+      saida.faturadas[os] = comp || true;
+      if (comp) (saida.porComp[comp] = saida.porComp[comp] || []).push(item);
+    }
+  }
+  // aba OS
+  const tab = _abaPorCabecalho_(SpreadsheetApp.openById(CONFIG.ID_BASE), CONFIG.ABA_OS_PENDENTES, ['OS', 'Placa', 'Orçado', 'Status']);
+  if (tab) {
+    _linhasComoObjetos_(tab).forEach(o => {
+      const os = String(_txt_(o['OS'])).replace(/\D/g, '');
+      if (!os) return;
+      const item = { os: os, placa: _txt_(o['Placa']), status: _txt_(o['Status']),
+        orcado: _num_(o['Orçado']) || 0, aprovado: _num_(o['Aprovado']) || 0, data: _dataTxt_(o['Data']) };
+      item.valor = item.aprovado > 0 ? item.aprovado : item.orcado;
+      saida.osPorNumero[os] = item;
+      (saida.osPorStatus[item.status] = saida.osPorStatus[item.status] || []).push(item);
+    });
+  }
+  return saida;
+}
+
+/**
+ * Projeção baseada no fluxo real, sem chutar peso por estágio:
+ *   • já cobradas e ainda não faturadas → próxima fatura (quase certo)
+ *   • concluídas e não cobradas → falta aceite e NF da oficina → próxima ou seguinte
+ *   • aprovadas e não iniciadas → dependem de execução → seguinte
+ *   • aguardando aprovação, revisão e não enviadas → sem previsão; ficam como potencial
+ */
 function projecaoOS(token) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
   try {
-    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
-    const tab = _abaPorCabecalho_(ss, CONFIG.ABA_OS_PENDENTES, ['OS', 'Placa', 'Orçado', 'Status']);
-    if (!tab) return { ok: false, erro: 'Aba OS não encontrada.' };
-    const linhas = _linhasComoObjetos_(tab);
+    const d = _dadosFatura_();
+    const soma = lista => Math.round((lista || []).reduce((s, o) => s + o.valor, 0) * 100) / 100;
+    const cobradas = d.osPorStatus['Cobradas'] || [];
+    const aFaturar = cobradas.filter(o => !d.faturadas[o.os]);
+    const concluidas = d.osPorStatus['Concluídas e Não Cobradas'] || [];
+    const aprovadas = d.osPorStatus['Aprovadas e Não Iniciadas'] || [];
 
-    // taxa de aprovação: quanto do orçado costuma virar valor aprovado
-    const razoes = [];
-    linhas.forEach(o => {
-      const orc = _num_(o['Orçado']) || 0, apr = _num_(o['Aprovado']) || 0;
-      const st = _txt_(o['Status']);
-      if (orc > 0 && apr > 0 && /COBRADAS|CONCLU|APROVADAS/i.test(_normCab_(st))) razoes.push(apr / orc);
-    });
-    razoes.sort((a, b) => a - b);
-    const taxa = razoes.length ? razoes[Math.floor(razoes.length / 2)] : 1;
-
-    // pipeline por estágio
-    const estagios = {};
-    linhas.forEach(o => {
-      const st = _txt_(o['Status']) || 'Sem status';
-      if (/COBRADAS/i.test(_normCab_(st))) return;             // já faturadas
-      const orc = _num_(o['Orçado']) || 0, apr = _num_(o['Aprovado']) || 0;
-      // o valor de referência é o aprovado; sem ele, o orçado ajustado pela taxa
-      const valor = apr > 0 ? apr : Math.round(orc * taxa * 100) / 100;
-      const e = estagios[st] || (estagios[st] = { status: st, qtd: 0, orcado: 0, aprovado: 0, referencia: 0 });
-      e.qtd++; e.orcado += orc; e.aprovado += apr; e.referencia += valor;
+    const semPrevisao = [];
+    Object.keys(d.osPorStatus).forEach(st => {
+      if (/^COBRADAS$/i.test(_normCab_(st))) return;
+      if (/CONCLU|APROVADAS E NAO INICIADAS/i.test(_normCab_(st))) return;
+      d.osPorStatus[st].forEach(o => semPrevisao.push(Object.assign({ statusNome: st }, o)));
     });
 
-    let proximo = 0, seguinte = 0;
-    const detalhe = Object.keys(estagios).map(st => {
-      const e = estagios[st];
-      const peso = PESOS_PROJECAO[st] || { proximo: 0.10, seguinte: 0.30 };
-      const noProximo = Math.round(e.referencia * peso.proximo * 100) / 100;
-      const noSeguinte = Math.round(e.referencia * peso.seguinte * 100) / 100;
-      proximo += noProximo; seguinte += noSeguinte;
-      return { status: st, qtd: e.qtd, orcado: e.orcado, aprovado: e.aprovado, referencia: e.referencia,
-        pesoProximo: peso.proximo, pesoSeguinte: peso.seguinte, noProximo: noProximo, noSeguinte: noSeguinte };
-    }).sort((a, b) => b.referencia - a.referencia);
-
-    // histórico real das faturas, do OrçamentosDB
-    const historico = [];
-    try {
-      const abaOrc = _ssManut_().getSheetByName(CONFIG.ABA_ORCAMENTOS);
-      if (abaOrc && abaOrc.getLastRow() > 2) {
-        const valores = abaOrc.getDataRange().getValues();
-        let cab = 0;
-        for (let i = 0; i < Math.min(6, valores.length); i++) {
-          if (valores[i].some(c => /ORDEM\s*SERVI/i.test(String(c)))) { cab = i; break; }
-        }
-        const nomes = valores[cab].map(c => _normCab_(c));
-        const iTotal = nomes.findIndex(c => /TOTAL O ?S|TOTAL OS|^TOTAL/.test(c));
-        const iComp = nomes.findIndex(c => /COMPET/.test(c));
-        if (iTotal >= 0 && iComp >= 0) {
-          const porComp = {};
-          for (let r = cab + 1; r < valores.length; r++) {
-            const comp = _compSegura_(valores[r][iComp]);
-            if (!comp) continue;
-            porComp[comp] = (porComp[comp] || 0) + (_num_(valores[r][iTotal]) || 0);
-          }
-          Object.keys(porComp)
-            .sort((a, b) => (a.substring(3) + a.substring(0, 2)).localeCompare(b.substring(3) + b.substring(0, 2)))
-            .slice(-12)
-            .forEach(c => historico.push({ comp: c, valor: Math.round(porComp[c] * 100) / 100 }));
-        }
-      }
-    } catch (e) { Logger.log('Histórico de faturas: ' + e); }
-
+    // histórico real das faturas
+    const comps = Object.keys(d.porComp).sort((a, b) => _ordemComp_(a).localeCompare(_ordemComp_(b)));
+    const historico = comps.slice(-12).map(c => ({ comp: c, valor: Math.round(d.porComp[c].reduce((s, x) => s + x.valor, 0) * 100) / 100 }));
     const ultimos = historico.slice(-6);
-    const media = ultimos.length ? ultimos.reduce((s, x) => s + x.valor, 0) / ultimos.length : 0;
-    const hoje = new Date();
-    const rot = n => {
-      const d = new Date(hoje.getFullYear(), hoje.getMonth() + n, 1);
-      return ('0' + (d.getMonth() + 1)).slice(-2) + '/' + d.getFullYear();
-    };
+    const media = ultimos.length ? Math.round(ultimos.reduce((s, x) => s + x.valor, 0) / ultimos.length * 100) / 100 : 0;
 
-    return { ok: true, taxa: taxa, amostraTaxa: razoes.length,
-      proximo: { comp: rot(1), valor: Math.round(proximo * 100) / 100 },
-      seguinte: { comp: rot(2), valor: Math.round(seguinte * 100) / 100 },
-      emFila: Math.round(detalhe.reduce((s, d) => s + d.referencia, 0) * 100) / 100,
-      detalhe: detalhe, historico: historico, media: Math.round(media * 100) / 100,
-      mesesDeFila: media ? Math.round(detalhe.reduce((s, d) => s + d.referencia, 0) / media * 10) / 10 : 0 };
+    const hoje = new Date();
+    const rot = n => { const x = new Date(hoje.getFullYear(), hoje.getMonth() + n, 1); return ('0' + (x.getMonth() + 1)).slice(-2) + '/' + x.getFullYear(); };
+    const diaDoMes = hoje.getDate();
+    // até o dia 15 ainda dá tempo de executar e concluir no próprio mês; depois, não
+    const fatiaConcluidas = diaDoMes <= 15 ? 0.8 : 0.6;
+    const fatiaAprovadas = diaDoMes <= 15 ? 0.35 : 0.15;
+
+    const proximo = Math.round((soma(aFaturar) + soma(concluidas) * fatiaConcluidas + soma(aprovadas) * fatiaAprovadas) * 100) / 100;
+    const seguinte = Math.round((soma(concluidas) * (1 - fatiaConcluidas) + soma(aprovadas) * (1 - fatiaAprovadas)) * 100) / 100;
+
+    return { ok: true,
+      proximo: { comp: rot(1), valor: proximo },
+      seguinte: { comp: rot(2), valor: seguinte },
+      composicao: [
+        { rotulo: 'Cobradas ainda não faturadas', qtd: aFaturar.length, valor: soma(aFaturar), noProximo: soma(aFaturar), noSeguinte: 0,
+          nota: 'já viraram cobrança da Ticket e não constam em nenhuma fatura' },
+        { rotulo: 'Concluídas e não cobradas', qtd: concluidas.length, valor: soma(concluidas),
+          noProximo: Math.round(soma(concluidas) * fatiaConcluidas * 100) / 100, noSeguinte: Math.round(soma(concluidas) * (1 - fatiaConcluidas) * 100) / 100,
+          nota: 'falta o aceite e a nota fiscal da oficina' },
+        { rotulo: 'Aprovadas e não iniciadas', qtd: aprovadas.length, valor: soma(aprovadas),
+          noProximo: Math.round(soma(aprovadas) * fatiaAprovadas * 100) / 100, noSeguinte: Math.round(soma(aprovadas) * (1 - fatiaAprovadas) * 100) / 100,
+          nota: 'dependem de a oficina executar o serviço' }
+      ],
+      semPrevisao: { qtd: semPrevisao.length, valor: soma(semPrevisao),
+        porStatus: Object.keys(d.osPorStatus).filter(st => !/^COBRADAS$|CONCLU|APROVADAS E NAO INICIADAS/i.test(_normCab_(st)))
+          .map(st => ({ status: st, qtd: d.osPorStatus[st].length, valor: soma(d.osPorStatus[st]) })).sort((a, b) => b.valor - a.valor) },
+      jaFaturadas: cobradas.length - aFaturar.length,
+      historico: historico, media: media,
+      diaDoMes: diaDoMes, fatiaConcluidas: fatiaConcluidas, fatiaAprovadas: fatiaAprovadas };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
+
+/** Atalho para rodar a análise no editor. */
+function analisarFatura() { return analisarFormacaoFatura(null, null); }
 
 /* ------------------------------------------------------------ */
 /*  Edição de campos da aba OS (observações, relato, justificativa) */
