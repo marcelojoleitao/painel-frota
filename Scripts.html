@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.42.0';
+const VERSAO_PAINEL = '2.42.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -889,11 +889,15 @@ function iniciarApp() {
   document.addEventListener('click', e => { if (!e.target.closest('.seletor-colunas')) cls('menu-colunas', 'oculto', true); });
   ouvir('btn-filtros', 'click', () => {
     const corpo = el('corpo'), painel = el('painel-filtros');
-    if (window.innerWidth <= 900) painel.classList.toggle('aberta');
-    else {
-      corpo.classList.toggle('sem-filtros');
-      guardar(CHAVE_FILTROS_OCULTOS, corpo.classList.contains('sem-filtros') ? '1' : '');
-    }
+    if (window.innerWidth <= 900) { painel.classList.toggle('aberta'); return; }
+    corpo.classList.toggle('sem-filtros');
+    guardar(CHAVE_FILTROS_OCULTOS, corpo.classList.contains('sem-filtros') ? '1' : '');
+    // a largura da área útil mudou: refaz o conteúdo para tudo reocupar a tela
+    requestAnimationFrame(() => {
+      renderAba();
+      ajustarKpis();
+      ajustarAlturasOS();
+    });
   });
   document.querySelectorAll('#alt-alienados button').forEach(b => b.addEventListener('click', () => {
     document.querySelectorAll('#alt-alienados button').forEach(x => x.classList.toggle('ativo', x === b));

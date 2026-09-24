@@ -104,8 +104,10 @@ a { color: var(--azul-claro); }
 /* ============================ ESTRUTURA ============================ */
 .corpo { display: grid; grid-template-columns: var(--largura-filtros) 1fr; min-height: calc(100vh - var(--altura-topo)); }
 .topo-aba { position: relative; }
-.corpo.sem-filtros { grid-template-columns: 0 1fr; }
+.corpo.sem-filtros { grid-template-columns: 0 minmax(0, 1fr); }
 .corpo.sem-filtros .filtros { display: none; }
+.corpo.sem-filtros .principal { width: 100%; max-width: none; }
+.corpo > .principal { min-width: 0; }
 .principal { padding: 18px 22px 40px; min-width: 0; }
 
 /* ============================ FILTROS ============================ */
