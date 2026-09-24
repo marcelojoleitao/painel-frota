@@ -104,9 +104,11 @@ a { color: var(--azul-claro); }
 /* ============================ ESTRUTURA ============================ */
 .corpo { display: grid; grid-template-columns: var(--largura-filtros) 1fr; min-height: calc(100vh - var(--altura-topo)); }
 .topo-aba { position: relative; }
-.corpo.sem-filtros { grid-template-columns: 0 minmax(0, 1fr); }
-.corpo.sem-filtros .filtros { display: none; }
-.corpo.sem-filtros .principal { width: 100%; max-width: none; }
+/* Filtros recolhidos: a coluna deixa de existir (em vez de ficar com zero de
+   largura) e o conteúdo passa a ocupar a linha inteira. */
+.corpo.sem-filtros { grid-template-columns: minmax(0, 1fr); }
+.corpo.sem-filtros .filtros { display: none !important; }
+.corpo.sem-filtros .principal { grid-column: 1 / -1; width: 100%; max-width: none; }
 .corpo > .principal { min-width: 0; }
 .principal { padding: 18px 22px 40px; min-width: 0; }
 
@@ -392,7 +394,8 @@ table.tabela td.acoes { text-align: right; }
     z-index: 35; transform: translateX(-100%); transition: transform .2s; box-shadow: var(--sombra-forte);
   }
   .filtros.aberta { transform: translateX(0); }
-  .corpo.sem-filtros .filtros { display: block; }
+  .corpo.sem-filtros { grid-template-columns: 1fr; }
+  .corpo.sem-filtros .filtros { display: block !important; }
   .principal { padding: 12px 12px 40px; }
   .topo-sub, .topo-meta { display: none; }
   .topo-abas { margin-left: 0; gap: 0; }
