@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.44.0';
+const CODIGO_VERSAO = '2.44.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1582,14 +1582,14 @@ const CAMPOS_CRLV = [
   { campo: 'chassi',    rotulos: ['CHASSI'],                                         tipo: 'chassi' },
   { campo: 'anoFab',    rotulos: ['ANO FABRICACAO', 'ANO DE FABRICACAO'],            tipo: 'ano' },
   { campo: 'anoMod',    rotulos: ['ANO MODELO', 'ANO DO MODELO'],                    tipo: 'ano' },
-  { campo: 'modelo',    rotulos: ['MARCA / MODELO / VERSAO', 'MARCA/MODELO/VERSAO', 'MARCA MODELO VERSAO', 'MARCA / MODELO', 'MARCA/MODELO'], tipo: 'texto' },
-  { campo: 'especie',   rotulos: ['ESPECIE / TIPO', 'ESPECIE/TIPO', 'ESPECIE'],      tipo: 'texto' },
+  { campo: 'modelo',    rotulos: ['MARCA / MODELO / VERSAO', 'MARCA/MODELO/VERSAO', 'MARCA MODELO VERSAO', 'MARCA / MODELO', 'MARCA/MODELO', 'MARCA MODELO'], tipo: 'texto' },
+  { campo: 'especie',   rotulos: ['ESPECIE / TIPO', 'ESPECIE/TIPO', 'ESPECIE TIPO', 'ESPECIE'], tipo: 'texto' },
   { campo: 'categoria', rotulos: ['CATEGORIA'],                                      tipo: 'texto' },
   { campo: 'cor',       rotulos: ['COR PREDOMINANTE', 'COR'],                        tipo: 'texto' },
   { campo: 'comb',      rotulos: ['COMBUSTIVEL'],                                    tipo: 'texto' },
-  { campo: 'potencia',  rotulos: ['POTENCIA / CILINDRADA', 'POTENCIA/CILINDRADA', 'POTENCIA'], tipo: 'texto' },
+  { campo: 'potencia',  rotulos: ['POTENCIA / CILINDRADA', 'POTENCIA/CILINDRADA', 'POTENCIA CILINDRADA', 'POTENCIA'], tipo: 'texto' },
   { campo: 'capacidade', rotulos: ['CAPACIDADE'],                                    tipo: 'texto' },
-  { campo: 'crv',       rotulos: ['CODIGO CLA / CRV', 'NUMERO DO CRV', 'CRV'],       tipo: 'digitos' },
+  { campo: 'crv',       rotulos: ['CODIGO CLA / CRV', 'CODIGO CLA/CRV', 'CODIGO CLA CRV', 'NUMERO DO CRV', 'CRV'], tipo: 'digitos' },
   { campo: 'anoEx',     rotulos: ['EXERCICIO'],                                      tipo: 'ano' }
 ];
 
@@ -1600,21 +1600,31 @@ function _camposCrlv_(texto) {
   const achados = {};
 
   CAMPOS_CRLV.forEach(def => {
-    for (let i = 0; i < def.rotulos.length; i++) {
-      const rotulo = def.rotulos[i];
+    // tenta primeiro os rótulos mais longos: "MARCA / MODELO / VERSAO" antes de
+    // "MARCA / MODELO", senão o que sobra do próprio rótulo vira valor
+    const rotulos = def.rotulos.slice().sort((a, b) => b.length - a.length);
+    for (let i = 0; i < rotulos.length; i++) {
+      const rotulo = rotulos[i];
       const pos = T.indexOf(rotulo);
       if (pos < 0) continue;
-      // o valor vem logo depois do rótulo, antes do próximo rótulo conhecido
       let trecho = T.substring(pos + rotulo.length, pos + rotulo.length + 90).trim();
       trecho = trecho.replace(/^[:\-\s]+/, '');
       const valor = _valorCrlv_(trecho, def.tipo);
-      if (valor) { achados[def.campo] = valor; break; }
+      if (valor && !_pareceRotulo_(valor)) { achados[def.campo] = valor; break; }
     }
   });
 
   achados.placa = _extrairPlacaPdf_(bruto);
   if (!achados.anoEx) { const ex = _extrairExercicio_(bruto, achados.placa); if (ex) achados.anoEx = String(ex); }
   return achados;
+}
+
+/** Sobra de rótulo ("/ VERSAO", "TIPO", "CILINDRADA") não é valor. */
+function _pareceRotulo_(v) {
+  const t = _normCab_(v);
+  if (!t || t.length < 3) return true;
+  if (/^[\/\-]/.test(v.trim())) return true;
+  return /^(VERSAO|TIPO|CILINDRADA|CLA|CRV|PREDOMINANTE|FABRICACAO|MODELO|ESPECIE|CATEGORIA|COMBUSTIVEL|POTENCIA|CAPACIDADE|RENAVAM|CHASSI|PLACA|EXERCICIO)\b/.test(t);
 }
 
 function _valorCrlv_(trecho, tipo) {
