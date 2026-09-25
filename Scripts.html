@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.43.0';
+const VERSAO_PAINEL = '2.44.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -1739,6 +1739,7 @@ function abrirFormViatura(placa) {
     if (inp.files && inp.files[0]) enviarFoto(placa, inp.dataset.ang, inp.files[0]);
     inp.value = '';
   }));
+  ouvir('btn-ler-crlv', 'click', () => lerCrlv(placa, false));
   document.querySelectorAll('#gaveta-corpo input[data-doc]').forEach(inp => inp.addEventListener('change', () => {
     if (inp.files && inp.files[0]) enviarDocumento(placa, inp.dataset.doc, inp.files[0]);
     inp.value = '';
@@ -2942,9 +2943,13 @@ function secaoDocumentosEdicao(v, porCampo) {
       <div class="doc-cab"><b>${esc(d.rotulo)}</b>${atual ? `<a class="pdf-link" href="${escAttr(atual)}" target="_blank" rel="noopener">${icoPdf()} abrir atual</a>` : '<span class="badge manutencao">sem arquivo</span>'}</div>
       <div class="cartao-dica" style="margin:4px 0 8px">${esc(d.dica)}${info && info.motivo && info.motivo.indexOf('liberado') > 0 ? ' <span style="color:var(--ambar)">Coluna preenchida por script — o painel também grava aqui.</span>' : ''}</div>
       ${bloqueada ? `<div class="foto-data" title="${escAttr(info.motivo)}">coluna bloqueada por fórmula</div>` :
-        `<label class="btn claro" style="cursor:pointer; display:inline-flex">${atual ? 'Substituir' : 'Anexar'} PDF
-          <input type="file" accept="application/pdf" class="oculto" data-doc="${d.tipo}"></label>
-         <div class="foto-data doc-status" id="doc-status-${d.tipo}"></div>`}
+        `<div style="display:flex; gap:6px; flex-wrap:wrap">
+           <label class="btn claro" style="cursor:pointer; display:inline-flex">${atual ? 'Substituir' : 'Anexar'} PDF
+             <input type="file" accept="application/pdf" class="oculto" data-doc="${d.tipo}"></label>
+           ${d.tipo === 'crlv' && atual ? `<button class="btn claro" id="btn-ler-crlv">Ler e preencher</button>` : ''}
+         </div>
+         <div class="foto-data doc-status" id="doc-status-${d.tipo}"></div>
+         ${d.tipo === 'crlv' ? '<div id="crlv-resultado"></div>' : ''}`}
     </div>`;
   }).join('');
   return secao('Documentos', `<div class="docs-edicao">${cartoes}</div>
@@ -3952,4 +3957,49 @@ function mostrarComposicaoProjecao(r) {
   cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
   document.body.style.overflow = 'hidden';
 }
+
+/* ---------------- leitura do CRLV ---------------- */
+const ROTULOS_CRLV = { renavam: 'Renavam', chassi: 'Chassi', anoFab: 'Ano fabricação', anoMod: 'Ano modelo',
+  modelo: 'Marca/Modelo', especie: 'Espécie', categoria: 'Categoria', cor: 'Cor', comb: 'Combustível',
+  potencia: 'Potência/Cilindrada', capacidade: 'Capacidade', crv: 'CRV', anoEx: 'Exercício' };
+
+function lerCrlv(placa, aplicar) {
+  const caixa = el('crlv-resultado'), botao = el('btn-ler-crlv');
+  if (botao) { botao.disabled = true; botao.textContent = aplicar ? 'Preenchendo…' : 'Lendo…'; }
+  if (caixa && !aplicar) caixa.innerHTML = '<div class="cartao-dica">Lendo o PDF do CRLV… isso leva alguns segundos.</div>';
+  const run = servidor('lerCrlvViatura',
+    r => {
+      if (botao) { botao.disabled = false; botao.textContent = 'Ler e preencher'; }
+      if (!r || !r.ok) {
+        if (caixa) caixa.innerHTML = `<div class="alerta-item" style="cursor:default"><span class="t">NÃO FOI POSSÍVEL LER</span>
+          <div style="margin-top:3px">${esc((r && r.erro) || 'Falha na leitura.')}</div></div>`;
+        return;
+      }
+      if (aplicar) {
+        toast(r.preencher.length + ' campo(s) preenchido(s) pelo CRLV.');
+        fecharFicha();
+        recarregarAposEdicao(placa);
+        return;
+      }
+      const linha = (rot, valor, classe) => `<tr><td>${esc(rot)}</td><td class="${classe || ''}">${esc(valor)}</td></tr>`;
+      caixa.innerHTML = `
+        <div class="cartao-dica" style="margin:8px 0 6px">Lido do CRLV da placa <b>${esc(r.placa)}</b>.</div>
+        ${r.preencher.length ? `<div class="grupo-titulo">Vai preencher (${r.preencher.length})</div>
+          <table class="tabela-simples" style="width:100%"><tbody>
+            ${r.preencher.map(x => linha(ROTULOS_CRLV[x.campo] || x.campo, x.valor, 'ok-txt')).join('')}
+          </tbody></table>` : '<div class="cartao-dica">Nenhuma lacuna a preencher — o cadastro já tem tudo que o CRLV informa.</div>'}
+        ${r.divergencias.length ? `<div class="grupo-titulo" style="margin-top:10px">Divergências (não serão alteradas)</div>
+          <table class="tabela-simples" style="width:100%"><thead><tr><th>Campo</th><th>Planilha</th><th>CRLV</th></tr></thead><tbody>
+            ${r.divergencias.map(d => `<tr><td>${esc(ROTULOS_CRLV[d.campo] || d.campo)}</td><td>${esc(d.atual)}</td><td class="alerta-txt">${esc(d.crlv)}</td></tr>`).join('')}
+          </tbody></table>` : ''}
+        ${r.preencher.length ? `<button class="btn amarelo" id="btn-aplicar-crlv" style="margin-top:8px">Preencher os ${r.preencher.length} campo(s)</button>` : ''}`;
+      ouvir('btn-aplicar-crlv', 'click', () => lerCrlv(placa, true));
+    },
+    e => {
+      if (botao) { botao.disabled = false; botao.textContent = 'Ler e preencher'; }
+      if (caixa) caixa.innerHTML = '<div class="cartao-dica">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div>';
+    });
+  if (run) run.lerCrlvViatura(ESTADO.token, placa, !!aplicar);
+}
+
 </script>

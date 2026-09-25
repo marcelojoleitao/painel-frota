@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.43.0';
+const CODIGO_VERSAO = '2.44.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1565,6 +1565,181 @@ function _completarPorModelo_(aplicar) {
     } catch (e) {}
     return aEscrever.length + ' gravadas';
   } finally { trava.releaseLock(); }
+}
+
+
+/* ============================================================
+   LEITURA DO CRLV — validação e preenchimento de lacunas
+   O CRLV-e traz, em texto, os dados oficiais do veículo. Aqui eles
+   são extraídos, comparados com a ConsultaBD e usados para preencher
+   o que estiver em branco. O que diverge é apenas apontado: o painel
+   não sobrescreve dado já preenchido sem você mandar.
+   ============================================================ */
+
+/** Campo do painel ← rótulo no CRLV. A ordem importa: o primeiro que casar vence. */
+const CAMPOS_CRLV = [
+  { campo: 'renavam',   rotulos: ['CODIGO RENAVAM', 'RENAVAM'],                      tipo: 'digitos' },
+  { campo: 'chassi',    rotulos: ['CHASSI'],                                         tipo: 'chassi' },
+  { campo: 'anoFab',    rotulos: ['ANO FABRICACAO', 'ANO DE FABRICACAO'],            tipo: 'ano' },
+  { campo: 'anoMod',    rotulos: ['ANO MODELO', 'ANO DO MODELO'],                    tipo: 'ano' },
+  { campo: 'modelo',    rotulos: ['MARCA / MODELO / VERSAO', 'MARCA/MODELO/VERSAO', 'MARCA MODELO VERSAO', 'MARCA / MODELO', 'MARCA/MODELO'], tipo: 'texto' },
+  { campo: 'especie',   rotulos: ['ESPECIE / TIPO', 'ESPECIE/TIPO', 'ESPECIE'],      tipo: 'texto' },
+  { campo: 'categoria', rotulos: ['CATEGORIA'],                                      tipo: 'texto' },
+  { campo: 'cor',       rotulos: ['COR PREDOMINANTE', 'COR'],                        tipo: 'texto' },
+  { campo: 'comb',      rotulos: ['COMBUSTIVEL'],                                    tipo: 'texto' },
+  { campo: 'potencia',  rotulos: ['POTENCIA / CILINDRADA', 'POTENCIA/CILINDRADA', 'POTENCIA'], tipo: 'texto' },
+  { campo: 'capacidade', rotulos: ['CAPACIDADE'],                                    tipo: 'texto' },
+  { campo: 'crv',       rotulos: ['CODIGO CLA / CRV', 'NUMERO DO CRV', 'CRV'],       tipo: 'digitos' },
+  { campo: 'anoEx',     rotulos: ['EXERCICIO'],                                      tipo: 'ano' }
+];
+
+/** Extrai os campos do texto de um CRLV-e. */
+function _camposCrlv_(texto) {
+  const bruto = String(texto || '');
+  const T = _normCab_(bruto.replace(/\n/g, ' '));
+  const achados = {};
+
+  CAMPOS_CRLV.forEach(def => {
+    for (let i = 0; i < def.rotulos.length; i++) {
+      const rotulo = def.rotulos[i];
+      const pos = T.indexOf(rotulo);
+      if (pos < 0) continue;
+      // o valor vem logo depois do rótulo, antes do próximo rótulo conhecido
+      let trecho = T.substring(pos + rotulo.length, pos + rotulo.length + 90).trim();
+      trecho = trecho.replace(/^[:\-\s]+/, '');
+      const valor = _valorCrlv_(trecho, def.tipo);
+      if (valor) { achados[def.campo] = valor; break; }
+    }
+  });
+
+  achados.placa = _extrairPlacaPdf_(bruto);
+  if (!achados.anoEx) { const ex = _extrairExercicio_(bruto, achados.placa); if (ex) achados.anoEx = String(ex); }
+  return achados;
+}
+
+function _valorCrlv_(trecho, tipo) {
+  if (tipo === 'digitos') { const m = trecho.match(/\b(\d{6,13})\b/); return m ? m[1] : ''; }
+  if (tipo === 'ano') { const m = trecho.match(/\b((?:19|20)\d{2})\b/); return m ? m[1] : ''; }
+  if (tipo === 'chassi') { const m = trecho.match(/\b([A-HJ-NPR-Z0-9]{17})\b/); return m ? m[1] : ''; }
+  // texto: para no próximo rótulo do documento
+  const corte = trecho.split(/\b(PLACA|RENAVAM|CHASSI|CATEGORIA|ESPECIE|COMBUSTIVEL|POTENCIA|CAPACIDADE|CODIGO|CLA|CRV|ANO |EXERCICIO|COR |MARCA|CPF|CNPJ|MUNICIPIO|LOCAL|DATA|OBSERVAC|NUMERO|SERIE|MOTOR|EIXOS|PESO|LOTACAO|CARROCERIA|RESTRICAO|PROPRIET)/)[0];
+  const limpo = corte.replace(/\s{2,}/g, ' ').trim();
+  return limpo.length >= 2 && limpo.length <= 60 ? limpo : '';
+}
+
+/** Lê o CRLV de uma viatura e compara com a ConsultaBD. */
+function _lerCrlvDaViatura_(aba, mapa, linha, idx) {
+  const placa = String(aba.getRange(linha, idx.placa + 1).getValue() || '').trim().toUpperCase();
+  const link = idx.linkCrlv !== undefined ? String(aba.getRange(linha, idx.linkCrlv + 1).getValue() || '') : '';
+  const id = (link.match(/[-\w]{25,}/) || [])[0];
+  if (!id) return { placa: placa, erro: 'sem CRLV anexado' };
+  let texto = '';
+  try {
+    texto = _pdfTexto_(DriveApp.getFileById(id).getBlob().getBytes());
+  } catch (e) { return { placa: placa, erro: 'falha ao ler o PDF: ' + String(e).substring(0, 60) }; }
+  if (!texto || texto.replace(/\s/g, '').length < 40) return { placa: placa, erro: 'PDF sem texto legível' };
+
+  const lidos = _camposCrlv_(texto);
+  if (lidos.placa && placa && lidos.placa !== placa) {
+    return { placa: placa, erro: 'o PDF é da placa ' + lidos.placa, lidos: lidos };
+  }
+  const preencher = [], divergencias = [];
+  CAMPOS_CRLV.forEach(def => {
+    const col = idx[def.campo];
+    if (col === undefined) return;
+    const lido = lidos[def.campo];
+    if (!lido) return;
+    const info = mapa.porCampo[def.campo];
+    if (info && !info.editavel) return;
+    const atual = String(aba.getRange(linha, col + 1).getValue() || '').trim();
+    if (!atual) { preencher.push({ campo: def.campo, col: col + 1, valor: lido }); return; }
+    if (_normCab_(atual) !== _normCab_(lido)) divergencias.push({ campo: def.campo, atual: atual, crlv: lido });
+  });
+  return { placa: placa, lidos: lidos, preencher: preencher, divergencias: divergencias };
+}
+
+/** Confere (sem gravar) o que o CRLV preencheria. Processa em lotes. */
+function validarCrlvFrota() { return _percorrerCrlv_(false); }
+
+/** Preenche as lacunas a partir do CRLV. Processa em lotes. */
+function validarCrlvFrotaAplicar() { return _percorrerCrlv_(true); }
+
+/** Recomeça a varredura do zero. */
+function reiniciarLeituraCrlv() {
+  PropertiesService.getScriptProperties().deleteProperty('CRLV_PROGRESSO');
+  Logger.log('Progresso zerado: a próxima execução começa da primeira viatura.');
+}
+
+function _percorrerCrlv_(aplicar) {
+  const LOTE = 25;                                    // cada PDF leva alguns segundos
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const aba = ss.getSheetByName(CONFIG.ABA_BASE);
+  const nLin = aba.getLastRow(), nCol = aba.getLastColumn();
+  const cab = aba.getRange(1, 1, 1, nCol).getValues()[0].map(c => String(c || '').trim());
+  const idx = _mapearCampos_(cab);
+  const mapa = _mapaEdicao_(aba);
+
+  const props = PropertiesService.getScriptProperties();
+  let inicio = parseInt(props.getProperty('CRLV_PROGRESSO') || '2', 10);
+  if (inicio < 2 || inicio > nLin) inicio = 2;
+  const fim = Math.min(inicio + LOTE - 1, nLin);
+
+  Logger.log('=== CRLV ' + (aplicar ? '(gravando)' : '(conferência)') + ' — linhas ' + inicio + ' a ' + fim + ' de ' + nLin + ' ===');
+  let preenchidas = 0, comDivergencia = 0, semCrlv = 0, erros = 0;
+  const resumoDiv = [];
+
+  for (let linha = inicio; linha <= fim; linha++) {
+    const r = _lerCrlvDaViatura_(aba, mapa, linha, idx);
+    if (r.erro) {
+      if (/sem CRLV/.test(r.erro)) semCrlv++; else { erros++; Logger.log('   ' + r.placa + ': ' + r.erro); }
+      continue;
+    }
+    if (r.preencher.length) {
+      Logger.log('   ' + r.placa + ': preencher ' + r.preencher.map(x => x.campo + '=' + x.valor).join(', '));
+      if (aplicar) r.preencher.forEach(x => aba.getRange(linha, x.col).setValue(x.valor));
+      preenchidas += r.preencher.length;
+    }
+    if (r.divergencias.length) {
+      comDivergencia++;
+      r.divergencias.forEach(d => resumoDiv.push(r.placa + ' · ' + d.campo + ': planilha "' + d.atual + '" × CRLV "' + d.crlv + '"'));
+    }
+  }
+
+  if (aplicar) { SpreadsheetApp.flush(); limparCache(); }
+  const proxima = fim + 1;
+  if (proxima > nLin) { props.deleteProperty('CRLV_PROGRESSO'); Logger.log('Fim da frota. A próxima execução recomeça do início.'); }
+  else { props.setProperty('CRLV_PROGRESSO', String(proxima)); Logger.log('Pare aqui. Rode de novo para continuar da linha ' + proxima + '.'); }
+
+  Logger.log('--- lote: ' + preenchidas + ' campo(s) ' + (aplicar ? 'preenchido(s)' : 'a preencher') +
+    ' | ' + comDivergencia + ' viatura(s) com divergência | ' + semCrlv + ' sem CRLV | ' + erros + ' com erro de leitura');
+  if (resumoDiv.length) {
+    Logger.log('Divergências (o painel não altera o que já está preenchido):');
+    resumoDiv.slice(0, 30).forEach(d => Logger.log('   ' + d));
+    if (resumoDiv.length > 30) Logger.log('   … e mais ' + (resumoDiv.length - 30));
+  }
+  return preenchidas + ' campo(s); próxima linha: ' + (proxima > nLin ? 'fim' : proxima);
+}
+
+/** Leitura do CRLV de uma viatura, chamada pelo painel. */
+function lerCrlvViatura(token, placa, aplicar) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (aplicar && !p.sessao.admin) return { ok: false, erro: 'Apenas o administrador pode preencher.' };
+  try {
+    const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
+    const alvo = _linhaDaPlaca_(aba, String(placa || '').trim().toUpperCase());
+    if (alvo.linha < 0) return { ok: false, erro: 'Placa não encontrada.' };
+    const mapa = _mapaEdicao_(aba);
+    const r = _lerCrlvDaViatura_(aba, mapa, alvo.linha, alvo.idx);
+    if (r.erro) return { ok: false, erro: r.erro, lidos: r.lidos || null };
+    if (aplicar && r.preencher.length) {
+      r.preencher.forEach(x => aba.getRange(alvo.linha, x.col).setValue(x.valor));
+      SpreadsheetApp.flush();
+      limparCache();
+      _logAcao_(p.ss, p.sessao.email, 'Preencher pelo CRLV', r.placa,
+        r.preencher.length + ' campo(s)', r.preencher.map(x => x.campo + '=' + x.valor).join(', '));
+    }
+    return { ok: true, placa: r.placa, lidos: r.lidos, preencher: r.preencher, divergencias: r.divergencias, aplicado: !!aplicar };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 
 /* ------------------------------------------------------------ */
