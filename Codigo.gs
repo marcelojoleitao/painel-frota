@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.42.3';
+const CODIGO_VERSAO = '2.43.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1452,6 +1452,118 @@ function salvarCamposOS(token, os, campos) {
     return { ok: true, gravados: gravados, recusados: recusados, linha: linha };
   } catch (e) {
     return { ok: false, erro: String(e.message || e) };
+  } finally { trava.releaseLock(); }
+}
+
+
+/* ============================================================
+   COMPLETAR DADOS ÓBVIOS POR MODELO
+   Viaturas do mesmo modelo compartilham espécie, categoria, tipo e
+   característica. Onde o campo está vazio e as demais do mesmo modelo
+   concordam entre si, o valor é preenchido. Havendo divergência, a
+   viatura é apenas listada — nada é escrito no escuro.
+   ============================================================ */
+
+/** Campos que se deduzem do modelo, com o rótulo usado no log. */
+const CAMPOS_DEDUZIVEIS = [
+  { campo: 'especie',   rotulo: 'Espécie' },
+  { campo: 'categoria', rotulo: 'Categoria' },
+  { campo: 'tipo',      rotulo: 'Tipo' },
+  { campo: 'carac',     rotulo: 'Característica' },
+  { campo: 'comb',      rotulo: 'Combustível' }
+];
+
+/** Confere o que seria preenchido, sem alterar nada. */
+function completarPorModelo() { return _completarPorModelo_(false); }
+
+/** Preenche de fato as células vazias. */
+function completarPorModeloAplicar() { return _completarPorModelo_(true); }
+
+function _completarPorModelo_(aplicar) {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const aba = ss.getSheetByName(CONFIG.ABA_BASE);
+  if (!aba) throw new Error('Aba ' + CONFIG.ABA_BASE + ' não encontrada.');
+
+  const nLin = aba.getLastRow(), nCol = aba.getLastColumn();
+  const cab = aba.getRange(1, 1, 1, nCol).getValues()[0].map(c => String(c || '').trim());
+  const idx = _mapearCampos_(cab);
+  const mapa = _mapaEdicao_(aba);
+
+  if (idx.modelo === undefined) throw new Error('Coluna de modelo não encontrada.');
+  const valores = aba.getRange(2, 1, nLin - 1, nCol).getValues();
+
+  // quais campos podem ser escritos
+  const alvos = CAMPOS_DEDUZIVEIS.filter(f => {
+    if (idx[f.campo] === undefined) { Logger.log('· ' + f.rotulo + ': coluna não existe — ignorado'); return false; }
+    const info = mapa.porCampo[f.campo];
+    if (info && !info.editavel) { Logger.log('· ' + f.rotulo + ': coluna bloqueada (' + info.motivo + ') — ignorado'); return false; }
+    return true;
+  });
+  if (!alvos.length) { Logger.log('Nenhum campo disponível para completar.'); return; }
+
+  // valores conhecidos por modelo
+  const porModelo = {};
+  valores.forEach(l => {
+    const modelo = _normCab_(l[idx.modelo]);
+    if (!modelo) return;
+    const m = porModelo[modelo] || (porModelo[modelo] = {});
+    alvos.forEach(f => {
+      const v = String(l[idx[f.campo]] || '').trim();
+      if (!v) return;
+      (m[f.campo] = m[f.campo] || {})[v] = (m[f.campo][v] || 0) + 1;
+    });
+  });
+
+  const aEscrever = [], conflitos = [], semReferencia = [];
+  valores.forEach((l, i) => {
+    const modelo = _normCab_(l[idx.modelo]);
+    if (!modelo) return;
+    const placa = String(l[idx.placa] || '').trim();
+    alvos.forEach(f => {
+      const atual = String(l[idx[f.campo]] || '').trim();
+      if (atual) return;
+      const opcoes = (porModelo[modelo] || {})[f.campo];
+      if (!opcoes) { semReferencia.push(placa + ' · ' + f.rotulo + ' (modelo ' + l[idx.modelo] + ' não tem nenhum preenchido)'); return; }
+      const distintos = Object.keys(opcoes);
+      if (distintos.length > 1) {
+        conflitos.push(placa + ' · ' + f.rotulo + ': o modelo ' + l[idx.modelo] + ' tem ' +
+          distintos.map(d => d + ' (' + opcoes[d] + ')').join(' e '));
+        return;
+      }
+      aEscrever.push({ linha: i + 2, col: idx[f.campo] + 1, placa: placa, modelo: String(l[idx.modelo]).trim(),
+        campo: f.rotulo, valor: distintos[0] });
+    });
+  });
+
+  Logger.log('=== COMPLETAR POR MODELO ' + (aplicar ? '(gravando)' : '(somente conferência)') + ' ===');
+  Logger.log('Campos considerados: ' + alvos.map(f => f.rotulo).join(', '));
+  Logger.log('Preenchimentos possíveis: ' + aEscrever.length);
+  const porCampo = {};
+  aEscrever.forEach(x => { porCampo[x.campo] = (porCampo[x.campo] || 0) + 1; });
+  Object.keys(porCampo).forEach(c => Logger.log('   ' + c + ': ' + porCampo[c]));
+  aEscrever.slice(0, 25).forEach(x => Logger.log('   ' + x.placa + ' (' + x.modelo + ') · ' + x.campo + ' ← ' + x.valor));
+  if (aEscrever.length > 25) Logger.log('   … e mais ' + (aEscrever.length - 25));
+  if (conflitos.length) {
+    Logger.log('Divergências (não preenchidas): ' + conflitos.length);
+    conflitos.slice(0, 15).forEach(c => Logger.log('   ' + c));
+    if (conflitos.length > 15) Logger.log('   … e mais ' + (conflitos.length - 15));
+  }
+  if (semReferencia.length) Logger.log('Sem referência no modelo: ' + semReferencia.length + ' (nenhuma outra viatura do modelo tem o campo preenchido)');
+
+  if (!aplicar) { Logger.log('Nada gravado. Rode completarPorModeloAplicar() para escrever.'); return aEscrever.length + ' possíveis'; }
+
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(60000); } catch (e) { Logger.log('Planilha ocupada.'); return; }
+  try {
+    aEscrever.forEach(x => aba.getRange(x.linha, x.col).setValue(x.valor));
+    SpreadsheetApp.flush();
+    limparCache();
+    Logger.log(aEscrever.length + ' célula(s) preenchida(s).');
+    try {
+      _logAcao_(SpreadsheetApp.openById(CONFIG.ID_BASE), Session.getEffectiveUser().getEmail(),
+        'Completar por modelo', '', aEscrever.length + ' células', Object.keys(porCampo).map(c => c + ': ' + porCampo[c]).join(' | '));
+    } catch (e) {}
+    return aEscrever.length + ' gravadas';
   } finally { trava.releaseLock(); }
 }
 
