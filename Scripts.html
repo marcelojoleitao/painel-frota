@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.50.0';
+const VERSAO_PAINEL = '2.50.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4052,7 +4052,7 @@ function mostrarConferenciaCrlv() {
         <span class="form-aviso" id="crlv-contador"></span>
       </div>
       <div class="tabela-rol" style="max-height:300px"><table class="tabela-simples" style="width:100%">
-        <thead><tr><th style="width:34px"></th><th>Placa</th><th>Campo</th><th>Valor do CRLV</th></tr></thead>
+        <thead><tr><th style="width:34px"><input type="checkbox" id="lac-cabecalho" checked title="marcar todas"></th><th>Placa</th><th>Campo</th><th>Valor do CRLV</th></tr></thead>
         <tbody>${linhasLacuna.map((l, i) => `<tr>
           <td><input type="checkbox" class="crlv-item" data-i="${i}" checked></td>
           <td style="font-family:var(--fonte-dados)">${esc(l.placa)}</td>
@@ -4062,8 +4062,13 @@ function mostrarConferenciaCrlv() {
 
     (comConflito.length ? secao('Divergências', `
       <div class="cartao-dica" style="margin:0 0 8px">O cadastro tem valor diferente do documento. Marque para substituir pelo valor do CRLV; desmarcado, nada muda.</div>
+      <div class="os-barra-acoes" style="margin-bottom:6px">
+        <button class="link-btn" id="div-todos">marcar todas</button>
+        <button class="link-btn" id="div-nenhum">desmarcar todas</button>
+        <span class="form-aviso" id="div-contador"></span>
+      </div>
       <div class="tabela-rol" style="max-height:260px"><table class="tabela-simples" style="width:100%">
-        <thead><tr><th style="width:34px"></th><th>Placa</th><th>Campo</th><th>Planilha</th><th>CRLV</th></tr></thead>
+        <thead><tr><th style="width:34px"><input type="checkbox" id="div-cabecalho" title="marcar todas"></th><th>Placa</th><th>Campo</th><th>Planilha</th><th>CRLV</th></tr></thead>
         <tbody>${comConflito.map(v => v.conflitos.map(c => `<tr>
           <td>${c.bloqueada ? '' : `<input type="checkbox" class="crlv-conflito" data-placa="${escAttr(v.placa)}" data-campo="${escAttr(c.campo)}" data-valor="${escAttr(c.crlv)}">`}</td>
           <td style="font-family:var(--fonte-dados)">${esc(v.placa)}</td>
@@ -4109,15 +4114,28 @@ function mostrarConferenciaCrlv() {
   document.body.style.overflow = 'hidden';
 
   const contar = () => {
-    const n = document.querySelectorAll('.crlv-item:checked').length + document.querySelectorAll('.crlv-conflito:checked').length;
-    txt('crlv-contador', n + ' de ' + (linhasLacuna.length + document.querySelectorAll('.crlv-conflito').length) + ' selecionado(s)');
+    const lac = document.querySelectorAll('.crlv-item:checked').length;
+    const div = document.querySelectorAll('.crlv-conflito:checked').length;
+    const totalDiv = document.querySelectorAll('.crlv-conflito').length;
+    txt('crlv-contador', lac + ' de ' + linhasLacuna.length + ' selecionada(s)');
+    txt('div-contador', div + ' de ' + totalDiv + ' selecionada(s)');
+    const cabLac = el('lac-cabecalho');
+    if (cabLac) { cabLac.checked = lac > 0 && lac === linhasLacuna.length; cabLac.indeterminate = lac > 0 && lac < linhasLacuna.length; }
+    const cabDiv = el('div-cabecalho');
+    if (cabDiv) { cabDiv.checked = div > 0 && div === totalDiv; cabDiv.indeterminate = div > 0 && div < totalDiv; }
     const b = el('btn-aplicar-conferencia');
+    const n = lac + div;
     if (b) { b.disabled = !n; b.textContent = n ? 'Gravar ' + n + ' campo(s)' : 'Gravar selecionados'; }
   };
+  const marcar = (seletor, valor) => { document.querySelectorAll(seletor).forEach(c => { c.checked = valor; }); contar(); };
   document.querySelectorAll('.crlv-item, .crlv-conflito').forEach(c => c.addEventListener('change', contar));
   document.querySelectorAll('button[data-textocrlv]').forEach(b => b.addEventListener('click', () => verTextoDoCrlv(b.dataset.textocrlv)));
-  ouvir('crlv-todos', 'click', () => { document.querySelectorAll('.crlv-item').forEach(c => { c.checked = true; }); contar(); });
-  ouvir('crlv-nenhum', 'click', () => { document.querySelectorAll('.crlv-item, .crlv-conflito').forEach(c => { c.checked = false; }); contar(); });
+  ouvir('crlv-todos', 'click', () => marcar('.crlv-item', true));
+  ouvir('crlv-nenhum', 'click', () => marcar('.crlv-item', false));
+  ouvir('div-todos', 'click', () => marcar('.crlv-conflito', true));
+  ouvir('div-nenhum', 'click', () => marcar('.crlv-conflito', false));
+  ouvir('lac-cabecalho', 'change', () => marcar('.crlv-item', el('lac-cabecalho').checked));
+  ouvir('div-cabecalho', 'change', () => marcar('.crlv-conflito', el('div-cabecalho').checked));
   contar();
 
   ouvir('btn-aplicar-conferencia', 'click', () => {
