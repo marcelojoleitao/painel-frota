@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.47.6';
+const VERSAO_PAINEL = '2.47.7';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2014,7 +2014,16 @@ function processarProximo() {
     .withSuccessHandler(r => {
       L.feito++;
       if (r && r.expirado) { L.ativo = false; sessaoExpirou(r); return; }
-      if (r && r.ok) { L.ok++; L.itens.unshift({ placa: placa, st: r.status || 'OK', detalhe: (r.detalhe || '') + (r.link ? ' • ' : ''), link: r.link || '' }); }
+      if (r && r.ok) {
+        L.ok++;
+        L.itens.unshift({ placa: placa, st: r.status || 'OK', detalhe: (r.detalhe || '') + (r.link ? ' • ' : ''), link: r.link || '' });
+        // guarda o que a leitura do CRLV encontrou, para a tela de conferência
+        if (r.campos || r.conflitos || r.ignorados) {
+          ESTADO.conferenciaCrlv = ESTADO.conferenciaCrlv || [];
+          ESTADO.conferenciaCrlv.push({ placa: placa, status: r.status || '', campos: r.campos || [],
+            conflitos: r.conflitos || [], ignorados: r.ignorados || [], lidos: r.lidos || {}, aplicado: !!r.aplicado });
+        }
+      }
       else { L.erro++; L.itens.unshift({ placa: placa, st: 'ERRO', detalhe: (r && r.erro) || 'sem resposta' }); }
       desenharLote();
       setTimeout(processarProximo, 1000);
@@ -4057,8 +4066,17 @@ function mostrarConferenciaCrlv() {
           <td>${esc(ROTULOS_CRLV[c.campo] || c.campo)}</td><td>${esc(c.atual)}</td>
           <td class="alerta-txt">${esc(c.crlv)}</td></tr>`).join('')).join('')}
         </tbody></table></div>`) : '') +
-    `<div class="form-acoes">
-      ${aPreencher.length ? `<button class="btn amarelo" id="btn-aplicar-conferencia">Gravar os ${totalCampos} campo(s) em ${aPreencher.length} viatura(s)</button>` : ''}
+    secao('Tudo que o CRLV informou', `
+      <div class="cartao-dica" style="margin:0 0 8px">Campo a campo, como saiu de cada documento — útil para conferir se a leitura está correta.</div>
+      <div class="tabela-rol" style="max-height:260px"><table class="tabela-simples" style="width:100%">
+        <thead><tr><th>Placa</th><th>Campo</th><th>Lido do CRLV</th></tr></thead>
+        <tbody>${lista.filter(v => v.lidos && Object.keys(v.lidos).length).map(v =>
+          Object.keys(v.lidos).map((k, i) => `<tr><td>${i === 0 ? '<b style="font-family:var(--fonte-dados)">' + esc(v.placa) + '</b>' : ''}</td>
+            <td>${esc(ROTULOS_CRLV[k] || k)}</td><td>${esc(v.lidos[k])}</td></tr>`).join('')).join('')}
+        </tbody></table></div>`) +
+    `<div class="form-acoes" style="position:sticky; bottom:0; background:var(--branco); padding-top:10px">
+      ${aPreencher.length ? `<button class="btn amarelo" id="btn-aplicar-conferencia">Gravar os ${totalCampos} campo(s) em ${aPreencher.length} viatura(s)</button>`
+        : '<span class="form-aviso">Nada a gravar: ou os campos já estão preenchidos, ou as colunas estão protegidas.</span>'}
       <button class="btn claro" onclick="fecharFicha()">Fechar sem gravar</button>
     </div>`);
   cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);

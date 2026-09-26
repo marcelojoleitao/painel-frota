@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.47.6';
+const CODIGO_VERSAO = '2.47.7';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -965,7 +965,8 @@ function _crlvViatura_(token, placa, aplicar) {
       preencheu: r.preencher.length, divergentes: r.divergencias.length,
       campos: r.preencher.map(x => ({ campo: x.campo, valor: x.valor })),
       conflitos: r.divergencias.map(d => ({ campo: d.campo, atual: d.atual, crlv: d.crlv, bloqueada: !!d.bloqueada })),
-      ignorados: (r.ignorados || []).filter(x => x.valor) };
+      ignorados: (r.ignorados || []).filter(x => x.valor),
+      lidos: r.lidos || {} };
   } catch (e) {
     return { ok: false, erro: String(e.message || e) };
   }
