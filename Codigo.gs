@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.47.7';
+const CODIGO_VERSAO = '2.48.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1947,6 +1947,38 @@ function _percorrerCrlv_(aplicar) {
     if (resumoDiv.length > 30) Logger.log('   … e mais ' + (resumoDiv.length - 30));
   }
   return preenchidas + ' campo(s); próxima linha: ' + (proxima > nLin ? 'fim' : proxima);
+}
+
+
+/** Grava, numa viatura, apenas os campos escolhidos na conferência do CRLV. */
+function gravarCamposCrlv(token, placa, campos) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (!p.sessao.admin) return { ok: false, erro: 'Apenas o administrador pode gravar.' };
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Planilha ocupada.' }; }
+  try {
+    const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
+    const alvo = _linhaDaPlaca_(aba, String(placa || '').trim().toUpperCase());
+    if (alvo.linha < 0) return { ok: false, erro: 'Placa não encontrada.' };
+    const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0].map(c => String(c || '').trim());
+    const mapa = _mapaEdicao_(aba);
+    const gravados = [], recusados = [];
+    Object.keys(campos || {}).forEach(campo => {
+      const col = _colunaDoCampoCrlv_(campo, alvo.idx, cab);
+      if (col === undefined) { recusados.push(campo + ' (sem coluna)'); return; }
+      const info = mapa.porCampo[campo];
+      if (info && !info.editavel) { recusados.push(campo + ' (' + info.motivo + ')'); return; }
+      aba.getRange(alvo.linha, col + 1).setValue(campos[campo]);
+      gravados.push(campo + '=' + campos[campo]);
+    });
+    SpreadsheetApp.flush();
+    if (gravados.length) {
+      limparCache();
+      _logAcao_(p.ss, p.sessao.email, 'Gravar pelo CRLV', placa, gravados.length + ' campo(s)', gravados.join(', '));
+    }
+    return { ok: true, gravados: gravados, recusados: recusados,
+      erro: (!gravados.length && recusados.length) ? 'nada gravado: ' + recusados.join(', ') : '' };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
 }
 
 /** Leitura do CRLV de uma viatura, chamada pelo painel. */
