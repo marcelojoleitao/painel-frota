@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.50.1';
+const CODIGO_VERSAO = '2.50.2';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1614,7 +1614,11 @@ const CRLV_DIC = {
   tipos: ['CAMINHAO TRATOR', 'SEMI-REBOQUE', 'MOTOR-CASA', 'CHASSI PLATAFORMA', 'TRATOR RODAS', 'TRATOR ESTEIRAS',
           'TRATOR MISTO', 'AUTOMOVEL', 'CAMIONETA', 'CAMINHONETE', 'CAMINHAO', 'UTILITARIO', 'MOTOCICLETA',
           'MOTONETA', 'MICROONIBUS', 'ONIBUS', 'REBOQUE', 'CICLOMOTOR', 'TRICICLO', 'QUADRICICLO', 'SIDE-CAR'],
-  categorias: ['OFICIAL', 'PARTICULAR', 'ALUGUEL', 'APRENDIZAGEM', 'DIPLOMATICO', 'EXPERIENCIA', 'COLECAO']
+  categorias: ['OFICIAL', 'PARTICULAR', 'ALUGUEL', 'APRENDIZAGEM', 'DIPLOMATICO', 'EXPERIENCIA', 'COLECAO'],
+  // valores de CARROCERIA — também têm barra e não podem ser confundidos com o modelo
+  carrocerias: ['ABERTA/CABINE DUPLA', 'ABERTA/CABINE SIMPLES', 'FECHADA/BAU', 'FECHADA/FURGAO', 'ABERTA',
+                'FECHADA', 'BASCULANTE', 'TANQUE', 'NAO APLICAVEL', 'CABINE DUPLA', 'CABINE SIMPLES',
+                'CABINE ESTENDIDA', 'MISTO', 'PICK-UP', 'FURGAO', 'BAU', 'PLATAFORMA', 'SILO', 'CEGONHA']
 };
 
 function _camposCrlv_(texto) {
@@ -1676,10 +1680,15 @@ function _camposCrlv_(texto) {
 
   // marca/modelo/versão: "MARCA/MODELO ..." com barra entre duas palavras, sem ser
   // placa/UF, CNPJ, combustível ou potência. Corta no próximo rótulo do documento.
+  // o valor vem DEPOIS do rótulo "MARCA / MODELO" no texto; e nunca é carroceria
+  const posRotuloModelo = tudo.search(/MARCA ?\/ ?MODELO/);
+  const posDe = l => tudo.indexOf(l);
   const linhasModelo = linhas.filter(l => /\b[A-Z]{1,12}\/[A-Z0-9]/.test(l) &&
       !new RegExp(RE_PLACA + '\\/[A-Z]{2}').test(l) && !/\d{2}\.\d{3}\.\d{3}\//.test(l) &&
       !/\bCV ?\//.test(l) && !new RegExp('\\b(' + alternativas(CRLV_DIC.combustiveis) + ')\\b').test(l) &&
-      !/(R\$|POTENCIA|CILINDRADA|CPF|VALIDE|HTTPS?:)/.test(l));
+      !new RegExp('^(' + alternativas(CRLV_DIC.carrocerias) + ')\\b').test(l) &&
+      !/(CARROCERIA|R\$|POTENCIA|CILINDRADA|CPF|VALIDE|HTTPS?:)/.test(l) &&
+      (posRotuloModelo < 0 || posDe(l) > posRotuloModelo || /MARCA ?\/ ?MODELO/.test(l)));
   for (let i = 0; i < linhasModelo.length; i++) {
     let cand = linhasModelo[i];
     // remove rótulos colados antes e depois
@@ -1699,7 +1708,11 @@ function _camposCrlv_(texto) {
     m = tudo.match(/[A-Z ]+ [A-Z]{2} \d{2}\/\d{2}\/\d{4}[^\n]*\n([^\n*]{3,120})/);
     if (m && !/(MENSAGENS|VOCE SABIA|DADOS DO SEGURO|DOCUMENTO EMITIDO|ESPECIE|MARCA)/.test(m[1])) g('obsCrlv', m[1].trim());
   }
-  if (achados.obsCrlv) achados.obsCrlv = achados.obsCrlv.replace(/\s*(DOCUMENTO EMITIDO.*|MENSAGENS.*)$/, '').trim();
+  if (achados.obsCrlv) {
+    achados.obsCrlv = achados.obsCrlv.replace(/\s*(DOCUMENTO EMITIDO.*|MENSAGENS.*)$/, '').trim();
+    // o texto lido vem sem acentos; devolve a grafia correta do caso mais comum
+    if (/^SEM OBSERVACOES$/i.test(achados.obsCrlv)) achados.obsCrlv = 'SEM OBSERVAÇÕES';
+  }
 
   return achados;
 }
