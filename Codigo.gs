@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.48.2';
+const CODIGO_VERSAO = '2.49.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1788,27 +1788,44 @@ function _camposCrlv_(texto) {
   if (!potencia) potencia = acheLinha(/^(\d{1,4}\s?\/\s?\d{3,5})(?:\s+[\d.,]+)?$/);
   if (potencia) guarde('potencia', potencia.m[1].replace(/\s/g, ''));
 
-  // motor: código alfanumérico com letras E números, 8 a 20 caracteres.
-  // Percorre as linhas ignorando as só de dígitos, o chassi e a placa.
-  for (let i = 0; i < valores.length; i++) {
-    const m = valores[i].match(/^([A-Z0-9]{8,20})(?:\s|$)/);
-    if (!m) continue;
-    const cod = m[1];
-    if (/^\d+$/.test(cod)) continue;                 // renavam, CRV, CLA
-    if (cod === achados.chassi) continue;
-    if (!/[A-Z]/.test(cod) || !/\d/.test(cod)) continue;
-    if (new RegExp('^' + RE_PLACA + '$').test(cod)) continue;
-    guarde('motor', cod);
-    break;
+  // motor: no CRLV-e vem na linha seguinte à da potência ("LEX*190225042* 1.7 * 05P"),
+  // e pode conter asteriscos. Sem a potência, procura um código com letras e números.
+  const ehMotor = cod => cod && !/^\d+$/.test(cod) && /[A-Z]/.test(cod) && /\d/.test(cod) &&
+                        cod !== achados.chassi && !new RegExp('^' + RE_PLACA + '$').test(cod) && cod.length >= 6;
+  if (potencia) {
+    const depois = valores[potencia.i + 1] || '';
+    const cod = depois.split(/\s+/)[0] || '';
+    if (ehMotor(cod.replace(/^\*+|\*+$/g, ''))) guarde('motor', cod.replace(/^\*+|\*+$/g, ''));
+  }
+  if (!achados.motor) {
+    for (let i = 0; i < valores.length; i++) {
+      const m = valores[i].match(/^([A-Z0-9*]{6,20})(?:\s|$)/);
+      if (!m) continue;
+      const cod = m[1].replace(/^\*+|\*+$/g, '');
+      if (ehMotor(cod)) { guarde('motor', cod); break; }
+    }
   }
 
   // CPF/CNPJ do proprietário
   const doc = acheLinha(/(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{3}\.\d{3}\.\d{3}-\d{2})/);
   if (doc) guarde('cpfCnpj', doc.m[1]);
 
-  // observações do veículo
-  const obs = acheLinha(/^(SEM OBSERVA[ÇC][ÕO]ES|.*(?:BLINDAD|RESTRI[ÇC]|ALIEN|GRAVAME|ADAPTAD).*)$/i);
-  if (obs) guarde('obsCrlv', obs.m[1]);
+  // observações do veículo: a linha que vem depois de "LOCAL DATA" (cidade + data).
+  // Pode ser "SEM OBSERVAÇÕES" ou um texto como "ART116 CTB USO PL - RIG5E15;".
+  const localData = acheLinha(/^[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]+\s[A-Z]{2}\s+\d{2}\/\d{2}\/\d{4}$/i);
+  if (localData) {
+    for (let i = localData.i + 1; i < Math.min(valores.length, localData.i + 4); i++) {
+      const l = valores[i];
+      if (!l || /^[\*\s.]+$/.test(l) || /^(SEM OBSERVA|SEM OBSERVACOES)/i.test(l)) { if (/^SEM OBSERVA/i.test(l)) guarde('obsCrlv', l); break; }
+      if (/DOCUMENTO EMITIDO|VOC[ÊE] SABIA|MENSAGENS/i.test(l)) break;
+      guarde('obsCrlv', l);
+      break;
+    }
+  }
+  if (!achados.obsCrlv) {
+    const obs = acheLinha(/^(SEM OBSERVA[ÇC][ÕO]ES|.*(?:BLINDAD|RESTRI[ÇC]|ALIEN|GRAVAME|ADAPTAD|CTB).*)$/i);
+    if (obs) guarde('obsCrlv', obs.m[1]);
+  }
 
   return achados;
 }
