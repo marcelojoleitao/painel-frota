@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.45.0';
+const CODIGO_VERSAO = '2.46.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -930,55 +930,35 @@ function acaoGerarBoleto(token, placa) {
 function acaoAuditarCrlv(token, placa) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
   placa = String(placa || '').trim().toUpperCase();
-  const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
-  const alvo = _linhaDaPlaca_(aba, placa);
-  if (alvo.linha < 0) return { ok: false, erro: 'Placa não encontrada.' };
-  const link = alvo.idx.linkCrlv !== undefined ? String(aba.getRange(alvo.linha, alvo.idx.linkCrlv + 1).getValue() || '').trim() : '';
   try {
-    if (!link) return { ok: true, status: 'SEM CRLV', detalhe: 'Sem link na coluna BO — nada a auditar.' };
-    const bytes = _baixarDoDrive_(link);
-    const texto = _pdfTexto_(bytes);
-    const placaPdf = _extrairPlacaPdf_(texto);
-    if (placaPdf && placaPdf !== placa) {
-      _logAcao_(p.ss, p.sessao.email, 'Auditar CRLV', placa, 'CRLV TROCADO', 'PDF é de ' + placaPdf);
-      return { ok: true, status: 'CRLV TROCADO', detalhe: 'O PDF do link é da placa ' + placaPdf + ' — confira e anexe o correto.' };
+    const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
+    const alvo = _linhaDaPlaca_(aba, placa);
+    if (alvo.linha < 0) return { ok: false, erro: 'Placa não encontrada.' };
+    const mapa = _mapaEdicao_(aba);
+    const r = _lerCrlvDaViatura_(aba, mapa, alvo.linha, alvo.idx);
+    if (r.erro) return { ok: true, status: /sem CRLV/.test(r.erro) ? 'SEM CRLV' : 'ERRO', detalhe: r.erro };
+
+    // preenche o que está em branco e relata o que diverge
+    if (r.preencher.length) {
+      r.preencher.forEach(x => aba.getRange(alvo.linha, x.col).setValue(x.valor));
+      SpreadsheetApp.flush();
+      limparCache();
     }
-    const ex = _extrairExercicio_(texto, placa);
-    if (!ex) {
-      _logAcao_(p.ss, p.sessao.email, 'Auditar CRLV', placa, 'NÃO VERIFICÁVEL', 'texto sem exercício');
-      return { ok: true, status: 'NÃO VERIFICÁVEL', detalhe: 'Link abre, mas não li o exercício (PDF escaneado?).' };
-    }
-    const atual = alvo.idx.anoEx !== undefined ? parseInt(String(aba.getRange(alvo.linha, alvo.idx.anoEx + 1).getValue() || '').replace(/\D/g, ''), 10) || 0 : 0;
-    if (ex !== atual && alvo.idx.anoEx !== undefined) {
-      aba.getRange(alvo.linha, alvo.idx.anoEx + 1).setValue(ex);
-      SpreadsheetApp.flush(); limparCache();
-      _logAcao_(p.ss, p.sessao.email, 'Auditar CRLV', placa, 'EXERCÍCIO AJUSTADO', atual + ' → ' + ex);
-      return { ok: true, status: 'EXERCÍCIO AJUSTADO', detalhe: 'Ano Exercício: ' + (atual || '—') + ' → ' + ex + '.' };
-    }
-    _logAcao_(p.ss, p.sessao.email, 'Auditar CRLV', placa, 'OK', 'placa confere, exercício ' + ex);
-    return { ok: true, status: 'OK', detalhe: 'Placa confere; exercício ' + ex + ' já correto.' };
+    const partes = [];
+    if (r.preencher.length) partes.push(r.preencher.length + ' campo(s) preenchido(s): ' + r.preencher.map(x => x.campo).join(', '));
+    if (r.divergencias.length) partes.push(r.divergencias.length + ' divergência(s): ' +
+      r.divergencias.map(d => d.campo + ' planilha "' + d.atual + '" × CRLV "' + d.crlv + '"').join(' | '));
+    if (!partes.length) partes.push('cadastro confere com o CRLV');
+
+    const status = r.divergencias.length ? 'DIVERGÊNCIA' : (r.preencher.length ? 'PREENCHIDO' : 'OK');
+    _logAcao_(p.ss, p.sessao.email, 'Auditar CRLV', placa, status, partes.join(' • '));
+    return { ok: true, status: status, detalhe: partes.join(' • '),
+      preencheu: r.preencher.length, divergentes: r.divergencias.length };
   } catch (e) {
-    const msg = String(e.message || e);
-    _logAcao_(p.ss, p.sessao.email, 'Auditar CRLV', placa, 'ERRO', msg);
-    return { ok: false, erro: msg };
+    return { ok: false, erro: String(e.message || e) };
   }
 }
 
-
-/* ------------------------------------------------------------ */
-/*  Documentos da viatura (CRLV e termo de tombamento)           */
-/* ------------------------------------------------------------ */
-
-const DOCUMENTOS_VIATURA = {
-  crlv:       { campo: 'linkCrlv', rotulo: 'CRLV',                 sufixo: '',       pasta: 'PASTA_CRLV' },
-  tombamento: { campo: 'linkTomb', rotulo: 'Termo de tombamento',  sufixo: '_termo', pasta: 'PASTA_TOMBAMENTO' }
-};
-
-/**
- * Substitui ou inclui um documento em PDF da viatura. O arquivo vai para a
- * pasta do Drive e o link é gravado na coluna correspondente da ConsultaBD.
- * O arquivo anterior com o mesmo nome vai para a lixeira (fica recuperável).
- */
 function anexarDocumento(token, placa, tipo, base64, nomeArquivo) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
   const doc = DOCUMENTOS_VIATURA[tipo];

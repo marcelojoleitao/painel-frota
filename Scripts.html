@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.45.0';
+const VERSAO_PAINEL = '2.46.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -1881,7 +1881,7 @@ function enviarFoto(placa, ang, arquivo) {
    ============================================================ */
 const ACOES_DEF = {
   crlv:   { rotulo: 'Baixar CRLV (DETRAN)',        fn: 'acaoBaixarCrlv',      fila: true,  desc: 'Entra na Central do DETRAN-CE com placa + renavam, baixa o CRLV-e (usa CRV e código de segurança das colunas BA/BB), salva na pasta do Drive, grava o link e ajusta o Ano Exercício lendo o PDF.' },
-  audit:  { rotulo: 'Auditar CRLV',                fn: 'acaoAuditarCrlv',     fila: false, desc: 'Abre o PDF do link salvo, confere se a placa do documento bate (pega CRLV trocado) e ajusta o Ano Exercício da coluna C conforme o documento.' },
+  audit:  { rotulo: 'Ler CRLV e completar cadastro', fn: 'acaoAuditarCrlv',   fila: false, desc: 'Abre o PDF do CRLV, confere se a placa do documento bate, preenche os campos vazios da ConsultaBD (renavam, chassi, anos, marca/modelo, espécie, tipo, categoria, cor, combustível, potência, motor, CRV, exercício) e aponta as divergências sem sobrescrever o que já está preenchido. Funciona em lote pelas viaturas exibidas.' },
   multas: { rotulo: 'Consultar multas (DETRAN)',   fn: 'acaoConsultarMultas', fila: true,  desc: 'Consulta a situação de multas no DETRAN e grava o resultado com a data na coluna O — o mesmo texto que alimenta a ficha e os filtros.' },
   boleto: { rotulo: 'Gerar boleto p/ licenciar',   fn: 'acaoGerarBoleto',     fila: true,  desc: 'Verifica o licenciamento no DETRAN: JÁ LICENCIADO, PENDÊNCIA, ou gera o boleto (PDF salvo na pasta de CRLVs com link no registro).' }
 };
@@ -2121,7 +2121,7 @@ function acaoIndividual(acao, placa, botao) {
       if (botao) { botao.disabled = false; botao.textContent = botao.dataset.txt; }
       if (sessaoExpirou(r)) return;
       if (!r || !r.ok) { toast((r && r.erro) || 'Falha na ação.'); return; }
-      toast(placa + ': ' + r.status + (r.detalhe ? ' — ' + r.detalhe : ''));
+      toast(placa + ': ' + r.status + (r.detalhe ? ' — ' + r.detalhe : ''), /DIVERG/i.test(r.status || ''));
       if (r.link) window.open(r.link, '_blank');
       recarregarAposEdicao(placa);
     })
