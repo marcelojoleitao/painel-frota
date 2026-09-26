@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.49.0';
+const CODIGO_VERSAO = '2.50.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1593,239 +1593,113 @@ const CAMPOS_CRLV = [
 ];
 
 /**
- * Em alguns PDFs o rótulo seguinte vem colado ao valor
- * ("I/RENAULT FLUENCE DYN20M ESPÉCIE / TIPO"). Esta função corta o valor no
- * primeiro rótulo conhecido que aparecer dentro dele.
- */
-const ROTULOS_DO_CRLV = [
-  'CODIGO RENAVAM', 'PLACA ANTERIOR / UF', 'PLACA ANTERIOR/UF', 'MARCA / MODELO / VERSAO', 'MARCA/MODELO/VERSAO',
-  'ESPECIE / TIPO', 'ESPECIE/TIPO', 'COR PREDOMINANTE', 'CODIGO DE SEGURANCA DO CLA', 'NUMERO DO CRV',
-  'POTENCIA/CILINDRADA', 'POTENCIA / CILINDRADA', 'PESO BRUTO TOTAL', 'OBSERVACOES DO VEICULO',
-  'INFORMACOES DO SEGURO', 'ASSINADO DIGITALMENTE', 'ANO FABRICACAO', 'ANO MODELO', 'EXERCICIO',
-  'COMBUSTIVEL', 'CATEGORIA', 'CAPACIDADE', 'CARROCERIA', 'CHASSI', 'LOTACAO', 'EIXOS', 'MOTOR',
-  'CPF / CNPJ', 'CPF/CNPJ', 'LOCAL', 'NOME', 'DATA', 'CMT', 'CAT'
-];
-
-function _semRotulosCrlv_(valor) {
-  let t = String(valor === null || valor === undefined ? '' : valor).trim();
-  if (!t) return '';
-  const semAcento = x => x.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
-  const comparavel = semAcento(t);
-  let corte = -1;
-  ROTULOS_DO_CRLV.forEach(rot => {
-    const i = comparavel.indexOf(rot);
-    // só corta se o rótulo não começa o texto (senão não sobraria valor)
-    if (i > 0 && (corte < 0 || i < corte)) corte = i;
-  });
-  if (corte > 0) t = t.substring(0, corte);
-  return t.replace(/\s{2,}/g, ' ').replace(/[\s\/\-|:]+$/, '').trim();
-}
-
-/** Remove o rótulo quando ele vem no começo da linha, devolvendo só o valor. */
-function _semRotuloInicial_(linha) {
-  let t = String(linha || '').trim();
-  if (!t) return '';
-  const semAcento = x => x.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
-  let mudou = true;
-  let voltas = 0;
-  while (mudou && voltas < 4) {              // pode haver dois rótulos seguidos
-    mudou = false; voltas++;
-    const comparavel = semAcento(t);
-    // tenta o rótulo mais longo primeiro
-    const ordenados = ROTULOS_DO_CRLV.slice().sort((a, b) => b.length - a.length);
-    for (let i = 0; i < ordenados.length; i++) {
-      const rot = ordenados[i];
-      if (comparavel.indexOf(rot) === 0) {
-        t = t.substring(rot.length).replace(/^[\s:\-|]+/, '').trim();
-        mudou = true;
-        break;
-      }
-    }
-  }
-  return t;
-}
-
-/**
- * Leitor do CRLV-e.
+ * Leitor do CRLV-e — independente de posição.
  *
- * O PDF não entrega "rótulo: valor". Ele entrega todos os rótulos em bloco e,
- * depois, todos os valores em outro bloco, na ordem do documento. Por isso a
- * leitura é feita pelo FORMATO de cada valor, e não pela vizinhança do rótulo.
- *
- * Bloco de valores de um CRLV-e do DETRAN-CE:
- *    00595787029                     renavam
- *    JKP5487 2025                    placa + exercício
- *    2013 2014                       ano de fabricação + ano do modelo
- *    213285547820                    número do CRV
- *    06458804417 ***                 código de segurança do CLA + CAT
- *    I/RENAULT FLUENCE DYN20M        marca / modelo / versão
- *    PASSAGEIRO AUTOMOVEL            espécie + tipo
- *    JKP5487/DF 8A1LZBW26EL898372    placa anterior/UF + chassi
- *    CINZA ALCOOL/GASOLINA           cor + combustível
- *    OFICIAL                         categoria
- *    143CV/1997 1.76                 potência/cilindrada + peso bruto
- *    M4RR752N301556 3.06 2 05P       motor + CMT + eixos + lotação
- *    00.394.494/0107-94              CPF/CNPJ do proprietário
- *    SEM OBSERVAÇÕES                 observações
+ * O texto extraído do PDF varia muito: rótulos e valores podem vir em blocos
+ * separados, colados na mesma linha ou embaralhados com o quadro do DPVAT.
+ * Por isso nada aqui depende de "linha X" ou "logo após o rótulo": cada campo
+ * é reconhecido pelo seu FORMATO (placa, chassi, anos, potência, CNPJ...) ou
+ * por um DICIONÁRIO de valores válidos (cores, combustíveis, espécies, tipos,
+ * categorias). Só as observações usam o rótulo, porque texto livre não tem
+ * formato — e mesmo assim com proteções.
  */
+const CRLV_DIC = {
+  cores: ['BRANCA', 'PRETA', 'PRATA', 'CINZA', 'VERMELHA', 'AZUL', 'VERDE', 'AMARELA', 'BEGE', 'MARROM',
+          'DOURADA', 'LARANJA', 'ROSA', 'ROXA', 'FANTASIA', 'GRENA', 'VINHO'],
+  combustiveis: ['ALCOOL/GASOLINA', 'GASOLINA/ALCOOL', 'GASOLINA/GAS NATURAL', 'ALCOOL/GAS NATURAL',
+                 'ALCOOL/GASOLINA/GAS NATURAL', 'GASOLINA/ELETRICO', 'ALCOOL/GASOLINA/ELETRICO',
+                 'ELETRICO/FONTE INTERNA', 'ELETRICO/FONTE EXTERNA', 'GAS NATURAL VEICULAR',
+                 'GASOLINA', 'ALCOOL', 'ETANOL', 'DIESEL', 'ELETRICO', 'HIBRIDO', 'GNV'],
+  especies: ['PASSAGEIRO', 'CARGA', 'MISTO', 'TRACAO', 'ESPECIAL', 'COLECAO'],
+  tipos: ['CAMINHAO TRATOR', 'SEMI-REBOQUE', 'MOTOR-CASA', 'CHASSI PLATAFORMA', 'TRATOR RODAS', 'TRATOR ESTEIRAS',
+          'TRATOR MISTO', 'AUTOMOVEL', 'CAMIONETA', 'CAMINHONETE', 'CAMINHAO', 'UTILITARIO', 'MOTOCICLETA',
+          'MOTONETA', 'MICROONIBUS', 'ONIBUS', 'REBOQUE', 'CICLOMOTOR', 'TRICICLO', 'QUADRICICLO', 'SIDE-CAR'],
+  categorias: ['OFICIAL', 'PARTICULAR', 'ALUGUEL', 'APRENDIZAGEM', 'DIPLOMATICO', 'EXPERIENCIA', 'COLECAO']
+};
+
 function _camposCrlv_(texto) {
   const achados = {};
   const bruto = String(texto || '');
-  const linhas = bruto.split(/\r?\n/).map(l => l.trim()).filter(l => l !== '');
+  // texto sem acentos, em maiúsculas, com espaços normalizados — mantém a ordem original
+  const T = bruto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()
+                 .replace(/[ \t]+/g, ' ').replace(/ ?\n ?/g, '\n');
+  const linhas = T.split('\n').map(l => l.trim()).filter(l => l);
+  const tudo = linhas.join('\n');
+  const RE_PLACA = '[A-Z]{3}[ -]?\\d[A-Z0-9]\\d{2}';
+  const g = (campo, v) => { const t = String(v || '').trim(); if (t && !/^\*+$/.test(t)) achados[campo] = t; };
+  const primeiro = (re, grupo) => { const m = tudo.match(re); return m ? m[grupo || 1] : ''; };
+  const escapar = s => s.replace(/[.*+?^${}()|[\]\\\/-]/g, '\\$&');
 
-  const RE_PLACA = '[A-Z]{3}[\\s-]?\\d[A-Z0-9]\\d{2}';
-  const ehRotulo = l => /^(C[ÓO]DIGO|PLACA|ANO|N[ÚU]MERO|MARCA|ESP[ÉE]CIE|COR|COMBUST[ÍI]VEL|CATEGORIA|POT[ÊE]NCIA|MOTOR|CARROCERIA|NOME|LOCAL|CPF|CMT|EIXOS|OBSERVA|INFORMA|MENSAGENS|DADOS|REPASSE|CUSTO|VALOR|CAT\b|CAPACIDADE|PESO|DETRAN|REP[ÚU]BLICA|MINIST|SECRETARIA|ASSINADO|VALIDE|QRCODE|VOC[ÊE]|NA CARTEIRA|LEIA|DOCUMENTO EMITIDO|LOTA[ÇC][ÃA]O|DATA)/i.test(l);
+  /* ---------- formato ---------- */
+  // placa + exercício ("JKP5287 2025"); guarda também a placa sozinha se preciso
+  let m = tudo.match(new RegExp('(?:^|\\n)(' + RE_PLACA + ') ((?:19|20)\\d{2})(?=\\s|$)', 'm'));
+  if (m) { g('placa', m[1].replace(/[ -]/g, '')); g('anoEx', m[2]); }
 
-  // Uma linha pode ser: só rótulo, só valor, ou rótulo + valor (nos dois sentidos).
-  // Em vez de descartar tudo que começa com rótulo — o que fazia o valor colado
-  // se perder —, tiramos o rótulo e ficamos com o resto.
-  const valores = [];
-  linhas.forEach(l => {
-    const semRotuloFinal = _semRotulosCrlv_(l);          // corta rótulo colado à direita
-    const limpo = _semRotuloInicial_(semRotuloFinal);    // corta rótulo colado à esquerda
-    if (limpo) valores.push(limpo);
-  });
+  // placa anterior/UF + chassi ("JKP5287/DF 8A1LZBW26EL692237")
+  m = tudo.match(new RegExp('(' + RE_PLACA + ')\\/([A-Z]{2}) ([A-HJ-NPR-Z0-9]{17})\\b'));
+  if (m) { g('chassi', m[3]); if (!achados.placa) g('placa', m[1].replace(/[ -]/g, '')); }
+  if (!achados.chassi) g('chassi', primeiro(/\b([A-HJ-NPR-Z0-9]{17})\b/));
 
-  const acheLinha = re => { for (let i = 0; i < valores.length; i++) { const m = valores[i].match(re); if (m) return { i: i, m: m }; } return null; };
-  const guarde = (campo, valor) => {
-    const v = _semRotulosCrlv_(valor);
-    if (v && v !== '*' && !/^\*+$/.test(v)) achados[campo] = v;
-  };
+  // anos de fabricação e modelo: dois anos juntos, que não sejam a linha da placa
+  m = tudo.match(/(?:^|\n)((?:19|20)\d{2}) ((?:19|20)\d{2})(?=\s|$)/m);
+  if (m) { g('anoFab', m[1]); g('anoMod', m[2]); }
 
-  // placa + exercício, na mesma linha
-  const placaEx = acheLinha(new RegExp('^(' + RE_PLACA + ')\\s+((?:19|20)\\d{2})$'));
-  if (placaEx) { guarde('placa', placaEx.m[1].replace(/[\s-]/g, '')); guarde('anoEx', placaEx.m[2]); }
-  else {
-    const soPlaca = acheLinha(new RegExp('^(' + RE_PLACA + ')$'));
-    if (soPlaca) guarde('placa', soPlaca.m[1].replace(/[\s-]/g, ''));
-  }
-
-  // anos de fabricação e modelo, dois de quatro dígitos
-  const anos = acheLinha(/^((?:19|20)\d{2})\s+((?:19|20)\d{2})$/);
-  if (anos) { guarde('anoFab', anos.m[1]); guarde('anoMod', anos.m[2]); }
-
-  // chassi (17 caracteres). A âncora boa é a linha "placa anterior/UF + chassi";
-  // sem ela, usamos a primeira linha que contenha um chassi.
-  let chassi = acheLinha(new RegExp(RE_PLACA + '\\/[A-Z]{2}\\s+([A-HJ-NPR-Z0-9]{17})'));
-  let ancoraFirme = !!chassi;
-  if (!chassi) chassi = acheLinha(/\b([A-HJ-NPR-Z0-9]{17})\b/);
-  if (chassi) guarde('chassi', chassi.m[1]);
-
-  // renavam: primeira linha só com 9 a 11 dígitos (vem antes do CRV, que tem 12)
-  const renavam = acheLinha(/^(\d{9,11})$/);
-  if (renavam) guarde('renavam', renavam.m[1]);
-
-  // número do CRV: linha só com 10 a 14 dígitos, diferente do renavam
-  for (let i = 0; i < valores.length; i++) {
-    const m = valores[i].match(/^(\d{10,14})$/);
-    if (m && m[1] !== achados.renavam) { guarde('crv', m[1]); break; }
-  }
-  // código de segurança do CLA vem acompanhado de asteriscos
-  const cla = acheLinha(/^(\d{9,13})\s+\*+$/);
-  if (cla) guarde('codCla', cla.m[1]);
-
-  // A âncora é a linha do chassi. No bloco de valores do CRLV-e a ordem é fixa:
-  //   ...                          (chassi - 2)  marca / modelo / versão
-  //   PASSAGEIRO AUTOMOVEL         (chassi - 1)  espécie + tipo
-  //   JKP5487/DF 8A1LZ...          (chassi)      placa anterior/UF + chassi
-  //   CINZA ALCOOL/GASOLINA        (chassi + 1)  cor + combustível
-  const soLetras = l => /^[A-ZÁÉÍÓÚÂÊÔÃÕÇ0-9][A-ZÁÉÍÓÚÂÊÔÃÕÇ0-9\s\/.\-]*$/i.test(l) && /[A-ZÁÉÍÓÚÂÊÔÃÕÇ]{2}/i.test(l);
-  // linhas que nunca são dado do veículo: datas, assinatura, local, documento,
-  // CNPJ, potência, asteriscos e a própria placa
-  const descartar = l => !l || /^\*+$/.test(l) || /^[\d.,\s]+$/.test(l) ||
-                         /\d{2}\.\d{3}\.\d{3}\//.test(l) || /\bCV\s?\//i.test(l) ||
-                         /\d{2}\/\d{2}\/\d{4}/.test(l) ||
-                         /(ASSINAD|DETRAN|SENATRAN|REP[ÚU]BLICA|MINIST|SECRETARIA|EMITIDO|OBSERVA|APLICAVEL|FEDERAL|SUPER|POL ROD|DELEGACIA|SUPERINTEND)/i.test(l) ||
-                         new RegExp('^' + RE_PLACA + '(\\s|$)').test(l);
-  // marca/modelo tem cara própria: MARCA/MODELO, com barra e sem ser frase longa
-  const pareceModelo = l => !descartar(l) && soLetras(l) && l.indexOf('/') > 0 &&
-                            l.length <= 45 && l.split(/\s+/).length <= 7;
-
-  if (chassi && ancoraFirme) {
-    const linhaModelo = valores[chassi.i - 2] || '';
-    if (pareceModelo(linhaModelo)) guarde('modelo', linhaModelo);
-
-    const linhaEspecie = valores[chassi.i - 1] || '';
-    if (soLetras(linhaEspecie) && !descartar(linhaEspecie) && linhaEspecie.length <= 45) {
-      const et = linhaEspecie.match(/^([A-ZÁÉÍÓÚÂÊÔÃÕÇ]+)\s+(.+)$/i);
-      if (et) { guarde('especie', et[1]); guarde('tipo', et[2]); }
-      else guarde('especie', linhaEspecie);
-    }
-  }
-
-  // reserva: procura a linha que pareça marca/modelo em qualquer posição
-  if (!achados.modelo) {
-    for (let i = 0; i < valores.length; i++) {
-      const l = valores[i];
-      if (/\b[A-HJ-NPR-Z0-9]{17}\b/.test(l)) continue;
-      if (!pareceModelo(l)) continue;
-      guarde('modelo', l);
-      const prox = valores[i + 1] || '';
-      if (!achados.especie && soLetras(prox) && !descartar(prox) && prox.length <= 45) {
-        const et = prox.match(/^([A-ZÁÉÍÓÚÂÊÔÃÕÇ]+)\s+(.+)$/i);
-        if (et) { guarde('especie', et[1]); guarde('tipo', et[2]); }
-      }
-      break;
-    }
-  }
-
-  // cor + combustível: linha seguinte à do chassi ("CINZA ALCOOL/GASOLINA")
-  if (chassi) {
-    const seguinte = valores[chassi.i + 1] || '';
-    if (soLetras(seguinte) && !descartar(seguinte)) {
-      const cc = seguinte.match(/^([A-ZÁÉÍÓÚÂÊÔÃÕÇ]+)\s+(.+)$/i);
-      if (cc) { guarde('cor', cc[1]); guarde('comb', cc[2]); }
-      else guarde('cor', seguinte);
-    }
-  }
-
-  // categoria: valor conhecido
-  const categoria = acheLinha(/^(OFICIAL|PARTICULAR|ALUGUEL|APRENDIZAGEM|DIPLOM[ÁA]TICO|EXPERI[ÊE]NCIA|COLE[ÇC][ÃA]O)$/i);
-  if (categoria) guarde('categoria', categoria.m[1]);
-
-  // potência / cilindrada: "143CV/1997" e também "143/1997" seguido do peso
-  let potencia = acheLinha(/\b(\d{1,4}\s?CV\s?\/\s?\d{2,5})\b/i);
-  if (!potencia) potencia = acheLinha(/^(\d{1,4}\s?\/\s?\d{3,5})(?:\s+[\d.,]+)?$/);
-  if (potencia) guarde('potencia', potencia.m[1].replace(/\s/g, ''));
-
-  // motor: no CRLV-e vem na linha seguinte à da potência ("LEX*190225042* 1.7 * 05P"),
-  // e pode conter asteriscos. Sem a potência, procura um código com letras e números.
-  const ehMotor = cod => cod && !/^\d+$/.test(cod) && /[A-Z]/.test(cod) && /\d/.test(cod) &&
-                        cod !== achados.chassi && !new RegExp('^' + RE_PLACA + '$').test(cod) && cod.length >= 6;
-  if (potencia) {
-    const depois = valores[potencia.i + 1] || '';
-    const cod = depois.split(/\s+/)[0] || '';
-    if (ehMotor(cod.replace(/^\*+|\*+$/g, ''))) guarde('motor', cod.replace(/^\*+|\*+$/g, ''));
-  }
-  if (!achados.motor) {
-    for (let i = 0; i < valores.length; i++) {
-      const m = valores[i].match(/^([A-Z0-9*]{6,20})(?:\s|$)/);
-      if (!m) continue;
-      const cod = m[1].replace(/^\*+|\*+$/g, '');
-      if (ehMotor(cod)) { guarde('motor', cod); break; }
-    }
-  }
-
+  // renavam: 9 a 11 dígitos sozinhos numa linha (vem antes do CRV, de 12)
+  g('renavam', primeiro(/(?:^|\n)(\d{9,11})(?=\n|$)/m));
+  // número do CRV: 12 a 14 dígitos sozinhos (quando o documento imprime)
+  const crvs = tudo.match(/(?:^|\n)(\d{12,14})(?=\n|$)/gm) || [];
+  if (crvs.length) g('crv', crvs[0].trim());
+  // código de segurança do CLA: dígitos seguidos de asteriscos
+  g('codCla', primeiro(/(\d{9,13}) \*+/));
+  // potência/cilindrada
+  g('potencia', primeiro(/(\d{1,4} ?CV ?\/ ?\d{2,5})\b/) || primeiro(/(?:^|\n|TOTAL )(\d{2,4}\/\d{3,5})(?= [\d.,]+(?:\s|$))/m));
+  // motor: código seguido de CMT, eixos e lotação ("M4RR752N267968 3.06 2 05P")
+  m = tudo.match(/([A-Z0-9*]{6,20}) \d+[.,]\d+ \d{1,2} \d{2}P\b/) || tudo.match(/([A-Z0-9*]{6,20}) [\d.,*]+ \*? ?\d{2}P\b/);
+  if (m) { const cod = m[1].replace(/^\*+|\*+$/g, ''); if (/[A-Z]/.test(cod) && /\d/.test(cod) && cod !== achados.chassi) g('motor', cod); }
   // CPF/CNPJ do proprietário
-  const doc = acheLinha(/(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{3}\.\d{3}\.\d{3}-\d{2})/);
-  if (doc) guarde('cpfCnpj', doc.m[1]);
+  g('cpfCnpj', primeiro(/(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{3}\.\d{3}\.\d{3}-\d{2})/));
 
-  // observações do veículo: a linha que vem depois de "LOCAL DATA" (cidade + data).
-  // Pode ser "SEM OBSERVAÇÕES" ou um texto como "ART116 CTB USO PL - RIG5E15;".
-  const localData = acheLinha(/^[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]+\s[A-Z]{2}\s+\d{2}\/\d{2}\/\d{4}$/i);
-  if (localData) {
-    for (let i = localData.i + 1; i < Math.min(valores.length, localData.i + 4); i++) {
-      const l = valores[i];
-      if (!l || /^[\*\s.]+$/.test(l) || /^(SEM OBSERVA|SEM OBSERVACOES)/i.test(l)) { if (/^SEM OBSERVA/i.test(l)) guarde('obsCrlv', l); break; }
-      if (/DOCUMENTO EMITIDO|VOC[ÊE] SABIA|MENSAGENS/i.test(l)) break;
-      guarde('obsCrlv', l);
-      break;
-    }
+  /* ---------- dicionário ---------- */
+  const alternativas = lista => lista.map(escapar).join('|');
+  m = tudo.match(new RegExp('\\b(' + alternativas(CRLV_DIC.categorias) + ')\\b'));
+  if (m) g('categoria', m[1]);
+  // cor + combustível costumam vir juntos ("PRATA ALCOOL/GASOLINA"); aceita separados
+  m = tudo.match(new RegExp('\\b(' + alternativas(CRLV_DIC.cores) + ') (' + alternativas(CRLV_DIC.combustiveis) + ')\\b'));
+  if (m) { g('cor', m[1]); g('comb', m[2]); }
+  else {
+    m = tudo.match(new RegExp('\\b(' + alternativas(CRLV_DIC.cores) + ')\\b')); if (m) g('cor', m[1]);
+    m = tudo.match(new RegExp('\\b(' + alternativas(CRLV_DIC.combustiveis) + ')\\b')); if (m) g('comb', m[1]);
   }
+  // espécie + tipo ("PASSAGEIRO AUTOMOVEL", "CARGA CAMINHONETE")
+  m = tudo.match(new RegExp('\\b(' + alternativas(CRLV_DIC.especies) + ') (' + alternativas(CRLV_DIC.tipos) + ')\\b'));
+  if (m) { g('especie', m[1]); g('tipo', m[2]); }
+
+  // marca/modelo/versão: "MARCA/MODELO ..." com barra entre duas palavras, sem ser
+  // placa/UF, CNPJ, combustível ou potência. Corta no próximo rótulo do documento.
+  const linhasModelo = linhas.filter(l => /\b[A-Z]{1,12}\/[A-Z0-9]/.test(l) &&
+      !new RegExp(RE_PLACA + '\\/[A-Z]{2}').test(l) && !/\d{2}\.\d{3}\.\d{3}\//.test(l) &&
+      !/\bCV ?\//.test(l) && !new RegExp('\\b(' + alternativas(CRLV_DIC.combustiveis) + ')\\b').test(l) &&
+      !/(R\$|POTENCIA|CILINDRADA|CPF|VALIDE|HTTPS?:)/.test(l));
+  for (let i = 0; i < linhasModelo.length; i++) {
+    let cand = linhasModelo[i];
+    // remove rótulos colados antes e depois
+    cand = cand.replace(/^.*?(\*{2,}\s*)?(MARCA ?\/ ?MODELO(?: ?\/ ?VERSAO)?)\s*/, '');
+    cand = cand.split(/\b(ESPECIE|TIPO|PLACA|CHASSI|CATEGORIA|COR |COMBUSTIVEL|CARROCERIA|NOME|LOCAL|DATA|ASSINADO|DOCUMENTO|CAT\b|CPF|MOTOR|POTENCIA)\b/)[0].trim();
+    cand = cand.replace(/^\*+\s*/, '').trim();
+    if (/\b[A-Z]{1,12}\/[A-Z0-9]/.test(cand) && cand.length >= 5 && cand.length <= 45) { g('modelo', cand); break; }
+  }
+
+  /* ---------- observações (texto livre) ---------- */
+  // só o que estiver na MESMA linha do rótulo (não atravessa a quebra de linha)
+  m = tudo.match(/OBSERVACOES DO VEICULO(?: INFORMACOES DO SEGURO DPVAT)?[ \t]+([^\n]{3,120})/);
+  if (m && !/^(INFORMACOES|MENSAGENS|DADOS|NOME|LOCAL)/.test(m[1].trim())) g('obsCrlv', m[1].trim());
+  if (!achados.obsCrlv && /SEM OBSERVACOES/.test(tudo)) g('obsCrlv', 'SEM OBSERVAÇÕES');
   if (!achados.obsCrlv) {
-    const obs = acheLinha(/^(SEM OBSERVA[ÇC][ÕO]ES|.*(?:BLINDAD|RESTRI[ÇC]|ALIEN|GRAVAME|ADAPTAD|CTB).*)$/i);
-    if (obs) guarde('obsCrlv', obs.m[1]);
+    // linha depois de "cidade UF dd/mm/aaaa", quando for texto de verdade
+    m = tudo.match(/[A-Z ]+ [A-Z]{2} \d{2}\/\d{2}\/\d{4}[^\n]*\n([^\n*]{3,120})/);
+    if (m && !/(MENSAGENS|VOCE SABIA|DADOS DO SEGURO|DOCUMENTO EMITIDO|ESPECIE|MARCA)/.test(m[1])) g('obsCrlv', m[1].trim());
   }
+  if (achados.obsCrlv) achados.obsCrlv = achados.obsCrlv.replace(/\s*(DOCUMENTO EMITIDO.*|MENSAGENS.*)$/, '').trim();
 
   return achados;
 }
