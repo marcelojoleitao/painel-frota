@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.48.1';
+const CODIGO_VERSAO = '2.48.2';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1980,6 +1980,26 @@ function _percorrerCrlv_(aplicar) {
   return preenchidas + ' campo(s); próxima linha: ' + (proxima > nLin ? 'fim' : proxima);
 }
 
+
+
+/** Devolve ao painel o texto extraído do CRLV, para diagnóstico. */
+function textoCrlvViatura(token, placa) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
+    const alvo = _linhaDaPlaca_(aba, String(placa || '').trim().toUpperCase());
+    if (alvo.linha < 0) return { ok: false, erro: 'Placa não encontrada.' };
+    const link = alvo.idx.linkCrlv !== undefined ? String(aba.getRange(alvo.linha, alvo.idx.linkCrlv + 1).getValue() || '') : '';
+    const id = (link.match(/[-\w]{25,}/) || [])[0];
+    if (!id) return { ok: false, erro: 'Sem CRLV anexado.' };
+    const arquivo = DriveApp.getFileById(id);
+    const texto = _pdfTexto_(arquivo.getBlob().getBytes());
+    if (!texto) return { ok: false, erro: 'Não consegui extrair texto — o PDF pode ser digitalizado (imagem).' };
+    return { ok: true, nome: arquivo.getName(), tamanho: texto.length,
+      linhas: texto.split(/\r?\n/).filter(l => l.trim() !== '').slice(0, 120),
+      lidos: _camposCrlv_(texto) };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
 
 /** Grava, numa viatura, apenas os campos escolhidos na conferência do CRLV. */
 function gravarCamposCrlv(token, placa, campos) {

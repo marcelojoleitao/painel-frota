@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.48.1';
+const VERSAO_PAINEL = '2.48.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -3980,9 +3980,11 @@ function mostrarComposicaoProjecao(r) {
 }
 
 /* ---------------- leitura do CRLV ---------------- */
-const ROTULOS_CRLV = { renavam: 'Renavam', chassi: 'Chassi', anoFab: 'Ano fabricação', anoMod: 'Ano modelo',
-  modelo: 'Marca/Modelo', especie: 'Espécie', categoria: 'Categoria', cor: 'Cor', comb: 'Combustível',
-  potencia: 'Potência/Cilindrada', capacidade: 'Capacidade', crv: 'CRV', anoEx: 'Exercício' };
+const ROTULOS_CRLV = { renavam: 'Renavam', chassi: 'Chassi', anoFab: 'Ano de fabricação', anoMod: 'Ano do modelo',
+  modelo: 'Marca/Modelo/Versão', especie: 'Espécie', tipo: 'Tipo', categoria: 'Categoria', cor: 'Cor',
+  comb: 'Combustível', potencia: 'Potência/Cilindrada', capacidade: 'Capacidade', motor: 'Motor',
+  crv: 'Nº do CRV', codCla: 'Código de segurança do CLA', anoEx: 'Exercício', cpfCnpj: 'CPF/CNPJ',
+  obsCrlv: 'Observações do CRLV', placa: 'Placa' };
 
 function lerCrlv(placa, aplicar) {
   const caixa = el('crlv-resultado'), botao = el('btn-ler-crlv');
@@ -4086,7 +4088,8 @@ function mostrarConferenciaCrlv() {
         <div class="cartao-dica" style="margin:0 0 8px">O documento pode não trazer esse dado, ou o leitor não reconheceu o formato. Se algum deles existir no PDF, me avise para eu ajustar.</div>
         <div class="tabela-rol" style="max-height:180px"><table class="tabela-simples" style="width:100%">
           <tbody>${faltaram.map(v => `<tr><td style="width:110px"><b style="font-family:var(--fonte-dados)">${esc(v.placa)}</b></td>
-            <td>${esc(v.naoLidos.map(c => ROTULOS_CRLV[c] || c).join(', '))}</td></tr>`).join('')}
+            <td>${esc(v.naoLidos.map(c => ROTULOS_CRLV[c] || c).join(', '))}</td>
+            <td style="width:96px"><button class="link-btn" data-textocrlv="${escAttr(v.placa)}">ver o texto</button></td></tr>`).join('')}
           </tbody></table></div>`);
     })() +
     secao('Tudo que o CRLV informou', `
@@ -4112,6 +4115,7 @@ function mostrarConferenciaCrlv() {
     if (b) { b.disabled = !n; b.textContent = n ? 'Gravar ' + n + ' campo(s)' : 'Gravar selecionados'; }
   };
   document.querySelectorAll('.crlv-item, .crlv-conflito').forEach(c => c.addEventListener('change', contar));
+  document.querySelectorAll('button[data-textocrlv]').forEach(b => b.addEventListener('click', () => verTextoDoCrlv(b.dataset.textocrlv)));
   ouvir('crlv-todos', 'click', () => { document.querySelectorAll('.crlv-item').forEach(c => { c.checked = true; }); contar(); });
   ouvir('crlv-nenhum', 'click', () => { document.querySelectorAll('.crlv-item, .crlv-conflito').forEach(c => { c.checked = false; }); contar(); });
   contar();
@@ -4154,4 +4158,31 @@ function gravarConferenciaCrlv(porPlaca) {
   };
   proxima();
 }
+
+/** Mostra o texto extraído do PDF, para entender por que um campo não foi lido. */
+function verTextoDoCrlv(placa) {
+  toast('Lendo o PDF de ' + placa + '…');
+  const run = servidor('textoCrlvViatura',
+    r => {
+      if (!r || !r.ok) { toast((r && r.erro) || 'Falha ao ler.', true); return; }
+      const janela = window.open('', '_blank');
+      if (!janela) { toast('Permita a abertura de janelas para ver o texto.', true); return; }
+      janela.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
+        <title>CRLV ${esc(placa)}</title>
+        <style>body{font-family:Arial,sans-serif;margin:24px;color:#14181F}
+          h1{font-size:16px;color:#0B2C5C} pre{background:#F6F8FC;padding:12px;border-radius:8px;font-size:12px;white-space:pre-wrap}
+          table{border-collapse:collapse;margin-bottom:16px} td{padding:3px 10px;border-bottom:1px solid #E3E8F0;font-size:12px}</style>
+        </head><body>
+        <h1>CRLV de ${esc(placa)} — ${esc(r.nome)} (${r.tamanho} caracteres)</h1>
+        <h1>O que o leitor entendeu</h1>
+        <table><tbody>${Object.keys(r.lidos).map(k => `<tr><td><b>${esc(ROTULOS_CRLV[k] || k)}</b></td><td>${esc(r.lidos[k])}</td></tr>`).join('')}</tbody></table>
+        <h1>Texto extraído do PDF</h1>
+        <pre>${r.linhas.map((l, i) => String(i + 1).padStart(3, ' ') + ': ' + esc(l)).join('\n')}</pre>
+        </body></html>`);
+      janela.document.close();
+    },
+    e => toast('Erro: ' + (e && e.message ? e.message : e), true));
+  if (run) run.textoCrlvViatura(ESTADO.token, placa);
+}
+
 </script>
