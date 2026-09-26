@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.44.1';
+const CODIGO_VERSAO = '2.44.2';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1635,6 +1635,39 @@ function _valorCrlv_(trecho, tipo) {
   const corte = trecho.split(/\b(PLACA|RENAVAM|CHASSI|CATEGORIA|ESPECIE|COMBUSTIVEL|POTENCIA|CAPACIDADE|CODIGO|CLA|CRV|ANO |EXERCICIO|COR |MARCA|CPF|CNPJ|MUNICIPIO|LOCAL|DATA|OBSERVAC|NUMERO|SERIE|MOTOR|EIXOS|PESO|LOTACAO|CARROCERIA|RESTRICAO|PROPRIET)/)[0];
   const limpo = corte.replace(/\s{2,}/g, ' ').trim();
   return limpo.length >= 2 && limpo.length <= 60 ? limpo : '';
+}
+
+
+/**
+ * Mostra o texto que o Apps Script realmente extrai do CRLV de uma viatura.
+ * É com esse texto que o leitor precisa ser escrito — o layout varia conforme
+ * o PDF. Rode no editor e copie o log.
+ *     verTextoCrlv('PNY1624')
+ */
+function verTextoCrlv(placa) {
+  placa = String(placa || '').trim().toUpperCase();
+  if (!placa) { Logger.log('Informe a placa: verTextoCrlv("PNY1624")'); return; }
+  const aba = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_BASE);
+  const alvo = _linhaDaPlaca_(aba, placa);
+  if (alvo.linha < 0) { Logger.log('Placa não encontrada.'); return; }
+  const link = String(aba.getRange(alvo.linha, alvo.idx.linkCrlv + 1).getValue() || '');
+  const id = (link.match(/[-\w]{25,}/) || [])[0];
+  if (!id) { Logger.log('Esta viatura não tem CRLV anexado.'); return; }
+
+  const arquivo = DriveApp.getFileById(id);
+  Logger.log('Arquivo: ' + arquivo.getName() + ' (' + Math.round(arquivo.getSize() / 1024) + ' KB)');
+  const texto = _pdfTexto_(arquivo.getBlob().getBytes());
+  if (!texto) { Logger.log('Não consegui extrair texto — provavelmente é um PDF digitalizado (imagem).'); return; }
+
+  Logger.log('--- TEXTO EXTRAÍDO (' + texto.length + ' caracteres) ---');
+  // em blocos, porque o log corta linhas longas
+  const linhas = texto.split(/\r?\n/).filter(l => l.trim() !== '');
+  linhas.forEach((l, i) => Logger.log(('  ' + (i + 1)).slice(-4) + ': ' + l.substring(0, 180)));
+  Logger.log('--- FIM ---');
+  Logger.log('O leitor entendeu assim:');
+  const lidos = _camposCrlv_(texto);
+  Object.keys(lidos).forEach(k => Logger.log('   ' + k + ' = ' + lidos[k]));
+  return 'ok';
 }
 
 /** Lê o CRLV de uma viatura e compara com a ConsultaBD. */
