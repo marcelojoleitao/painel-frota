@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.46.0';
+const CODIGO_VERSAO = '2.47.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -927,7 +927,12 @@ function acaoGerarBoleto(token, placa) {
 }
 
 /** AUDITAR CRLV: lê o PDF do link salvo, confere a placa e ajusta o Ano Exercício. */
-function acaoAuditarCrlv(token, placa) {
+function acaoAuditarCrlv(token, placa) { return _crlvViatura_(token, placa, false); }
+
+/** Mesma leitura, mas gravando as lacunas. */
+function acaoAplicarCrlv(token, placa) { return _crlvViatura_(token, placa, true); }
+
+function _crlvViatura_(token, placa, aplicar) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
   placa = String(placa || '').trim().toUpperCase();
   try {
@@ -938,22 +943,25 @@ function acaoAuditarCrlv(token, placa) {
     const r = _lerCrlvDaViatura_(aba, mapa, alvo.linha, alvo.idx);
     if (r.erro) return { ok: true, status: /sem CRLV/.test(r.erro) ? 'SEM CRLV' : 'ERRO', detalhe: r.erro };
 
-    // preenche o que está em branco e relata o que diverge
-    if (r.preencher.length) {
+    // só grava no modo aplicar; na conferência apenas relata
+    if (aplicar && r.preencher.length) {
       r.preencher.forEach(x => aba.getRange(alvo.linha, x.col).setValue(x.valor));
       SpreadsheetApp.flush();
       limparCache();
     }
     const partes = [];
-    if (r.preencher.length) partes.push(r.preencher.length + ' campo(s) preenchido(s): ' + r.preencher.map(x => x.campo).join(', '));
+    if (r.preencher.length) partes.push(r.preencher.length + ' campo(s) ' + (aplicar ? 'preenchido(s)' : 'a preencher') + ': ' +
+      r.preencher.map(x => x.campo + '=' + x.valor).join(', '));
     if (r.divergencias.length) partes.push(r.divergencias.length + ' divergência(s): ' +
       r.divergencias.map(d => d.campo + ' planilha "' + d.atual + '" × CRLV "' + d.crlv + '"').join(' | '));
     if (!partes.length) partes.push('cadastro confere com o CRLV');
 
-    const status = r.divergencias.length ? 'DIVERGÊNCIA' : (r.preencher.length ? 'PREENCHIDO' : 'OK');
-    _logAcao_(p.ss, p.sessao.email, 'Auditar CRLV', placa, status, partes.join(' • '));
-    return { ok: true, status: status, detalhe: partes.join(' • '),
-      preencheu: r.preencher.length, divergentes: r.divergencias.length };
+    const status = r.divergencias.length ? 'DIVERGÊNCIA' : (r.preencher.length ? (aplicar ? 'PREENCHIDO' : 'A PREENCHER') : 'OK');
+    if (aplicar) _logAcao_(p.ss, p.sessao.email, 'Completar pelo CRLV', placa, status, partes.join(' • '));
+    return { ok: true, status: status, detalhe: partes.join(' • '), aplicado: !!aplicar,
+      preencheu: r.preencher.length, divergentes: r.divergencias.length,
+      campos: r.preencher.map(x => ({ campo: x.campo, valor: x.valor })),
+      conflitos: r.divergencias.map(d => ({ campo: d.campo, atual: d.atual, crlv: d.crlv })) };
   } catch (e) {
     return { ok: false, erro: String(e.message || e) };
   }

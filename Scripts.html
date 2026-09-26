@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.46.0';
+const VERSAO_PAINEL = '2.47.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -1881,7 +1881,8 @@ function enviarFoto(placa, ang, arquivo) {
    ============================================================ */
 const ACOES_DEF = {
   crlv:   { rotulo: 'Baixar CRLV (DETRAN)',        fn: 'acaoBaixarCrlv',      fila: true,  desc: 'Entra na Central do DETRAN-CE com placa + renavam, baixa o CRLV-e (usa CRV e código de segurança das colunas BA/BB), salva na pasta do Drive, grava o link e ajusta o Ano Exercício lendo o PDF.' },
-  audit:  { rotulo: 'Ler CRLV e completar cadastro', fn: 'acaoAuditarCrlv',   fila: false, desc: 'Abre o PDF do CRLV, confere se a placa do documento bate, preenche os campos vazios da ConsultaBD (renavam, chassi, anos, marca/modelo, espécie, tipo, categoria, cor, combustível, potência, motor, CRV, exercício) e aponta as divergências sem sobrescrever o que já está preenchido. Funciona em lote pelas viaturas exibidas.' },
+  audit:  { rotulo: 'Conferir CRLV (não grava)',    fn: 'acaoAuditarCrlv',     fila: false, conferencia: true, desc: 'Abre o PDF do CRLV, confere se a placa bate e mostra o que preencheria na ConsultaBD e onde o cadastro diverge do documento. Nada é gravado: ao final você revisa a lista e decide se aplica.' },
+  crlvAplicar: { rotulo: 'Completar cadastro pelo CRLV', fn: 'acaoAplicarCrlv', fila: false, desc: 'Preenche os campos vazios da ConsultaBD com o que o CRLV informa. Não sobrescreve nada que já esteja preenchido; divergências são apenas relatadas.' },
   multas: { rotulo: 'Consultar multas (DETRAN)',   fn: 'acaoConsultarMultas', fila: true,  desc: 'Consulta a situação de multas no DETRAN e grava o resultado com a data na coluna O — o mesmo texto que alimenta a ficha e os filtros.' },
   boleto: { rotulo: 'Gerar boleto p/ licenciar',   fn: 'acaoGerarBoleto',     fila: true,  desc: 'Verifica o licenciamento no DETRAN: JÁ LICENCIADO, PENDÊNCIA, ou gera o boleto (PDF salvo na pasta de CRLVs com link no registro).' }
 };
@@ -1965,6 +1966,7 @@ function renderExecutarAcoes(c, lista) {
 
 /* ---------------- motor de lote (navegador orquestra; 1 placa por chamada) ---------------- */
 function prepararLote(acao) {
+  if (ACOES_DEF[acao] && ACOES_DEF[acao].conferencia) ESTADO.conferenciaCrlv = [];
   const op = opcoesAcao(acao);
   const e = elegiveis(acao, ESTADO.filtrado, op);
   const pulados = Object.keys(e.motivo).map(p => ({ placa: p, st: 'PULADA', detalhe: e.motivo[p] }));
@@ -2000,7 +2002,12 @@ function prepararLote(acao) {
 function processarProximo() {
   const L = ESTADO.lote;
   if (!L || !L.ativo) return;
-  if (!L.fila.length) { L.ativo = false; L.terminou = true; desenharLote(); toast('Lote concluído: ' + L.ok + ' ok, ' + L.erro + ' erro(s).'); return; }
+  if (!L.fila.length) {
+    L.ativo = false; L.terminou = true; desenharLote();
+    toast('Lote concluído: ' + L.ok + ' ok, ' + L.erro + ' erro(s).');
+    if (ACOES_DEF[L.acao] && ACOES_DEF[L.acao].conferencia) mostrarConferenciaCrlv();
+    return;
+  }
   const placa = L.fila.shift();
   L.atual = placa; desenharLote();
   google.script.run
@@ -2122,6 +2129,10 @@ function acaoIndividual(acao, placa, botao) {
       if (sessaoExpirou(r)) return;
       if (!r || !r.ok) { toast((r && r.erro) || 'Falha na ação.'); return; }
       toast(placa + ': ' + r.status + (r.detalhe ? ' — ' + r.detalhe : ''), /DIVERG/i.test(r.status || ''));
+      if (r.campos || r.conflitos) {
+        ESTADO.conferenciaCrlv = ESTADO.conferenciaCrlv || [];
+        ESTADO.conferenciaCrlv.push({ placa: placa, status: r.status, campos: r.campos || [], conflitos: r.conflitos || [], aplicado: !!r.aplicado });
+      }
       if (r.link) window.open(r.link, '_blank');
       recarregarAposEdicao(placa);
     })
@@ -4000,6 +4011,69 @@ function lerCrlv(placa, aplicar) {
       if (caixa) caixa.innerHTML = '<div class="cartao-dica">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div>';
     });
   if (run) run.lerCrlvViatura(ESTADO.token, placa, !!aplicar);
+}
+
+
+/* ---------------- conferência do CRLV antes de gravar ---------------- */
+function mostrarConferenciaCrlv() {
+  const lista = (ESTADO.conferenciaCrlv || []).filter(x => x.campos.length || x.conflitos.length);
+  if (!lista.length) { toast('Conferência concluída: nada a preencher e nenhuma divergência.'); return; }
+  const aPreencher = lista.filter(x => x.campos.length);
+  const comConflito = lista.filter(x => x.conflitos.length);
+  const totalCampos = aPreencher.reduce((s, x) => s + x.campos.length, 0);
+
+  htm('gaveta-cab', `<div class="titulo"><h2>Conferência do CRLV</h2>
+    <div class="sub">${lista.length} viatura(s) analisada(s) — nada foi gravado</div></div>
+    <button class="gaveta-fechar" onclick="fecharFicha()">×</button>`);
+  htm('gaveta-corpo',
+    secao('O que seria preenchido', aPreencher.length ? `
+      <div class="cartao-dica" style="margin:0 0 8px">${totalCampos} campo(s) vazio(s) em ${aPreencher.length} viatura(s). Só entram campos em branco.</div>
+      <div class="tabela-rol" style="max-height:320px"><table class="tabela-simples" style="width:100%">
+        <thead><tr><th>Placa</th><th>Campo</th><th>Valor do CRLV</th></tr></thead>
+        <tbody>${aPreencher.map(v => v.campos.map((c, i) => `<tr>
+          <td>${i === 0 ? '<b style="font-family:var(--fonte-dados)">' + esc(v.placa) + '</b>' : ''}</td>
+          <td>${esc(ROTULOS_CRLV[c.campo] || c.campo)}</td><td class="ok-txt">${esc(c.valor)}</td></tr>`).join('')).join('')}
+        </tbody></table></div>` : '<div class="cartao-dica">Nenhuma lacuna a preencher.</div>') +
+    (comConflito.length ? secao('Divergências (não serão alteradas)', `
+      <div class="cartao-dica" style="margin:0 0 8px">O cadastro já tem valor diferente do que o CRLV informa. Confira caso a caso — o painel não sobrescreve.</div>
+      <div class="tabela-rol" style="max-height:280px"><table class="tabela-simples" style="width:100%">
+        <thead><tr><th>Placa</th><th>Campo</th><th>Planilha</th><th>CRLV</th></tr></thead>
+        <tbody>${comConflito.map(v => v.conflitos.map((c, i) => `<tr>
+          <td>${i === 0 ? '<b style="font-family:var(--fonte-dados)">' + esc(v.placa) + '</b>' : ''}</td>
+          <td>${esc(ROTULOS_CRLV[c.campo] || c.campo)}</td><td>${esc(c.atual)}</td>
+          <td class="alerta-txt">${esc(c.crlv)}</td></tr>`).join('')).join('')}
+        </tbody></table></div>`) : '') +
+    `<div class="form-acoes">
+      ${aPreencher.length ? `<button class="btn amarelo" id="btn-aplicar-conferencia">Gravar os ${totalCampos} campo(s) em ${aPreencher.length} viatura(s)</button>` : ''}
+      <button class="btn claro" onclick="fecharFicha()">Fechar sem gravar</button>
+    </div>`);
+  cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
+  document.body.style.overflow = 'hidden';
+  ouvir('btn-aplicar-conferencia', 'click', () => aplicarConferenciaCrlv(aPreencher.map(x => x.placa)));
+}
+
+/** Aplica o que foi conferido, placa a placa, mostrando o andamento. */
+function aplicarConferenciaCrlv(placas) {
+  const btn = el('btn-aplicar-conferencia');
+  if (btn) btn.disabled = true;
+  let feitas = 0, erros = 0;
+  const fila = placas.slice();
+  const proxima = () => {
+    if (!fila.length) {
+      toast(feitas + ' viatura(s) atualizada(s)' + (erros ? ' • ' + erros + ' com erro' : ''));
+      ESTADO.conferenciaCrlv = [];
+      fecharFicha();
+      recarregarAposEdicao(null);
+      return;
+    }
+    const placa = fila.shift();
+    if (btn) btn.textContent = 'Gravando ' + placa + '… (' + (placas.length - fila.length) + ' de ' + placas.length + ')';
+    const run = servidor('acaoAplicarCrlv',
+      r => { if (r && r.ok) feitas++; else erros++; proxima(); },
+      () => { erros++; proxima(); });
+    if (run) run.acaoAplicarCrlv(ESTADO.token, placa); else { erros++; proxima(); }
+  };
+  proxima();
 }
 
 </script>
