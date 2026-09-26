@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.47.5';
+const CODIGO_VERSAO = '2.47.6';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1650,7 +1650,9 @@ function _camposCrlv_(texto) {
   const RE_PLACA = '[A-Z]{3}[\\s-]?\\d[A-Z0-9]\\d{2}';
   const ehRotulo = l => /^(C[ÓO]DIGO|PLACA|ANO|N[ÚU]MERO|MARCA|ESP[ÉE]CIE|COR|COMBUST[ÍI]VEL|CATEGORIA|POT[ÊE]NCIA|MOTOR|CARROCERIA|NOME|LOCAL|CPF|CMT|EIXOS|OBSERVA|INFORMA|MENSAGENS|DADOS|REPASSE|CUSTO|VALOR|CAT\b|CAPACIDADE|PESO|DETRAN|REP[ÚU]BLICA|MINIST|SECRETARIA|ASSINADO|VALIDE|QRCODE|VOC[ÊE]|NA CARTEIRA|LEIA|DOCUMENTO EMITIDO|LOTA[ÇC][ÃA]O|DATA)/i.test(l);
 
-  const valores = linhas.filter(l => !ehRotulo(l));
+  // limpa rótulo grudado antes de qualquer validação, senão a linha é
+  // descartada por tamanho e o valor se perde
+  const valores = linhas.filter(l => !ehRotulo(l)).map(l => _semRotulosCrlv_(l)).filter(l => l !== '');
 
   const acheLinha = re => { for (let i = 0; i < valores.length; i++) { const m = valores[i].match(re); if (m) return { i: i, m: m }; } return null; };
   const guarde = (campo, valor) => {
