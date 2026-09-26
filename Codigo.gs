@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.47.3';
+const CODIGO_VERSAO = '2.47.4';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1785,7 +1785,7 @@ const COLUNAS_CRLV = {
   potencia: ['POTENCIA/CILINDRADA', 'POTENCIA / CILINDRADA', 'POTENCIA CILINDRADA', 'POTENCIA'],
   motor: ['MOTOR', 'NUMERO DO MOTOR', 'N MOTOR'],
   codCla: ['CODIGO DE SEGURANCA DO CLA', 'CODIGO CLA', 'CLA'],
-  cpfCnpj: ['CPF/CNPJ', 'CPF / CNPJ', 'CNPJ'],
+  cpfCnpj: ['CPF/CNPJ PROPRIETARIO', 'CPF / CNPJ PROPRIETARIO', 'CPF/CNPJ DO PROPRIETARIO', 'CPF/CNPJ', 'CPF / CNPJ', 'CNPJ PROPRIETARIO', 'CNPJ'],
   obsCrlv: ['OBSERVACOES DO CRLV', 'OBSERVACOES CRLV', 'OBSERVACOES'],
   crv: ['NUMERO DO CRV', 'N DO CRV', 'CRV']
 };
@@ -1795,8 +1795,21 @@ function _colunaDoCampoCrlv_(campo, idx, cab) {
   if (idx[campo] !== undefined) return idx[campo];
   const nomes = COLUNAS_CRLV[campo] || [];
   const normal = cab.map(c => _normCab_(c));
+  // 1) nome exato
   for (let i = 0; i < nomes.length; i++) {
     const p = normal.indexOf(_normCab_(nomes[i]));
+    if (p >= 0) return p;
+  }
+  // 2) cabeçalho que comece com o nome procurado ("CPF/CNPJ Proprietário")
+  for (let i = 0; i < nomes.length; i++) {
+    const alvo = _normCab_(nomes[i]);
+    const p = normal.findIndex(c => c && (c.indexOf(alvo) === 0 || alvo.indexOf(c) === 0));
+    if (p >= 0) return p;
+  }
+  // 3) cabeçalho que contenha o nome, em qualquer posição
+  for (let i = 0; i < nomes.length; i++) {
+    const alvo = _normCab_(nomes[i]);
+    const p = normal.findIndex(c => c && c.indexOf(alvo) >= 0);
     if (p >= 0) return p;
   }
   return undefined;
