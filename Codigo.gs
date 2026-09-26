@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.47.0';
+const CODIGO_VERSAO = '2.47.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1651,27 +1651,53 @@ function _camposCrlv_(texto) {
   const cla = acheLinha(/^(\d{9,13})\s+\*+$/);
   if (cla) guarde('codCla', cla.m[1]);
 
-  // marca / modelo / versão: linha com letras e barra, sem ser chassi nem placa
-  for (let i = 0; i < valores.length; i++) {
-    const l = valores[i];
-    if (!/[A-ZÁÉÍÓÚÃÕÇ]/i.test(l) || l.indexOf('/') < 0) continue;
-    if (/\b[A-HJ-NPR-Z0-9]{17}\b/.test(l)) continue;                 // linha do chassi
-    if (new RegExp(RE_PLACA + '\\/[A-Z]{2}').test(l)) continue;      // placa anterior/UF
-    if (/^\d/.test(l) || /CV\//.test(l)) continue;                   // números e potência
-    if (/\d{2}\.\d{3}\.\d{3}\//.test(l)) continue;                   // CNPJ
-    guarde('modelo', l);
-    // espécie e tipo costumam vir na linha seguinte: "PASSAGEIRO AUTOMOVEL"
-    const prox = valores[i + 1] || '';
-    const et = prox.match(/^([A-ZÁÉÍÓÚÃÕÇ]+)\s+([A-ZÁÉÍÓÚÃÕÇ][A-ZÁÉÍÓÚÃÕÇ\s\/-]*)$/i);
-    if (et && !/^\d/.test(prox)) { guarde('especie', et[1]); guarde('tipo', et[2]); }
-    break;
+  // A âncora é a linha do chassi. No bloco de valores do CRLV-e a ordem é fixa:
+  //   ...                          (chassi - 2)  marca / modelo / versão
+  //   PASSAGEIRO AUTOMOVEL         (chassi - 1)  espécie + tipo
+  //   JKP5487/DF 8A1LZ...          (chassi)      placa anterior/UF + chassi
+  //   CINZA ALCOOL/GASOLINA        (chassi + 1)  cor + combustível
+  const soLetras = l => /^[A-ZÁÉÍÓÚÂÊÔÃÕÇ0-9][A-ZÁÉÍÓÚÂÊÔÃÕÇ0-9\s\/.\-]*$/i.test(l) && /[A-ZÁÉÍÓÚÂÊÔÃÕÇ]{2}/i.test(l);
+  const descartar = l => !l || /^\*+$/.test(l) || /^[\d.,\s]+$/.test(l) ||
+                         /\d{2}\.\d{3}\.\d{3}\//.test(l) || /\bCV\s?\//i.test(l) ||
+                         new RegExp('^' + RE_PLACA + '(\\s|$)').test(l);
+
+  if (chassi) {
+    const linhaModelo = valores[chassi.i - 2] || '';
+    if (soLetras(linhaModelo) && !descartar(linhaModelo)) guarde('modelo', linhaModelo);
+
+    const linhaEspecie = valores[chassi.i - 1] || '';
+    if (soLetras(linhaEspecie) && !descartar(linhaEspecie)) {
+      const et = linhaEspecie.match(/^([A-ZÁÉÍÓÚÂÊÔÃÕÇ]+)\s+(.+)$/i);
+      if (et) { guarde('especie', et[1]); guarde('tipo', et[2]); }
+      else guarde('especie', linhaEspecie);
+    }
   }
 
-  // cor + combustível: linha logo após a do chassi
+  // reserva: sem chassi, procura a linha com barra que pareça marca/modelo
+  if (!achados.modelo) {
+    for (let i = 0; i < valores.length; i++) {
+      const l = valores[i];
+      if (l.indexOf('/') < 0 || descartar(l)) continue;
+      if (/\b[A-HJ-NPR-Z0-9]{17}\b/.test(l)) continue;
+      if (!soLetras(l)) continue;
+      guarde('modelo', l);
+      const prox = valores[i + 1] || '';
+      if (soLetras(prox) && !descartar(prox)) {
+        const et = prox.match(/^([A-ZÁÉÍÓÚÂÊÔÃÕÇ]+)\s+(.+)$/i);
+        if (et) { guarde('especie', et[1]); guarde('tipo', et[2]); }
+      }
+      break;
+    }
+  }
+
+  // cor + combustível: linha seguinte à do chassi ("CINZA ALCOOL/GASOLINA")
   if (chassi) {
     const seguinte = valores[chassi.i + 1] || '';
-    const cc = seguinte.match(/^([A-ZÁÉÍÓÚÃÕÇ]+)\s+([A-ZÁÉÍÓÚÃÕÇ][A-ZÁÉÍÓÚÃÕÇ\s\/]*)$/i);
-    if (cc) { guarde('cor', cc[1]); guarde('comb', cc[2]); }
+    if (soLetras(seguinte) && !descartar(seguinte)) {
+      const cc = seguinte.match(/^([A-ZÁÉÍÓÚÂÊÔÃÕÇ]+)\s+(.+)$/i);
+      if (cc) { guarde('cor', cc[1]); guarde('comb', cc[2]); }
+      else guarde('cor', seguinte);
+    }
   }
 
   // categoria: valor conhecido
