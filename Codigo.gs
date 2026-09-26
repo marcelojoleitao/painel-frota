@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.47.4';
+const CODIGO_VERSAO = '2.47.5';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1591,6 +1591,35 @@ const CAMPOS_CRLV = [
 ];
 
 /**
+ * Em alguns PDFs o rótulo seguinte vem colado ao valor
+ * ("I/RENAULT FLUENCE DYN20M ESPÉCIE / TIPO"). Esta função corta o valor no
+ * primeiro rótulo conhecido que aparecer dentro dele.
+ */
+const ROTULOS_DO_CRLV = [
+  'CODIGO RENAVAM', 'PLACA ANTERIOR / UF', 'PLACA ANTERIOR/UF', 'MARCA / MODELO / VERSAO', 'MARCA/MODELO/VERSAO',
+  'ESPECIE / TIPO', 'ESPECIE/TIPO', 'COR PREDOMINANTE', 'CODIGO DE SEGURANCA DO CLA', 'NUMERO DO CRV',
+  'POTENCIA/CILINDRADA', 'POTENCIA / CILINDRADA', 'PESO BRUTO TOTAL', 'OBSERVACOES DO VEICULO',
+  'INFORMACOES DO SEGURO', 'ASSINADO DIGITALMENTE', 'ANO FABRICACAO', 'ANO MODELO', 'EXERCICIO',
+  'COMBUSTIVEL', 'CATEGORIA', 'CAPACIDADE', 'CARROCERIA', 'CHASSI', 'LOTACAO', 'EIXOS', 'MOTOR',
+  'CPF / CNPJ', 'CPF/CNPJ', 'LOCAL', 'NOME', 'DATA', 'CMT', 'CAT'
+];
+
+function _semRotulosCrlv_(valor) {
+  let t = String(valor === null || valor === undefined ? '' : valor).trim();
+  if (!t) return '';
+  const semAcento = x => x.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+  const comparavel = semAcento(t);
+  let corte = -1;
+  ROTULOS_DO_CRLV.forEach(rot => {
+    const i = comparavel.indexOf(rot);
+    // só corta se o rótulo não começa o texto (senão não sobraria valor)
+    if (i > 0 && (corte < 0 || i < corte)) corte = i;
+  });
+  if (corte > 0) t = t.substring(0, corte);
+  return t.replace(/\s{2,}/g, ' ').replace(/[\s\/\-|:]+$/, '').trim();
+}
+
+/**
  * Leitor do CRLV-e.
  *
  * O PDF não entrega "rótulo: valor". Ele entrega todos os rótulos em bloco e,
@@ -1624,7 +1653,10 @@ function _camposCrlv_(texto) {
   const valores = linhas.filter(l => !ehRotulo(l));
 
   const acheLinha = re => { for (let i = 0; i < valores.length; i++) { const m = valores[i].match(re); if (m) return { i: i, m: m }; } return null; };
-  const guarde = (campo, valor) => { const v = String(valor || '').trim(); if (v && v !== '*' && !/^\*+$/.test(v)) achados[campo] = v; };
+  const guarde = (campo, valor) => {
+    const v = _semRotulosCrlv_(valor);
+    if (v && v !== '*' && !/^\*+$/.test(v)) achados[campo] = v;
+  };
 
   // placa + exercício, na mesma linha
   const placaEx = acheLinha(new RegExp('^(' + RE_PLACA + ')\\s+((?:19|20)\\d{2})$'));
