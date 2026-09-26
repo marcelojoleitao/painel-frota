@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.47.1';
+const CODIGO_VERSAO = '2.47.2';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -952,6 +952,9 @@ function _crlvViatura_(token, placa, aplicar) {
     const partes = [];
     if (r.preencher.length) partes.push(r.preencher.length + ' campo(s) ' + (aplicar ? 'preenchido(s)' : 'a preencher') + ': ' +
       r.preencher.map(x => x.campo + '=' + x.valor).join(', '));
+    const travados = (r.ignorados || []).filter(x => x.valor && /bloqueada|sem coluna/.test(x.motivo));
+    if (travados.length) partes.push(travados.length + ' campo(s) que o CRLV traz mas o painel não grava: ' +
+      travados.map(x => x.campo + ' (' + x.motivo + ')').join(', '));
     if (r.divergencias.length) partes.push(r.divergencias.length + ' divergência(s): ' +
       r.divergencias.map(d => d.campo + ' planilha "' + d.atual + '" × CRLV "' + d.crlv + '"').join(' | '));
     if (!partes.length) partes.push('cadastro confere com o CRLV');
@@ -961,7 +964,8 @@ function _crlvViatura_(token, placa, aplicar) {
     return { ok: true, status: status, detalhe: partes.join(' • '), aplicado: !!aplicar,
       preencheu: r.preencher.length, divergentes: r.divergencias.length,
       campos: r.preencher.map(x => ({ campo: x.campo, valor: x.valor })),
-      conflitos: r.divergencias.map(d => ({ campo: d.campo, atual: d.atual, crlv: d.crlv })) };
+      conflitos: r.divergencias.map(d => ({ campo: d.campo, atual: d.atual, crlv: d.crlv, bloqueada: !!d.bloqueada })),
+      ignorados: (r.ignorados || []).filter(x => x.valor) };
   } catch (e) {
     return { ok: false, erro: String(e.message || e) };
   }
@@ -1805,19 +1809,24 @@ function _lerCrlvDaViatura_(aba, mapa, linha, idx) {
     return { placa: placa, erro: 'o PDF é da placa ' + lidos.placa, lidos: lidos };
   }
   const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0].map(c => String(c || '').trim());
-  const preencher = [], divergencias = [];
+  const preencher = [], divergencias = [], ignorados = [];
   CAMPOS_CRLV.forEach(def => {
-    const col = _colunaDoCampoCrlv_(def.campo, idx, cab);
-    if (col === undefined) return;
     const lido = lidos[def.campo];
-    if (!lido) return;
-    const info = mapa.porCampo[def.campo];
-    if (info && !info.editavel) return;
+    if (!lido) { ignorados.push({ campo: def.campo, motivo: 'não veio no CRLV' }); return; }
+    const col = _colunaDoCampoCrlv_(def.campo, idx, cab);
+    if (col === undefined) { ignorados.push({ campo: def.campo, motivo: 'sem coluna na ConsultaBD', valor: lido }); return; }
     const atual = String(aba.getRange(linha, col + 1).getValue() || '').trim();
+    const info = mapa.porCampo[def.campo];
+    if (info && !info.editavel) {
+      // a coluna existe mas está protegida: mostramos o que faríamos, sem gravar
+      if (!atual) ignorados.push({ campo: def.campo, motivo: 'coluna bloqueada (' + info.motivo + ')', valor: lido });
+      else if (_normCab_(atual) !== _normCab_(lido)) divergencias.push({ campo: def.campo, atual: atual, crlv: lido, bloqueada: true });
+      return;
+    }
     if (!atual) { preencher.push({ campo: def.campo, col: col + 1, valor: lido }); return; }
     if (_normCab_(atual) !== _normCab_(lido)) divergencias.push({ campo: def.campo, atual: atual, crlv: lido });
   });
-  return { placa: placa, lidos: lidos, preencher: preencher, divergencias: divergencias };
+  return { placa: placa, lidos: lidos, preencher: preencher, divergencias: divergencias, ignorados: ignorados };
 }
 
 /** Confere (sem gravar) o que o CRLV preencheria. Processa em lotes. */

@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.47.1';
+const VERSAO_PAINEL = '2.47.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2131,7 +2131,8 @@ function acaoIndividual(acao, placa, botao) {
       toast(placa + ': ' + r.status + (r.detalhe ? ' — ' + r.detalhe : ''), /DIVERG/i.test(r.status || ''));
       if (r.campos || r.conflitos) {
         ESTADO.conferenciaCrlv = ESTADO.conferenciaCrlv || [];
-        ESTADO.conferenciaCrlv.push({ placa: placa, status: r.status, campos: r.campos || [], conflitos: r.conflitos || [], aplicado: !!r.aplicado });
+        ESTADO.conferenciaCrlv.push({ placa: placa, status: r.status, campos: r.campos || [], conflitos: r.conflitos || [],
+          ignorados: r.ignorados || [], aplicado: !!r.aplicado });
       }
       if (r.link) window.open(r.link, '_blank');
       recarregarAposEdicao(placa);
@@ -4016,8 +4017,8 @@ function lerCrlv(placa, aplicar) {
 
 /* ---------------- conferência do CRLV antes de gravar ---------------- */
 function mostrarConferenciaCrlv() {
-  const lista = (ESTADO.conferenciaCrlv || []).filter(x => x.campos.length || x.conflitos.length);
-  if (!lista.length) { toast('Conferência concluída: nada a preencher e nenhuma divergência.'); return; }
+  const lista = (ESTADO.conferenciaCrlv || []).filter(x => x.campos.length || x.conflitos.length || (x.ignorados || []).length);
+  if (!lista.length) { toast('Conferência concluída: nada a preencher, nada divergente e nada bloqueado.'); return; }
   const aPreencher = lista.filter(x => x.campos.length);
   const comConflito = lista.filter(x => x.conflitos.length);
   const totalCampos = aPreencher.reduce((s, x) => s + x.campos.length, 0);
@@ -4034,6 +4035,19 @@ function mostrarConferenciaCrlv() {
           <td>${i === 0 ? '<b style="font-family:var(--fonte-dados)">' + esc(v.placa) + '</b>' : ''}</td>
           <td>${esc(ROTULOS_CRLV[c.campo] || c.campo)}</td><td class="ok-txt">${esc(c.valor)}</td></tr>`).join('')).join('')}
         </tbody></table></div>` : '<div class="cartao-dica">Nenhuma lacuna a preencher.</div>') +
+    (() => {
+      const travados = lista.filter(x => (x.ignorados || []).length);
+      if (!travados.length) return '';
+      return secao('O CRLV informa, mas o painel não grava', `
+        <div class="cartao-dica" style="margin:0 0 8px">Ou a coluna não existe na ConsultaBD, ou está protegida (fórmula ou cor de coluna preenchida por script). Se quiser que o painel passe a gravar alguma delas, é só avisar.</div>
+        <div class="tabela-rol" style="max-height:220px"><table class="tabela-simples" style="width:100%">
+          <thead><tr><th>Placa</th><th>Campo</th><th>Valor do CRLV</th><th>Motivo</th></tr></thead>
+          <tbody>${travados.map(v => v.ignorados.map((x, i) => `<tr>
+            <td>${i === 0 ? '<b style="font-family:var(--fonte-dados)">' + esc(v.placa) + '</b>' : ''}</td>
+            <td>${esc(ROTULOS_CRLV[x.campo] || x.campo)}</td><td>${esc(x.valor || '')}</td>
+            <td style="color:var(--tinta-suave)">${esc(x.motivo)}</td></tr>`).join('')).join('')}
+          </tbody></table></div>`);
+    })() +
     (comConflito.length ? secao('Divergências (não serão alteradas)', `
       <div class="cartao-dica" style="margin:0 0 8px">O cadastro já tem valor diferente do que o CRLV informa. Confira caso a caso — o painel não sobrescreve.</div>
       <div class="tabela-rol" style="max-height:280px"><table class="tabela-simples" style="width:100%">
