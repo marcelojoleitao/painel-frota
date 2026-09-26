@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.47.2';
+const CODIGO_VERSAO = '2.47.3';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1638,8 +1638,11 @@ function _camposCrlv_(texto) {
   const anos = acheLinha(/^((?:19|20)\d{2})\s+((?:19|20)\d{2})$/);
   if (anos) { guarde('anoFab', anos.m[1]); guarde('anoMod', anos.m[2]); }
 
-  // chassi (17 caracteres) — pode vir junto da placa anterior
-  const chassi = acheLinha(/\b([A-HJ-NPR-Z0-9]{17})\b/);
+  // chassi (17 caracteres). A âncora boa é a linha "placa anterior/UF + chassi";
+  // sem ela, usamos a primeira linha que contenha um chassi.
+  let chassi = acheLinha(new RegExp(RE_PLACA + '\\/[A-Z]{2}\\s+([A-HJ-NPR-Z0-9]{17})'));
+  let ancoraFirme = !!chassi;
+  if (!chassi) chassi = acheLinha(/\b([A-HJ-NPR-Z0-9]{17})\b/);
   if (chassi) guarde('chassi', chassi.m[1]);
 
   // renavam: primeira linha só com 9 a 11 dígitos (vem antes do CRV, que tem 12)
@@ -1661,32 +1664,38 @@ function _camposCrlv_(texto) {
   //   JKP5487/DF 8A1LZ...          (chassi)      placa anterior/UF + chassi
   //   CINZA ALCOOL/GASOLINA        (chassi + 1)  cor + combustível
   const soLetras = l => /^[A-ZÁÉÍÓÚÂÊÔÃÕÇ0-9][A-ZÁÉÍÓÚÂÊÔÃÕÇ0-9\s\/.\-]*$/i.test(l) && /[A-ZÁÉÍÓÚÂÊÔÃÕÇ]{2}/i.test(l);
+  // linhas que nunca são dado do veículo: datas, assinatura, local, documento,
+  // CNPJ, potência, asteriscos e a própria placa
   const descartar = l => !l || /^\*+$/.test(l) || /^[\d.,\s]+$/.test(l) ||
                          /\d{2}\.\d{3}\.\d{3}\//.test(l) || /\bCV\s?\//i.test(l) ||
+                         /\d{2}\/\d{2}\/\d{4}/.test(l) ||
+                         /(ASSINAD|DETRAN|SENATRAN|REP[ÚU]BLICA|MINIST|SECRETARIA|EMITIDO|OBSERVA|APLICAVEL|FEDERAL|SUPER|POL ROD|DELEGACIA|SUPERINTEND)/i.test(l) ||
                          new RegExp('^' + RE_PLACA + '(\\s|$)').test(l);
+  // marca/modelo tem cara própria: MARCA/MODELO, com barra e sem ser frase longa
+  const pareceModelo = l => !descartar(l) && soLetras(l) && l.indexOf('/') > 0 &&
+                            l.length <= 45 && l.split(/\s+/).length <= 7;
 
-  if (chassi) {
+  if (chassi && ancoraFirme) {
     const linhaModelo = valores[chassi.i - 2] || '';
-    if (soLetras(linhaModelo) && !descartar(linhaModelo)) guarde('modelo', linhaModelo);
+    if (pareceModelo(linhaModelo)) guarde('modelo', linhaModelo);
 
     const linhaEspecie = valores[chassi.i - 1] || '';
-    if (soLetras(linhaEspecie) && !descartar(linhaEspecie)) {
+    if (soLetras(linhaEspecie) && !descartar(linhaEspecie) && linhaEspecie.length <= 45) {
       const et = linhaEspecie.match(/^([A-ZÁÉÍÓÚÂÊÔÃÕÇ]+)\s+(.+)$/i);
       if (et) { guarde('especie', et[1]); guarde('tipo', et[2]); }
       else guarde('especie', linhaEspecie);
     }
   }
 
-  // reserva: sem chassi, procura a linha com barra que pareça marca/modelo
+  // reserva: procura a linha que pareça marca/modelo em qualquer posição
   if (!achados.modelo) {
     for (let i = 0; i < valores.length; i++) {
       const l = valores[i];
-      if (l.indexOf('/') < 0 || descartar(l)) continue;
       if (/\b[A-HJ-NPR-Z0-9]{17}\b/.test(l)) continue;
-      if (!soLetras(l)) continue;
+      if (!pareceModelo(l)) continue;
       guarde('modelo', l);
       const prox = valores[i + 1] || '';
-      if (soLetras(prox) && !descartar(prox)) {
+      if (!achados.especie && soLetras(prox) && !descartar(prox) && prox.length <= 45) {
         const et = prox.match(/^([A-ZÁÉÍÓÚÂÊÔÃÕÇ]+)\s+(.+)$/i);
         if (et) { guarde('especie', et[1]); guarde('tipo', et[2]); }
       }
@@ -1708,8 +1717,9 @@ function _camposCrlv_(texto) {
   const categoria = acheLinha(/^(OFICIAL|PARTICULAR|ALUGUEL|APRENDIZAGEM|DIPLOM[ÁA]TICO|EXPERI[ÊE]NCIA|COLE[ÇC][ÃA]O)$/i);
   if (categoria) guarde('categoria', categoria.m[1]);
 
-  // potência / cilindrada: "143CV/1997"
-  const potencia = acheLinha(/\b(\d{1,4}\s?CV\s?\/\s?\d{2,5})\b/i);
+  // potência / cilindrada: "143CV/1997" e também "143/1997" seguido do peso
+  let potencia = acheLinha(/\b(\d{1,4}\s?CV\s?\/\s?\d{2,5})\b/i);
+  if (!potencia) potencia = acheLinha(/^(\d{1,4}\s?\/\s?\d{3,5})(?:\s+[\d.,]+)?$/);
   if (potencia) guarde('potencia', potencia.m[1].replace(/\s/g, ''));
 
   // motor: código alfanumérico com letras E números, 8 a 20 caracteres.
