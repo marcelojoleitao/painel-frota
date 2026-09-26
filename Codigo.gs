@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.48.0';
+const CODIGO_VERSAO = '2.48.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -966,6 +966,7 @@ function _crlvViatura_(token, placa, aplicar) {
       campos: r.preencher.map(x => ({ campo: x.campo, valor: x.valor })),
       conflitos: r.divergencias.map(d => ({ campo: d.campo, atual: d.atual, crlv: d.crlv, bloqueada: !!d.bloqueada })),
       ignorados: (r.ignorados || []).filter(x => x.valor),
+      naoLidos: (r.ignorados || []).filter(x => !x.valor).map(x => x.campo),
       lidos: r.lidos || {} };
   } catch (e) {
     return { ok: false, erro: String(e.message || e) };
@@ -1620,6 +1621,30 @@ function _semRotulosCrlv_(valor) {
   return t.replace(/\s{2,}/g, ' ').replace(/[\s\/\-|:]+$/, '').trim();
 }
 
+/** Remove o rótulo quando ele vem no começo da linha, devolvendo só o valor. */
+function _semRotuloInicial_(linha) {
+  let t = String(linha || '').trim();
+  if (!t) return '';
+  const semAcento = x => x.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+  let mudou = true;
+  let voltas = 0;
+  while (mudou && voltas < 4) {              // pode haver dois rótulos seguidos
+    mudou = false; voltas++;
+    const comparavel = semAcento(t);
+    // tenta o rótulo mais longo primeiro
+    const ordenados = ROTULOS_DO_CRLV.slice().sort((a, b) => b.length - a.length);
+    for (let i = 0; i < ordenados.length; i++) {
+      const rot = ordenados[i];
+      if (comparavel.indexOf(rot) === 0) {
+        t = t.substring(rot.length).replace(/^[\s:\-|]+/, '').trim();
+        mudou = true;
+        break;
+      }
+    }
+  }
+  return t;
+}
+
 /**
  * Leitor do CRLV-e.
  *
@@ -1651,9 +1676,15 @@ function _camposCrlv_(texto) {
   const RE_PLACA = '[A-Z]{3}[\\s-]?\\d[A-Z0-9]\\d{2}';
   const ehRotulo = l => /^(C[ÓO]DIGO|PLACA|ANO|N[ÚU]MERO|MARCA|ESP[ÉE]CIE|COR|COMBUST[ÍI]VEL|CATEGORIA|POT[ÊE]NCIA|MOTOR|CARROCERIA|NOME|LOCAL|CPF|CMT|EIXOS|OBSERVA|INFORMA|MENSAGENS|DADOS|REPASSE|CUSTO|VALOR|CAT\b|CAPACIDADE|PESO|DETRAN|REP[ÚU]BLICA|MINIST|SECRETARIA|ASSINADO|VALIDE|QRCODE|VOC[ÊE]|NA CARTEIRA|LEIA|DOCUMENTO EMITIDO|LOTA[ÇC][ÃA]O|DATA)/i.test(l);
 
-  // limpa rótulo grudado antes de qualquer validação, senão a linha é
-  // descartada por tamanho e o valor se perde
-  const valores = linhas.filter(l => !ehRotulo(l)).map(l => _semRotulosCrlv_(l)).filter(l => l !== '');
+  // Uma linha pode ser: só rótulo, só valor, ou rótulo + valor (nos dois sentidos).
+  // Em vez de descartar tudo que começa com rótulo — o que fazia o valor colado
+  // se perder —, tiramos o rótulo e ficamos com o resto.
+  const valores = [];
+  linhas.forEach(l => {
+    const semRotuloFinal = _semRotulosCrlv_(l);          // corta rótulo colado à direita
+    const limpo = _semRotuloInicial_(semRotuloFinal);    // corta rótulo colado à esquerda
+    if (limpo) valores.push(limpo);
+  });
 
   const acheLinha = re => { for (let i = 0; i < valores.length; i++) { const m = valores[i].match(re); if (m) return { i: i, m: m }; } return null; };
   const guarde = (campo, valor) => {

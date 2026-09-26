@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.48.0';
+const VERSAO_PAINEL = '2.48.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2020,7 +2020,8 @@ function processarProximo() {
         if (r.campos || r.conflitos || r.ignorados) {
           ESTADO.conferenciaCrlv = ESTADO.conferenciaCrlv || [];
           ESTADO.conferenciaCrlv.push({ placa: placa, status: r.status || '', campos: r.campos || [],
-            conflitos: r.conflitos || [], ignorados: r.ignorados || [], lidos: r.lidos || {}, aplicado: !!r.aplicado });
+            conflitos: r.conflitos || [], ignorados: r.ignorados || [], lidos: r.lidos || {},
+            naoLidos: r.naoLidos || [], aplicado: !!r.aplicado });
         }
       }
       else { L.erro++; L.itens.unshift({ placa: placa, st: 'ERRO', detalhe: (r && r.erro) || 'sem resposta' }); }
@@ -4078,6 +4079,16 @@ function mostrarConferenciaCrlv() {
           <td style="color:var(--tinta-suave)">${esc(x.motivo)}</td></tr>`).join('')).join('')}
         </tbody></table></div>`) : '') +
 
+    (() => {
+      const faltaram = lista.filter(v => (v.naoLidos || []).length);
+      if (!faltaram.length) return '';
+      return secao('Campos que o leitor não encontrou no PDF', `
+        <div class="cartao-dica" style="margin:0 0 8px">O documento pode não trazer esse dado, ou o leitor não reconheceu o formato. Se algum deles existir no PDF, me avise para eu ajustar.</div>
+        <div class="tabela-rol" style="max-height:180px"><table class="tabela-simples" style="width:100%">
+          <tbody>${faltaram.map(v => `<tr><td style="width:110px"><b style="font-family:var(--fonte-dados)">${esc(v.placa)}</b></td>
+            <td>${esc(v.naoLidos.map(c => ROTULOS_CRLV[c] || c).join(', '))}</td></tr>`).join('')}
+          </tbody></table></div>`);
+    })() +
     secao('Tudo que o CRLV informou', `
       <div class="tabela-rol" style="max-height:240px"><table class="tabela-simples" style="width:100%">
         <thead><tr><th>Placa</th><th>Campo</th><th>Lido do CRLV</th></tr></thead>
