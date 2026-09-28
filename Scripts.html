@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.56.1';
+const VERSAO_PAINEL = '2.56.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -1536,7 +1536,7 @@ function botoesStatus(lista, chaveEstado, aoClicar) {
 }
 
 function cartaoTabelaAceites(ace, porPlaca) {
-  const card = document.createElement('div'); card.className = 'cartao largo';
+  const card = document.createElement('div'); card.className = 'cartao linha-cheia';
   const bs = botoesStatus(ace, 'filtroStatusAceite', () => renderOS(ESTADO.filtrado));
   let lista = ESTADO.filtroStatusAceite ? ace.filter(o => o.status === ESTADO.filtroStatusAceite) : ace;
   lista = lista.slice().sort((a, b) => { const da = diasAte(a.limiteISO), db = diasAte(b.limiteISO); if (da === null && db === null) return 0; if (da === null) return 1; if (db === null) return -1; return da - db; });
@@ -4400,9 +4400,9 @@ function renderAceites(lista) {
         <button class="btn claro" id="btn-exportar-aceites" title="Baixar a lista exibida em CSV">⤓ Exportar</button>
       </div>
       <div class="tabela-rol os-rol" style="max-height:620px">
-        <table class="tabela-multas">
-          <colgroup><col style="width:12%"><col style="width:8%"><col style="width:10%"><col style="width:9%"><col style="width:13%">
-            <col style="width:8%"><col style="width:8%"><col style="width:8%"><col style="width:10%"><col style="width:9%"><col></colgroup>
+        <table class="tabela-multas tabela-aceites">
+          <colgroup><col style="width:9%"><col style="width:6.5%"><col style="width:12%"><col style="width:9%"><col style="width:15%">
+            <col style="width:6.5%"><col style="width:6.5%"><col style="width:6.5%"><col style="width:9.5%"><col style="width:8%"><col></colgroup>
           <thead><tr><th>OS</th><th>Placa</th><th>Modelo</th><th>Unidade</th><th>Oficina</th>
             <th>Aprovação</th><th>Início</th><th>Conclusão</th><th>Prazo p/ aceite</th><th style="text-align:right">Valor</th><th>Situação</th></tr></thead>
           <tbody>
@@ -4414,9 +4414,9 @@ function renderAceites(lista) {
             <td>${esc(a.modeloReal || '—')}</td>
             <td>${esc(a.unidadeReal)}</td>
             <td title="${escAttr(a.oficinaReal)}">${esc(a.oficinaReal || '—')}</td>
-            <td class="c">${esc((a.data || '').substring(0, 10))}</td>
-            <td class="c">${esc((a.inicio || '').substring(0, 10))}</td>
-            <td class="c">${esc((a.conclusao || '').substring(0, 10))}</td>
+            <td class="c data-curta">${esc((a.data || '').substring(0, 10))}</td>
+            <td class="c data-curta">${esc((a.inicio || '').substring(0, 10))}</td>
+            <td class="c data-curta">${esc((a.conclusao || '').substring(0, 10))}</td>
             <td><span class="prazo ${classePrazo(a.dias)}">${esc((a.limiteAceite || '—').substring(0, 10))}</span>
               ${a.dias !== null && pendente(a) ? `<div class="vinculo">${a.dias < 0 ? Math.abs(a.dias) + ' dia(s) vencido' : a.dias === 0 ? 'vence hoje' : 'faltam ' + a.dias + ' dia(s)'}</div>` : ''}</td>
             <td class="num" style="text-align:right">${fmtMoeda(a.valor || 0)}</td>

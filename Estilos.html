@@ -194,6 +194,8 @@ a { color: var(--azul-claro); }
 /* ============================ CARTÕES / GRÁFICOS ============================ */
 .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
 .grade .largo { grid-column: span 2; }
+/* cartões com tabela larga ocupam a linha inteira, em qualquer tamanho de tela */
+.grade .linha-cheia { grid-column: 1 / -1; }
 .cartao { background: var(--branco); border-radius: var(--raio); box-shadow: var(--sombra); padding: 14px 16px 12px; min-width: 0; }
 .cartao-cab { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .cartao-cab h3 { margin: 0; font-size: 14px; font-weight: 700; }
@@ -643,7 +645,11 @@ table.tabela td.acoes { text-align: right; }
 .kpi.selecionado { outline: 2px solid var(--azul-claro); outline-offset: -2px; }
 .obs-multa { font-size: 11.5px; color: var(--tinta-suave); line-height: 1.35; max-height: 54px; overflow: hidden; }
 .obs-multa:hover { max-height: none; }
-.tabela-multas { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 1180px; }
+.tabela-multas { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 1120px; }
+/* aceites: datas em uma linha, colunas estreitas onde o conteúdo é curto */
+.tabela-aceites { min-width: 1040px; }
+.tabela-aceites .data-curta { white-space: nowrap; font-family: var(--fonte-dados); font-size: 11.5px; }
+.tabela-aceites .prazo { white-space: nowrap; font-size: 11px; padding: 2px 5px; }
 .tabela-multas th { position: sticky; top: 0; background: var(--azul); color: #fff; text-align: left; padding: 6px 8px; font-size: 11.5px; z-index: 2; }
 .tabela-multas td { padding: 5px 8px; border-bottom: 1px solid var(--borda); font-size: 12.5px; vertical-align: top; word-wrap: break-word; overflow-wrap: anywhere; }
 .tabela-multas tr:hover td { background: #F1F5FC; }
