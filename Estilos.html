@@ -601,6 +601,11 @@ table.tabela td.acoes { text-align: right; }
 .tabela-os .campo-os.destaque { border-color: var(--ambar); background: #FFF9EC; }
 .tabela-os .campo-os.destaque:empty::before { content: 'anotar diligência'; color: var(--tinta-suave); font-style: italic; }
 .tabela-os .salvo { color: var(--verde); font-size: 11px; }
+.chip-filtro { display: inline-flex; align-items: center; gap: 6px; background: #E8EEFA; color: var(--azul);
+  border-radius: 12px; padding: 3px 6px 3px 10px; font-size: 12px; font-weight: 600; }
+.chip-filtro button { border: 0; background: rgba(11,44,92,.12); color: var(--azul); border-radius: 50%;
+  width: 18px; height: 18px; cursor: pointer; font-size: 12px; line-height: 1; }
+.chip-filtro button:hover { background: var(--azul); color: #fff; }
 .os-barra-acoes { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
 
 .docs-edicao { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }

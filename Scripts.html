@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.53.0';
+const VERSAO_PAINEL = '2.54.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2801,20 +2801,27 @@ function renderOSAcompanhar(lista) {
   const contagem = {};
   todas.forEach(x => { contagem[x.nivel] = (contagem[x.nivel] || 0) + 1; });
   const nivel = ESTADO.nivelOS;
+  const f = ESTADO.filtroOS;
   const selecionadas = (nivel === 'todas' ? todas : todas.filter(x => x.nivel === nivel))
+    .filter(x => !f.unidade || (x.unidade || '—') === f.unidade)
+    .filter(x => !f.oficina || (x.o.oficina || '—') === f.oficina)
     .sort((a, b) => pesoNivel(a.nivel) - pesoNivel(b.nivel) || (b.o.valor || 0) - (a.o.valor || 0));
 
   const soma = arr => arr.reduce((s, x) => s + (x.o.valor || 0), 0);
   const n2 = todas.filter(x => x.nivel === 'n2');
+  // os gráficos consideram o nível escolhido, sem o filtro de unidade/oficina,
+  // para você continuar enxergando as outras opções enquanto filtra
+  const baseGraficos = nivel === 'todas' ? todas : todas.filter(x => x.nivel === nivel);
   const porUnidade = new Map(), porOficina = new Map();
-  selecionadas.forEach(x => {
+  baseGraficos.forEach(x => {
     porUnidade.set(x.unidade || '—', (porUnidade.get(x.unidade || '—') || 0) + (x.o.valor || 0));
     porOficina.set(x.o.oficina || '—', (porOficina.get(x.o.oficina || '—') || 0) + (x.o.valor || 0));
   });
-  const barras = (mapa, cor) => {
-    const itens = Array.from(mapa.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const barras = (mapa, cor, chave) => {
+    const itens = Array.from(mapa.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
     const maximo = Math.max(1, ...itens.map(i => i[1]));
-    return itens.map(([k, v]) => `<button class="barra" style="cursor:default"><span class="rotulo">${esc(k)}</span>
+    return itens.map(([k, v]) => `<button class="barra ${ESTADO.filtroOS[chave] === k ? 'selecionada' : ''}" data-fos="${chave}" data-valor="${escAttr(k)}">
+      <span class="rotulo">${esc(k)}</span>
       <span class="trilha"><span class="preench" style="width:${Math.round(v / maximo * 100)}%; background:${cor}"></span></span>
       <span class="valor">${fmtMoeda(v)}</span></button>`).join('') || '<div class="vazio">Sem dados</div>';
   };
@@ -2846,8 +2853,10 @@ function renderOSAcompanhar(lista) {
     </div>
 
     <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); margin-bottom:14px">
-      <div class="cartao"><div class="cartao-cab"><h3>Orçado por unidade</h3><small>${esc(rotuloNivel)}</small></div><div class="barras compacto">${barras(porUnidade, 'var(--azul)')}</div></div>
-      <div class="cartao"><div class="cartao-cab"><h3>Orçado por oficina</h3><small>${esc(rotuloNivel)}</small></div><div class="barras compacto">${barras(porOficina, 'var(--ambar)')}</div></div>
+      <div class="cartao"><div class="cartao-cab"><h3>Orçado por unidade</h3><small>clique para filtrar</small></div>
+        <div class="barras compacto" style="max-height:240px; overflow:auto">${barras(porUnidade, 'var(--azul)', 'unidade')}</div></div>
+      <div class="cartao"><div class="cartao-cab"><h3>Orçado por oficina</h3><small>clique para filtrar</small></div>
+        <div class="barras compacto" style="max-height:240px; overflow:auto">${barras(porOficina, 'var(--ambar)', 'oficina')}</div></div>
     </div>
 
     <div class="cartao largo">
@@ -2855,6 +2864,10 @@ function renderOSAcompanhar(lista) {
       <div class="os-barra-acoes">
         <button class="btn amarelo" id="btn-salvar-os" disabled>Salvar alterações</button>
         <span class="form-aviso" id="os-pendentes">Nenhuma alteração pendente.</span>
+        ${f.unidade ? `<span class="chip-filtro">unidade: ${esc(f.unidade)} <button data-limpa="unidade">×</button></span>` : ''}
+        ${f.oficina ? `<span class="chip-filtro">oficina: ${esc(f.oficina)} <button data-limpa="oficina">×</button></span>` : ''}
+        <div style="flex:1"></div>
+        <button class="btn claro" id="btn-exportar-os" title="Baixar a lista exibida em CSV">⤓ Exportar</button>
       </div>
       <div class="tabela-rol os-rol" style="max-height:620px">
         <table class="tabela-os">
@@ -2897,6 +2910,20 @@ function renderOSAcompanhar(lista) {
     </div>`;
 
   c.querySelectorAll('button[data-nivel]').forEach(b => b.addEventListener('click', () => { ESTADO.nivelOS = b.dataset.nivel; renderOSAcompanhar(ESTADO.filtrado); }));
+  c.querySelectorAll('button[data-fos]').forEach(b => b.addEventListener('click', () => {
+    const chave = b.dataset.fos;
+    ESTADO.filtroOS[chave] = ESTADO.filtroOS[chave] === b.dataset.valor ? '' : b.dataset.valor;
+    renderOSAcompanhar(ESTADO.filtrado);
+  }));
+  c.querySelectorAll('button[data-limpa]').forEach(b => b.addEventListener('click', () => {
+    ESTADO.filtroOS[b.dataset.limpa] = '';
+    renderOSAcompanhar(ESTADO.filtrado);
+  }));
+  ouvir('btn-exportar-os', 'click', () => exportarCsv(
+    'ordens_de_servico_' + new Date().toISOString().substring(0, 10) + '.csv',
+    ['OS', 'Placa', 'Marca/Modelo', 'Unidade', 'Oficina', 'Data', 'Orçado', 'Situação', 'Aprovação', 'Observações', 'Diligência', 'Relato', 'Justificativa'],
+    selecionadas.map(x => [x.o.os, x.o.placa, x.modeloCompleto || x.modelo, x.unidade, x.o.oficina, (x.o.data || '').substring(0, 10),
+      (x.o.valor || 0).toFixed(2).replace('.', ','), x.o.status, x.o.aprovacao || '', x.o.obs || '', x.o.diligencia || '', x.o.relato || '', x.o.justificativa || ''])));
   c.querySelectorAll('.campo-os').forEach(t => {
     t.dataset.original = t.value;
     if (t.tagName === 'TEXTAREA') ajustarAltura(t);
@@ -3365,6 +3392,7 @@ function renderAcompanhamentoMultas(c) {
         <div class="busca" style="max-width:300px"><input id="multa-busca" type="search" placeholder="AI, placa, processo, protocolo, órgão…" value="${escAttr(f.busca)}"></div>
         ${(f.status || f.orgao || f.busca || f.especial) ? '<button class="btn claro" id="multa-limpar">Limpar filtros</button>' : ''}
         <div style="flex:1"></div>
+        <button class="btn claro" id="btn-exportar-multas" title="Baixar a lista exibida em CSV">⤓ Exportar</button>
         <button class="btn amarelo" id="btn-nova-multa">+ Nova multa</button>
       </div>
       <div class="tabela-rol os-rol" style="max-height:640px">
@@ -3443,6 +3471,11 @@ ${cabecalho('protocolo', 'Protocolo')}<th>Observações</th>${cabecalho('status'
   }
   ouvir('multa-limpar', 'click', () => { ESTADO.filtroMulta = { status: '', orgao: '', busca: '', especial: '' }; renderMultas(); });
   ouvir('btn-nova-multa', 'click', () => abrirFormMulta(null));
+  ouvir('btn-exportar-multas', 'click', () => exportarCsv(
+    'multas_' + new Date().toISOString().substring(0, 10) + '.csv',
+    ['Linha', 'Tipo', 'Data da infração', 'AI', 'AI originário', 'Placa', 'Órgão', 'Processo', 'Enquadramento', 'Protocolo', 'Status', 'Data da defesa', 'Em cobrança', 'Observações'],
+    filtradas.map(m => [m.linha, m.tipo, dataBR(m.dataInfracao), m.ai, m.aiOriginario, m.placa, m.orgao, m.processo,
+      m.enquadramento, m.protocolo, m.status, dataBR(m.dataDefesa), m.cobrada ? 'sim' : 'não', m.observacoes || ''])));
   c.querySelectorAll('button[data-editar]').forEach(b => b.addEventListener('click', () => abrirFormMulta(parseInt(b.dataset.editar, 10))));
   c.querySelectorAll('button[data-defesa]').forEach(b => b.addEventListener('click', () => gerarDefesa(parseInt(b.dataset.defesa, 10), b)));
   c.querySelectorAll('select[data-status]').forEach(sel => sel.addEventListener('change', () => alterarStatusMulta(parseInt(sel.dataset.status, 10), sel)));
@@ -4267,7 +4300,10 @@ function renderAceites(lista) {
     contestacao: todos.filter(contesta),
     pendentes: todos.filter(pendente)
   };
-  const sel = ESTADO.filtroAceite && grupos[ESTADO.filtroAceite] ? grupos[ESTADO.filtroAceite] : todos;
+  const fa = ESTADO.filtroAceites;
+  const sel = (ESTADO.filtroAceite && grupos[ESTADO.filtroAceite] ? grupos[ESTADO.filtroAceite] : todos)
+    .filter(a => !fa.unidade || a.unidadeReal === fa.unidade)
+    .filter(a => !fa.oficina || (a.oficinaReal || 'sem oficina') === fa.oficina);
   const ordenados = sel.slice().sort((a, b) => {
     const da = a.dias === null ? 9999 : a.dias, db = b.dias === null ? 9999 : b.dias;
     return da - db || (b.valor || 0) - (a.valor || 0);
@@ -4279,8 +4315,10 @@ function renderAceites(lista) {
       <div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${fmtInt(arr.length)}</div>
       <div class="kpi-sub">${sub}</div></div>`;
 
+  // gráficos sobre o grupo escolhido, sem os filtros de unidade/oficina
+  const baseG = ESTADO.filtroAceite && grupos[ESTADO.filtroAceite] ? grupos[ESTADO.filtroAceite] : todos;
   const porUnidade = new Map();
-  ordenados.forEach(a => porUnidade.set(a.unidadeReal, (porUnidade.get(a.unidadeReal) || 0) + (a.valor || 0)));
+  baseG.forEach(a => porUnidade.set(a.unidadeReal, (porUnidade.get(a.unidadeReal) || 0) + (a.valor || 0)));
 
   c.innerHTML = `
     <div class="kpis">
@@ -4297,7 +4335,8 @@ function renderAceites(lista) {
         ${(() => {
           const itens = Array.from(porUnidade.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
           const maximo = Math.max(1, ...itens.map(i => i[1]));
-          return itens.map(([k, v]) => `<button class="barra" style="cursor:default"><span class="rotulo">${esc(k)}</span>
+          return itens.map(([k, v]) => `<button class="barra ${fa.unidade === k ? 'selecionada' : ''}" data-faf="unidade" data-valor="${escAttr(k)}">
+            <span class="rotulo">${esc(k)}</span>
             <span class="trilha"><span class="preench" style="width:${Math.round(v / maximo * 100)}%; background:var(--azul)"></span></span>
             <span class="valor">${fmtMoeda(v)}</span></button>`).join('') || '<div class="vazio">Sem dados</div>';
         })()}</div></div>
@@ -4305,10 +4344,11 @@ function renderAceites(lista) {
         <div class="barras compacto" style="max-height:220px; overflow:auto">
         ${(() => {
           const porOficina = new Map();
-          ordenados.forEach(a => porOficina.set(a.oficinaReal || 'sem oficina', (porOficina.get(a.oficinaReal || 'sem oficina') || 0) + (a.valor || 0)));
+          baseG.forEach(a => porOficina.set(a.oficinaReal || 'sem oficina', (porOficina.get(a.oficinaReal || 'sem oficina') || 0) + (a.valor || 0)));
           const itens = Array.from(porOficina.entries()).sort((x, y) => y[1] - x[1]).slice(0, 10);
           const maximo = Math.max(1, ...itens.map(i => i[1]));
-          return itens.map(([k, v]) => `<button class="barra" style="cursor:default"><span class="rotulo">${esc(k)}</span>
+          return itens.map(([k, v]) => `<button class="barra ${fa.oficina === k ? 'selecionada' : ''}" data-faf="oficina" data-valor="${escAttr(k)}">
+            <span class="rotulo">${esc(k)}</span>
             <span class="trilha"><span class="preench" style="width:${Math.round(v / maximo * 100)}%; background:var(--ambar)"></span></span>
             <span class="valor">${fmtMoeda(v)}</span></button>`).join('') || '<div class="vazio">Sem dados</div>';
         })()}</div></div>
@@ -4328,6 +4368,12 @@ function renderAceites(lista) {
 
     <div class="cartao largo">
       <div class="cartao-cab"><h3>Aceites</h3><small>${ordenados.length} registro(s) — ordenados pelo prazo</small></div>
+      <div class="os-barra-acoes">
+        ${fa.unidade ? `<span class="chip-filtro">unidade: ${esc(fa.unidade)} <button data-limpaa="unidade">×</button></span>` : ''}
+        ${fa.oficina ? `<span class="chip-filtro">oficina: ${esc(fa.oficina)} <button data-limpaa="oficina">×</button></span>` : ''}
+        <div style="flex:1"></div>
+        <button class="btn claro" id="btn-exportar-aceites" title="Baixar a lista exibida em CSV">⤓ Exportar</button>
+      </div>
       <div class="tabela-rol os-rol" style="max-height:620px">
         <table class="tabela-multas">
           <colgroup><col style="width:12%"><col style="width:8%"><col style="width:10%"><col style="width:9%"><col style="width:13%">
@@ -4363,7 +4409,38 @@ function renderAceites(lista) {
     ESTADO.filtroAceite = ESTADO.filtroAceite === k.dataset.fa ? '' : k.dataset.fa;
     renderAceites(ESTADO.filtrado);
   }));
+  c.querySelectorAll('button[data-faf]').forEach(b => b.addEventListener('click', () => {
+    const chave = b.dataset.faf;
+    ESTADO.filtroAceites[chave] = ESTADO.filtroAceites[chave] === b.dataset.valor ? '' : b.dataset.valor;
+    renderAceites(ESTADO.filtrado);
+  }));
+  c.querySelectorAll('button[data-limpaa]').forEach(b => b.addEventListener('click', () => {
+    ESTADO.filtroAceites[b.dataset.limpaa] = '';
+    renderAceites(ESTADO.filtrado);
+  }));
+  ouvir('btn-exportar-aceites', 'click', () => exportarCsv(
+    'aceites_' + new Date().toISOString().substring(0, 10) + '.csv',
+    ['OS', 'Placa', 'Modelo', 'Unidade', 'Oficina', 'Aprovação', 'Início', 'Conclusão', 'Prazo p/ aceite', 'Dias restantes', 'Valor', 'Situação', 'Observações'],
+    ordenados.map(a => [a.os, a.placa, a.modeloReal, a.unidadeReal, a.oficinaReal, (a.data || '').substring(0, 10),
+      (a.inicio || '').substring(0, 10), (a.conclusao || '').substring(0, 10), (a.limiteAceite || '').substring(0, 10),
+      a.dias === null ? '' : a.dias, (a.valor || 0).toFixed(2).replace('.', ','), a.status, a.obs || ''])));
   ajustarKpis();
+}
+
+
+/** Exporta para CSV o que está na tela (respeita nível, unidade e oficina). */
+function exportarCsv(nome, colunas, linhas) {
+  const escapar = v => {
+    const t = String(v === null || v === undefined ? '' : v).replace(/"/g, '""');
+    return /[";\n]/.test(t) ? '"' + t + '"' : t;
+  };
+  const csv = [colunas.join(';')].concat(linhas.map(l => l.map(escapar).join(';'))).join('\r\n');
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });   // BOM para o Excel
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = nome; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  toast(linhas.length + ' linha(s) exportada(s).');
 }
 
 </script>
