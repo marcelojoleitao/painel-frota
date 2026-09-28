@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.52.0';
+const CODIGO_VERSAO = '2.53.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1328,64 +1328,124 @@ function _dadosFatura_() {
 }
 
 /**
- * Projeção baseada no fluxo real, sem chutar peso por estágio:
- *   • já cobradas e ainda não faturadas → próxima fatura (quase certo)
- *   • concluídas e não cobradas → falta aceite e NF da oficina → próxima ou seguinte
- *   • aprovadas e não iniciadas → dependem de execução → seguinte
- *   • aguardando aprovação, revisão e não enviadas → sem previsão; ficam como potencial
+ * Projeção de faturamento da manutenção.
+ *
+ * O que realmente vira fatura é o serviço CONCLUÍDO. Por isso a base é:
+ *   1. OS com status "Cobradas" que ainda não aparecem em nenhuma fatura
+ *      do OrçamentosDB — já viraram cobrança e entram na próxima;
+ *   2. aceites pendentes (aba Aceites) — a oficina concluiu e aguarda o
+ *      aceite; é o valor efetivamente medido, não o orçado;
+ *   3. "Concluídas e não cobradas" da aba OS que não estejam já contadas
+ *      em 1 ou 2;
+ *   4. "Aprovadas e não iniciadas", só pelo valor APROVADO, e apenas para o
+ *      mês seguinte, porque ainda dependem de execução.
+ *
+ * Fica de fora de qualquer projeção: OS aguardando aprovação, em revisão ou
+ * não enviadas (não há data para executar), o valor "Orçado" de OS sem valor
+ * aprovado (o orçado traz itens que não serão pagos) e registros antigos
+ * demais, que costumam ser resíduo de meses já faturados.
  */
+const PROJECAO_MESES_VALIDOS = 6;   // registros mais antigos que isto não entram
+
 function projecaoOS(token) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
   try {
     const d = _dadosFatura_();
-    const soma = lista => Math.round((lista || []).reduce((s, o) => s + o.valor, 0) * 100) / 100;
-    const cobradas = d.osPorStatus['Cobradas'] || [];
-    const aFaturar = cobradas.filter(o => !d.faturadas[o.os]);
-    const concluidas = d.osPorStatus['Concluídas e Não Cobradas'] || [];
-    const aprovadas = d.osPorStatus['Aprovadas e Não Iniciadas'] || [];
+    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    const hoje = new Date();
+    const limite = new Date(hoje.getFullYear(), hoje.getMonth() - PROJECAO_MESES_VALIDOS, 1);
+    const recente = txt => {
+      const m = String(txt || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+      if (!m) return true;                       // sem data, não descarta
+      return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])) >= limite;
+    };
 
-    const semPrevisao = [];
-    Object.keys(d.osPorStatus).forEach(st => {
-      if (/^COBRADAS$/i.test(_normCab_(st))) return;
-      if (/CONCLU|APROVADAS E NAO INICIADAS/i.test(_normCab_(st))) return;
-      d.osPorStatus[st].forEach(o => semPrevisao.push(Object.assign({ statusNome: st }, o)));
-    });
+    // ---- 1. cobradas ainda não faturadas
+    const cobradas = (d.osPorStatus['Cobradas'] || []);
+    const aFaturar = cobradas.filter(o => !d.faturadas[o.os] && recente(o.data) && o.aprovado > 0);
 
-    // histórico real das faturas
+    // ---- 2. aceites pendentes (valor medido)
+    const aceites = [];
+    try {
+      const tab = _abaPorCabecalho_(ss, CONFIG.ABA_OS_ACEITES, ['OS', 'Placa', 'Valor Total']);
+      if (tab) _linhasComoObjetos_(tab).forEach(o => {
+        const os = String(_txt_(o['OS'])).replace(/\D/g, '');
+        const status = _txt_(o['Status']);
+        if (!os || d.faturadas[os]) return;                       // já faturada
+        if (/cobrad/i.test(status)) return;                       // já contada em 1
+        const valor = _num_(o['Valor Total']) || 0;
+        if (valor <= 0) return;
+        const conclusao = _dataTxt_(o['Data Conclusão Serviço']);
+        if (!recente(conclusao || _dataTxt_(o['Data Aprovação']))) return;
+        aceites.push({ os: os, placa: _txt_(o['Placa']), valor: valor, status: status, conclusao: conclusao });
+      });
+    } catch (e) { Logger.log('Aceites na projeção: ' + e); }
+
+    const jaContadas = {};
+    aFaturar.forEach(o => { jaContadas[o.os] = true; });
+    const aceitesLimpos = aceites.filter(a => !jaContadas[a.os]);
+    aceitesLimpos.forEach(a => { jaContadas[a.os] = true; });
+
+    // ---- 3. concluídas e não cobradas que não estejam nas listas acima
+    const concluidas = (d.osPorStatus['Concluídas e Não Cobradas'] || [])
+      .filter(o => !jaContadas[o.os] && !d.faturadas[o.os] && recente(o.data) && o.aprovado > 0);
+    concluidas.forEach(o => { jaContadas[o.os] = true; });
+
+    // ---- 4. aprovadas e não iniciadas (só valor aprovado)
+    const aprovadas = (d.osPorStatus['Aprovadas e Não Iniciadas'] || [])
+      .filter(o => !jaContadas[o.os] && !d.faturadas[o.os] && recente(o.data) && o.aprovado > 0);
+
+    const soma = arr => Math.round(arr.reduce((s, o) => s + (o.aprovado !== undefined ? o.aprovado : o.valor || 0), 0) * 100) / 100;
+    const somaAceites = Math.round(aceitesLimpos.reduce((s, a) => s + a.valor, 0) * 100) / 100;
+
+    // histórico real
     const comps = Object.keys(d.porComp).sort((a, b) => _ordemComp_(a).localeCompare(_ordemComp_(b)));
     const historico = comps.slice(-12).map(c => ({ comp: c, valor: Math.round(d.porComp[c].reduce((s, x) => s + x.valor, 0) * 100) / 100 }));
     const ultimos = historico.slice(-6);
     const media = ultimos.length ? Math.round(ultimos.reduce((s, x) => s + x.valor, 0) / ultimos.length * 100) / 100 : 0;
 
-    const hoje = new Date();
-    const rot = n => { const x = new Date(hoje.getFullYear(), hoje.getMonth() + n, 1); return ('0' + (x.getMonth() + 1)).slice(-2) + '/' + x.getFullYear(); };
     const diaDoMes = hoje.getDate();
-    // até o dia 15 ainda dá tempo de executar e concluir no próprio mês; depois, não
-    const fatiaConcluidas = diaDoMes <= 15 ? 0.8 : 0.6;
-    const fatiaAprovadas = diaDoMes <= 15 ? 0.35 : 0.15;
+    const fatiaAceites = diaDoMes <= 20 ? 0.8 : 0.5;        // depende de a NF da oficina entrar a tempo
+    const fatiaAprovadas = diaDoMes <= 10 ? 0.25 : 0.10;    // precisa executar e concluir ainda neste mês
 
-    const proximo = Math.round((soma(aFaturar) + soma(concluidas) * fatiaConcluidas + soma(aprovadas) * fatiaAprovadas) * 100) / 100;
-    const seguinte = Math.round((soma(concluidas) * (1 - fatiaConcluidas) + soma(aprovadas) * (1 - fatiaAprovadas)) * 100) / 100;
+    const proximoValor = Math.round((soma(aFaturar) + somaAceites * fatiaAceites + soma(concluidas) * 0.7 + soma(aprovadas) * fatiaAprovadas) * 100) / 100;
+    const seguinteValor = Math.round((somaAceites * (1 - fatiaAceites) + soma(concluidas) * 0.3 + soma(aprovadas) * (1 - fatiaAprovadas)) * 100) / 100;
+
+    const rot = n => { const x = new Date(hoje.getFullYear(), hoje.getMonth() + n, 1); return ('0' + (x.getMonth() + 1)).slice(-2) + '/' + x.getFullYear(); };
+
+    // fora da projeção, apenas informativo
+    const foraStatus = Object.keys(d.osPorStatus).filter(st => !/^COBRADAS$|CONCLU|APROVADAS E NAO INICIADAS/i.test(_normCab_(st)));
+    const fora = [];
+    foraStatus.forEach(st => d.osPorStatus[st].forEach(o => fora.push(Object.assign({ statusNome: st }, o))));
 
     return { ok: true,
-      proximo: { comp: rot(1), valor: proximo },
-      seguinte: { comp: rot(2), valor: seguinte },
+      proximo: { comp: rot(1), valor: proximoValor },
+      seguinte: { comp: rot(2), valor: seguinteValor },
       composicao: [
-        { rotulo: 'Cobradas ainda não faturadas', qtd: aFaturar.length, valor: soma(aFaturar), noProximo: soma(aFaturar), noSeguinte: 0,
-          nota: 'já viraram cobrança da Ticket e não constam em nenhuma fatura' },
+        { rotulo: 'Cobradas ainda não faturadas', qtd: aFaturar.length, valor: soma(aFaturar),
+          noProximo: soma(aFaturar), noSeguinte: 0, nota: 'já viraram cobrança e não constam em nenhuma fatura' },
+        { rotulo: 'Aceites pendentes', qtd: aceitesLimpos.length, valor: somaAceites,
+          noProximo: Math.round(somaAceites * fatiaAceites * 100) / 100,
+          noSeguinte: Math.round(somaAceites * (1 - fatiaAceites) * 100) / 100,
+          nota: 'serviço concluído; falta o aceite e a nota fiscal da oficina' },
         { rotulo: 'Concluídas e não cobradas', qtd: concluidas.length, valor: soma(concluidas),
-          noProximo: Math.round(soma(concluidas) * fatiaConcluidas * 100) / 100, noSeguinte: Math.round(soma(concluidas) * (1 - fatiaConcluidas) * 100) / 100,
-          nota: 'falta o aceite e a nota fiscal da oficina' },
+          noProximo: Math.round(soma(concluidas) * 0.7 * 100) / 100, noSeguinte: Math.round(soma(concluidas) * 0.3 * 100) / 100,
+          nota: 'da aba OS, sem aceite correspondente' },
         { rotulo: 'Aprovadas e não iniciadas', qtd: aprovadas.length, valor: soma(aprovadas),
-          noProximo: Math.round(soma(aprovadas) * fatiaAprovadas * 100) / 100, noSeguinte: Math.round(soma(aprovadas) * (1 - fatiaAprovadas) * 100) / 100,
-          nota: 'dependem de a oficina executar o serviço' }
+          noProximo: Math.round(soma(aprovadas) * fatiaAprovadas * 100) / 100,
+          noSeguinte: Math.round(soma(aprovadas) * (1 - fatiaAprovadas) * 100) / 100,
+          nota: 'valor aprovado; ainda depende de a oficina executar' }
       ],
-      semPrevisao: { qtd: semPrevisao.length, valor: soma(semPrevisao),
-        porStatus: Object.keys(d.osPorStatus).filter(st => !/^COBRADAS$|CONCLU|APROVADAS E NAO INICIADAS/i.test(_normCab_(st)))
-          .map(st => ({ status: st, qtd: d.osPorStatus[st].length, valor: soma(d.osPorStatus[st]) })).sort((a, b) => b.valor - a.valor) },
+      semPrevisao: { qtd: fora.length,
+        valor: Math.round(fora.reduce((s, o) => s + (o.aprovado > 0 ? o.aprovado : 0), 0) * 100) / 100,
+        orcado: Math.round(fora.reduce((s, o) => s + (o.orcado || 0), 0) * 100) / 100,
+        porStatus: foraStatus.map(st => ({ status: st, qtd: d.osPorStatus[st].length,
+          valor: Math.round(d.osPorStatus[st].reduce((s, o) => s + (o.aprovado > 0 ? o.aprovado : 0), 0) * 100) / 100,
+          orcado: Math.round(d.osPorStatus[st].reduce((s, o) => s + (o.orcado || 0), 0) * 100) / 100 })).sort((a, b) => b.orcado - a.orcado) },
       jaFaturadas: cobradas.length - aFaturar.length,
-      historico: historico, media: media,
-      diaDoMes: diaDoMes, fatiaConcluidas: fatiaConcluidas, fatiaAprovadas: fatiaAprovadas };
+      historico: historico, media: media, diaDoMes: diaDoMes,
+      fatiaAceites: fatiaAceites, fatiaAprovadas: fatiaAprovadas, mesesValidos: PROJECAO_MESES_VALIDOS,
+      descartados: (cobradas.length - aFaturar.length) };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 
