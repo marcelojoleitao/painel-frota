@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.51.0';
+const VERSAO_PAINEL = '2.52.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -728,7 +728,7 @@ function abrirFicha(placa) {
     return `<div class="os-item aceite"><b>OS ${esc(a.os)}</b> ${pdfLinkHtml(a.os)} • ${esc(a.status || 'aguardando aceite')} • ${a.valor ? fmtMoeda(a.valor) : ''}
       ${a.limiteAceite ? ' • prazo <span class="prazo ' + classePrazo(d) + '">' + esc(a.limiteAceite.substring(0, 10)) + '</span>' : ''}
       ${d !== null ? `<span class="vinculo"> ${d < 0 ? Math.abs(d) + ' dia(s) vencido' : d === 0 ? 'vence hoje' : 'faltam ' + d + ' dia(s)'}</span>` : ''}
-      <div class="linha2" style="color:var(--tinta-suave)">aprovada ${esc((a.data || '—').substring(0, 10))} • início ${esc((a.inicio || '—').substring(0, 10))} • concluída ${esc((a.conclusao || '—').substring(0, 10))}${a.obs ? ' • ' + esc(a.obs) : ''}</div></div>`;
+      <div class="linha2" style="color:var(--tinta-suave)">${a.oficina ? esc(a.oficina) + ' • ' : ''}aprovada ${esc((a.data || '—').substring(0, 10))} • início ${esc((a.inicio || '—').substring(0, 10))} • concluída ${esc((a.conclusao || '—').substring(0, 10))}${a.obs ? ' • ' + esc(a.obs) : ''}</div></div>`;
   }).join('') : '<div class="nao">Nenhum aceite registrado para esta viatura</div>';
   const osHtml = (osPendentes.length ? osPendentes.map(o => `<div class="os-item"><b>OS ${esc(o.os)}</b> ${pdfLinkHtml(o.os)} • ${esc(o.status)} • ${o.valor ? fmtMoeda(o.valor) : ''}${o.oficina ? ' • ' + esc(o.oficina) : ''}${o.limiteAceite ? ' • aceite até ' + prazoHtml(o.limiteISO, o.limiteAceite) : ''}<div class="linha2" style="color:var(--tinta-suave)">${esc(o.data)}${o.relato ? ' • ' + esc(o.relato) : ''}${o.obs ? ' • ' + esc(o.obs) : ''}</div></div>`).join('')
     : `<div class="nao">Nenhuma OS pendente ou aguardando aceite no GoodManager</div>`) +
@@ -4250,7 +4250,8 @@ function renderAceites(lista) {
       v: v, dias: diasAte(a.limiteISO),
       unidadeReal: v ? (v.unidadeCurta || v.unidade || '—') : (a.unidade || '—'),
       modeloReal: v ? (v.modeloCurto || v.modelo) : (a.modelo || ''),
-      linkAnalise: naOS ? naOS.linkAnalise : '', aprovacao: naOS ? naOS.aprovacao : ''
+      linkAnalise: naOS ? naOS.linkAnalise : '', aprovacao: naOS ? naOS.aprovacao : '',
+      oficinaReal: a.oficina || (naOS ? naOS.oficina : '') || ''
     });
   }).filter(a => !filtroAtivo || !a.v || exib.has(a.v.placa));
 
@@ -4297,6 +4298,17 @@ function renderAceites(lista) {
             <span class="trilha"><span class="preench" style="width:${Math.round(v / maximo * 100)}%; background:var(--azul)"></span></span>
             <span class="valor">${fmtMoeda(v)}</span></button>`).join('') || '<div class="vazio">Sem dados</div>';
         })()}</div></div>
+      <div class="cartao"><div class="cartao-cab"><h3>Valor por oficina</h3><small>na seleção atual</small></div>
+        <div class="barras compacto" style="max-height:220px; overflow:auto">
+        ${(() => {
+          const porOficina = new Map();
+          ordenados.forEach(a => porOficina.set(a.oficinaReal || 'sem oficina', (porOficina.get(a.oficinaReal || 'sem oficina') || 0) + (a.valor || 0)));
+          const itens = Array.from(porOficina.entries()).sort((x, y) => y[1] - x[1]).slice(0, 10);
+          const maximo = Math.max(1, ...itens.map(i => i[1]));
+          return itens.map(([k, v]) => `<button class="barra" style="cursor:default"><span class="rotulo">${esc(k)}</span>
+            <span class="trilha"><span class="preench" style="width:${Math.round(v / maximo * 100)}%; background:var(--ambar)"></span></span>
+            <span class="valor">${fmtMoeda(v)}</span></button>`).join('') || '<div class="vazio">Sem dados</div>';
+        })()}</div></div>
       <div class="cartao"><div class="cartao-cab"><h3>Prazo de aceite</h3><small>quantas em cada faixa</small></div>
         <div class="barras compacto">
         ${(() => {
@@ -4315,9 +4327,9 @@ function renderAceites(lista) {
       <div class="cartao-cab"><h3>Aceites</h3><small>${ordenados.length} registro(s) — ordenados pelo prazo</small></div>
       <div class="tabela-rol os-rol" style="max-height:620px">
         <table class="tabela-multas">
-          <colgroup><col style="width:13%"><col style="width:9%"><col style="width:12%"><col style="width:10%">
-            <col style="width:9%"><col style="width:9%"><col style="width:9%"><col style="width:11%"><col style="width:10%"><col></colgroup>
-          <thead><tr><th>OS</th><th>Placa</th><th>Modelo</th><th>Unidade</th>
+          <colgroup><col style="width:12%"><col style="width:8%"><col style="width:10%"><col style="width:9%"><col style="width:13%">
+            <col style="width:8%"><col style="width:8%"><col style="width:8%"><col style="width:10%"><col style="width:9%"><col></colgroup>
+          <thead><tr><th>OS</th><th>Placa</th><th>Modelo</th><th>Unidade</th><th>Oficina</th>
             <th>Aprovação</th><th>Início</th><th>Conclusão</th><th>Prazo p/ aceite</th><th style="text-align:right">Valor</th><th>Situação</th></tr></thead>
           <tbody>
           ${ordenados.slice(0, 400).map(a => `<tr class="${a.dias !== null && a.dias < 0 && pendente(a) ? 'cobrada' : ''}">
@@ -4327,6 +4339,7 @@ function renderAceites(lista) {
             <td>${a.v ? `<a class="link-btn" style="font-family:var(--fonte-dados); font-weight:700" onclick="abrirFicha('${escAttr(a.v.placa)}')">${esc(a.placa)}</a>` : esc(a.placa)}</td>
             <td>${esc(a.modeloReal || '—')}</td>
             <td>${esc(a.unidadeReal)}</td>
+            <td title="${escAttr(a.oficinaReal)}">${esc(a.oficinaReal || '—')}</td>
             <td class="c">${esc((a.data || '').substring(0, 10))}</td>
             <td class="c">${esc((a.inicio || '').substring(0, 10))}</td>
             <td class="c">${esc((a.conclusao || '').substring(0, 10))}</td>
@@ -4336,7 +4349,7 @@ function renderAceites(lista) {
             <td>${badgeStatusOS(a.status)}
               ${contesta(a) ? '<div class="vinculo" style="color:var(--vermelho)">em contestação</div>' : ''}
               ${a.obs ? `<div class="obs-multa" title="${escAttr(a.obs)}">${esc(a.obs)}</div>` : ''}</td>
-          </tr>`).join('') || '<tr><td colspan="10"><div class="vazio">Nenhum aceite nesta seleção</div></td></tr>'}
+          </tr>`).join('') || '<tr><td colspan="11"><div class="vazio">Nenhum aceite nesta seleção</div></td></tr>'}
           </tbody>
         </table>
       </div>

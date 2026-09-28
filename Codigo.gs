@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.51.0';
+const CODIGO_VERSAO = '2.52.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6379,8 +6379,54 @@ function _primeiroValor_(o, rotulos, link) {
   return '';
 }
 
+/**
+ * Oficina de cada OS. A aba Aceites não traz o estabelecimento, então ele é
+ * buscado, em ordem: aba OS (coluna Oficina), OrçamentosDB e AceitesDB.
+ */
+function _oficinasPorOs_(ss) {
+  const mapa = {};
+  const guardar = (os, nome) => {
+    const chave = String(os || '').replace(/\D/g, '');
+    const valor = String(nome || '').trim();
+    if (chave && valor && !mapa[chave]) mapa[chave] = valor;
+  };
+  // 1) aba OS da planilha-mãe
+  try {
+    const tab = _abaPorCabecalho_(ss, CONFIG.ABA_OS_PENDENTES, ['OS', 'Placa', 'Orçado', 'Status']);
+    if (tab) _linhasComoObjetos_(tab).forEach(o => guardar(o['OS'], o['Oficina']));
+  } catch (e) { Logger.log('Oficinas (OS): ' + e); }
+  // 2) OrçamentosDB
+  try {
+    const aba = _ssManut_().getSheetByName(CONFIG.ABA_ORCAMENTOS);
+    if (aba && aba.getLastRow() > 2) {
+      const valores = aba.getDataRange().getValues();
+      let cab = 0;
+      for (let i = 0; i < Math.min(6, valores.length); i++) {
+        if (valores[i].some(c => /ORDEM\s*SERVI/i.test(String(c)))) { cab = i; break; }
+      }
+      const nomes = valores[cab].map(c => _normCab_(c));
+      const iOs = nomes.findIndex(c => /ORDEM SERVICO|^OS$/.test(c));
+      const iEst = nomes.findIndex(c => /^ESTABELECIMENTO$/.test(c));
+      if (iOs >= 0 && iEst >= 0) for (let r = cab + 1; r < valores.length; r++) guardar(valores[r][iOs], valores[r][iEst]);
+    }
+  } catch (e) { Logger.log('Oficinas (orçamentos): ' + e); }
+  // 3) AceitesDB
+  try {
+    const aba = _ssManut_().getSheetByName(CONFIG.ABA_ACEITES);
+    if (aba && aba.getLastRow() > 2) {
+      const valores = aba.getDataRange().getValues();
+      const m = _mapaAceitesDb_(valores);
+      if (m.idx.os >= 0 && m.idx.estabelecimento >= 0) {
+        for (let r = m.linhaCab + 1; r < valores.length; r++) guardar(valores[r][m.idx.os], valores[r][m.idx.estabelecimento]);
+      }
+    }
+  } catch (e) { Logger.log('Oficinas (aceites): ' + e); }
+  return mapa;
+}
+
 function _lerOS_(ss) {
   const pend = _abaPorCabecalho_(ss, CONFIG.ABA_OS_PENDENTES, ['OS', 'Placa', 'Orçado', 'Status']);
+  const oficinas = _oficinasPorOs_(ss);
   const linhaDe = {};
   const ace  = _abaPorCabecalho_(ss, CONFIG.ABA_OS_ACEITES,   ['OS', 'Placa', 'Data Aprovação', 'Status']);
   const lista = [];
@@ -6392,7 +6438,8 @@ function _lerOS_(ss) {
     aprovacao: _txt_(o['Aprovação'] !== undefined ? o['Aprovação'] : o['Aprovacao']),
     linkAnalise: _txt_(o['Relatório da Análise'] !== undefined ? o['Relatório da Análise'] : o['Relatorio da Analise']) || _urlDaLinha_(o) }));
   if (ace) _linhasComoObjetos_(ace).forEach(o => lista.push({ origem: 'ACEITE', os: _txt_(o['OS']), placa: _txt_(o['Placa']).toUpperCase(),
-    valor: _num_(o['Valor Total']), aprovado: null, data: _dataTxt_(o['Data Aprovação']), oficina: '', status: _txt_(o['Status']),
+    valor: _num_(o['Valor Total']), aprovado: null, data: _dataTxt_(o['Data Aprovação']),
+    oficina: oficinas[String(_txt_(o['OS'])).replace(/\D/g, '')] || '', status: _txt_(o['Status']),
     unidade: _txt_(o['Unidade SIPAC']), obs: _txt_(o['Observações']), modelo: _txt_(o['Modelo']), inicio: _dataTxt_(o['Data Início Serviço']),
     conclusao: _dataTxt_(o['Data Conclusão Serviço']), limiteAceite: _dataTxt_(o['Data Final p/ Aceite']), limiteISO: _diaISO_(o['Data Final p/ Aceite']) }));
   return lista.filter(x => x.os && x.placa);
