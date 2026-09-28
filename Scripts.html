@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.54.0';
+const VERSAO_PAINEL = '2.55.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -333,7 +333,7 @@ function mudarAba(aba) {
   setTimeout(ajustarFiltrosLaterais, 0);
   ESTADO.aba = aba;
   document.querySelectorAll('#abas .topo-aba').forEach(b => b.classList.toggle('ativa', b.dataset.aba === aba));
-  ['painel', 'viaturas', 'uso', 'manut', 'os', 'pagamentos', 'patrimonio', 'acoes', 'multas', 'dados'].forEach(a => cls('aba-' + a, 'oculto', a !== aba));
+  ['painel', 'viaturas', 'uso', 'manut', 'os', 'pagamentos', 'patrimonio', 'gestao', 'acoes', 'multas', 'dados'].forEach(a => cls('aba-' + a, 'oculto', a !== aba));
   renderAba();
 }
 function renderAba() {
@@ -353,6 +353,7 @@ function renderAba() {
   else if (ESTADO.aba === 'acoes') renderAcoes(lista);
   else if (ESTADO.aba === 'dados') renderDados();
   else if (ESTADO.aba === 'multas') renderMultas();
+  else if (ESTADO.aba === 'gestao') renderGestao();
   ajustarKpis();
 }
 
@@ -695,6 +696,11 @@ function tabelaSimples(lista, cols, vazio, clicavel) {
    ============================================================ */
 function abrirFicha(placa) {
   const v = ESTADO.veiculos.find(x => x.placa === placa); if (!v) return;
+  if (!ESTADO.demandas && !ESTADO._carregandoDemandas) {     // só uma vez por sessão
+    ESTADO._carregandoDemandas = true;
+    const run = servidor('lerDemandas', r => { if (r && r.ok) { ESTADO.demandas = r; if (el('gaveta').classList.contains('aberta')) abrirFicha(placa); } }, () => {});
+    if (run) run.lerDemandas(ESTADO.token);
+  }
   const gestores = (ESTADO.dados.gestores || []).filter(g => g.unidadeSipac === v.unidade || g.unidade === v.unidade || g.unidade === v.unidadeCurta);
   const os = (ESTADO.dados.os || []).filter(o => o.placa === v.placa || o.placa === v.placaMerc || (v.placaRes && o.placa === v.placaRes));
 
@@ -788,6 +794,17 @@ function abrirFicha(placa) {
 
     ${ESTADO.admin ? secaoAcoesFicha(v) : ''}
     ${secao('Ordens de serviço', osHtml, (osPendentes.length ? `<span class="badge manutencao">${osPendentes.length} em andamento</span> ` : '') + (pdfsV.length ? `<span class="badge neutro">${pdfsV.length} PDF</span>` : ''))}
+    ${(() => {
+      const dem = demandasDaViatura(v.placa);
+      if (!ESTADO.demandas) return '';
+      const abertas = dem.filter(x => !/conclu/i.test(x.fase));
+      return secao('Demandas', dem.length ? dem.map(x => `<div class="os-item ${atrasada(x) ? 'aceite' : ''}">
+        <a class="link-btn" style="font-weight:700" onclick="fecharFicha(); ESTADO.aba='gestao'; mudarAba('gestao'); setTimeout(function(){ abrirDemanda('${escAttr(x.id)}'); }, 200)">${esc(x.titulo)}</a>
+        • ${esc(x.fase)}${x.prazo ? ' • prazo ' + esc(x.prazo) : ''}${x.responsavel ? ' • ' + esc(x.responsavel) : ''}
+        ${x.descricao ? `<div class="linha2" style="color:var(--tinta-suave)">${esc(x.descricao)}</div>` : ''}</div>`).join('')
+        : '<div class="nao">Nenhuma demanda registrada</div>',
+        abertas.length ? `<span class="badge ${abertas.some(atrasada) ? 'indisponivel' : 'manutencao'}">${abertas.length} aberta(s)</span>` : '');
+    })()}
     ${secao('Aceites', aceitesHtml, aceitesV.length ? `<span class="badge ${aceitesV.some(a => { const d = diasAte(a.limiteISO); return d !== null && d <= 3; }) ? 'indisponivel' : 'neutro'}">${aceitesV.length}</span>` : '')}
     ${secao('Gestor de frota da unidade', gestorHtml)}
   `);
@@ -4441,6 +4458,257 @@ function exportarCsv(nome, colunas, linhas) {
   a.href = url; a.download = nome; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
   toast(linhas.length + ' linha(s) exportada(s).');
+}
+
+
+/* ============================================================
+   GESTÃO — quadro de demandas da frota
+   ============================================================ */
+function renderGestao() {
+  const c = el('gestao-conteudo'); if (!c) return;
+  if (!ESTADO.demandas) {
+    c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Carregando o quadro…</div></div>';
+    const run = servidor('lerDemandas',
+      r => {
+        if (!r || !r.ok) { c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha ao ler.') + '</div></div>'; return; }
+        ESTADO.demandas = r; renderGestao();
+      },
+      e => { c.innerHTML = '<div class="cartao largo"><div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div></div>'; });
+    if (run) run.lerDemandas(ESTADO.token);
+    return;
+  }
+  desenharQuadro(c);
+}
+
+function atrasada(d) {
+  if (!d.prazo || /conclu/i.test(d.fase)) return false;
+  const m = d.prazo.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (!m) return false;
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])) < hoje;
+}
+
+function desenharQuadro(c) {
+  const dados = ESTADO.demandas;
+  const f = ESTADO.filtroGestao;
+  const todas = dados.demandas.filter(d => {
+    if (f.placa === '__frota') { if (d.placa) return false; }
+    else if (f.placa && d.placa !== f.placa) return false;
+    if (f.responsavel && d.responsavel !== f.responsavel) return false;
+    if (f.busca) {
+      const alvo = (d.titulo + ' ' + d.descricao + ' ' + d.placa + ' ' + d.responsavel + ' ' + d.anotacoes.join(' ')).toLowerCase();
+      if (alvo.indexOf(f.busca.toLowerCase()) < 0) return false;
+    }
+    return true;
+  });
+
+  const porFase = fase => todas.filter(d => d.fase === fase)
+    .sort((a, b) => (atrasada(b) ? 1 : 0) - (atrasada(a) ? 1 : 0) ||
+      ['Urgente', 'Alta', 'Normal'].indexOf(a.prioridade) - ['Urgente', 'Alta', 'Normal'].indexOf(b.prioridade));
+
+  const responsaveis = Array.from(new Set(dados.demandas.map(d => d.responsavel).filter(Boolean))).sort();
+  const placas = Array.from(new Set(dados.demandas.map(d => d.placa).filter(Boolean))).sort();
+  const abertas = todas.filter(d => !/conclu/i.test(d.fase));
+  const vencidas = abertas.filter(atrasada);
+
+  const cartao = d => {
+    const v = viaturaDaMulta(d.placa);
+    return `<article class="demanda ${d.prioridade === 'Urgente' ? 'urgente' : d.prioridade === 'Alta' ? 'alta' : ''} ${atrasada(d) ? 'atrasada' : ''}"
+        draggable="true" data-id="${escAttr(d.id)}">
+      <div class="dem-titulo">${esc(d.titulo)}</div>
+      <div class="dem-meta">
+        ${d.placa ? `<span class="dem-tag placa" title="${escAttr(v ? v.modelo : '')}">${esc(d.placa)}</span>` : '<span class="dem-tag geral">frota</span>'}
+        ${d.prioridade !== 'Normal' ? `<span class="dem-tag prio">${esc(d.prioridade)}</span>` : ''}
+        ${d.responsavel ? `<span class="dem-tag">${esc(d.responsavel)}</span>` : ''}
+        ${d.prazo ? `<span class="dem-tag ${atrasada(d) ? 'venceu' : 'prazo'}">${esc(d.prazo)}</span>` : ''}
+      </div>
+      ${d.descricao ? `<div class="dem-desc">${esc(d.descricao)}</div>` : ''}
+      ${d.anotacoes.length ? `<div class="dem-rodape">${d.anotacoes.length} anotação(ões) • atualizada ${esc(d.atualizadaEm || d.criadaEm)}</div>` : ''}
+    </article>`;
+  };
+
+  c.innerHTML = `
+    <div class="kpis">
+      ${kpi('Demandas abertas', abertas.length, todas.length + ' no total', abertas.length ? 'ambar' : 'verde', null, true)}
+      ${kpi('Com prazo vencido', vencidas.length, 'precisam de atenção', vencidas.length ? 'vermelho' : 'verde', null, true)}
+      ${kpi('Ligadas a viaturas', todas.filter(d => d.placa).length, placas.length + ' viatura(s)', '', null, true)}
+      ${kpi('Gerais da frota', todas.filter(d => !d.placa).length, 'sem viatura específica', '', null, true)}
+      ${kpi('Concluídas', todas.filter(d => /conclu/i.test(d.fase)).length, 'no quadro', 'verde', null, true)}
+    </div>
+
+    <div class="cartao largo" style="margin-bottom:12px">
+      <div class="os-barra-acoes">
+        <div class="busca" style="max-width:260px"><input id="gest-busca" type="search" placeholder="título, placa, responsável…" value="${escAttr(f.busca)}"></div>
+        <select id="gest-placa" style="max-width:190px">
+          <option value="">Todas as demandas</option>
+          <option value="__frota" ${f.placa === '__frota' ? 'selected' : ''}>Só gerais da frota</option>
+          ${placas.map(p => `<option value="${escAttr(p)}" ${f.placa === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}
+        </select>
+        ${responsaveis.length ? `<select id="gest-resp" style="max-width:190px">
+          <option value="">Todos os responsáveis</option>
+          ${responsaveis.map(r => `<option value="${escAttr(r)}" ${f.responsavel === r ? 'selected' : ''}>${esc(r)}</option>`).join('')}
+        </select>` : ''}
+        ${(f.placa || f.responsavel || f.busca) ? '<button class="btn claro" id="gest-limpar">Limpar</button>' : ''}
+        <div style="flex:1"></div>
+        <button class="btn claro" id="btn-exportar-dem" title="Baixar em CSV">⤓ Exportar</button>
+        <button class="btn amarelo" id="btn-nova-demanda">+ Nova demanda</button>
+      </div>
+    </div>
+
+    <div class="quadro">
+      ${dados.fases.map(fase => `<section class="coluna" data-fase="${escAttr(fase)}">
+        <header><h3>${esc(fase)}</h3><span class="conta">${porFase(fase).length}</span></header>
+        <div class="coluna-corpo" data-fase="${escAttr(fase)}">
+          ${porFase(fase).map(cartao).join('') || '<div class="vazio-col">arraste um cartão para cá</div>'}
+        </div>
+      </section>`).join('')}
+    </div>`;
+
+  // arrastar e soltar entre as colunas
+  let arrastando = null;
+  c.querySelectorAll('.demanda').forEach(el2 => {
+    el2.addEventListener('click', () => abrirDemanda(el2.dataset.id));
+    el2.addEventListener('dragstart', e => { arrastando = el2.dataset.id; el2.classList.add('arrastando'); e.dataTransfer.effectAllowed = 'move'; });
+    el2.addEventListener('dragend', () => { el2.classList.remove('arrastando'); arrastando = null; });
+  });
+  c.querySelectorAll('.coluna-corpo').forEach(col => {
+    col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('sobre'); });
+    col.addEventListener('dragleave', () => col.classList.remove('sobre'));
+    col.addEventListener('drop', e => {
+      e.preventDefault(); col.classList.remove('sobre');
+      if (arrastando) moverCartao(arrastando, col.dataset.fase);
+    });
+  });
+
+  ouvir('btn-nova-demanda', 'click', () => abrirDemanda(null));
+  ouvir('gest-placa', 'change', () => { ESTADO.filtroGestao.placa = val('gest-placa'); renderGestao(); });
+  ouvir('gest-resp', 'change', () => { ESTADO.filtroGestao.responsavel = val('gest-resp'); renderGestao(); });
+  ouvir('gest-limpar', 'click', () => { ESTADO.filtroGestao = { placa: '', responsavel: '', busca: '' }; renderGestao(); });
+  const busca = el('gest-busca');
+  if (busca) busca.addEventListener('input', () => {
+    ESTADO.filtroGestao.busca = busca.value;
+    clearTimeout(ESTADO._tg);
+    ESTADO._tg = setTimeout(() => { const pos = busca.selectionStart; renderGestao(); const n = el('gest-busca'); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} } }, 400);
+  });
+  ouvir('btn-exportar-dem', 'click', () => exportarCsv(
+    'demandas_' + new Date().toISOString().substring(0, 10) + '.csv',
+    ['ID', 'Fase', 'Prioridade', 'Título', 'Descrição', 'Placa', 'Responsável', 'Prazo', 'Criada em', 'Atualizada em', 'Concluída em', 'Anotações'],
+    todas.map(d => [d.id, d.fase, d.prioridade, d.titulo, d.descricao, d.placa, d.responsavel, d.prazo,
+      d.criadaEm, d.atualizadaEm, d.concluidaEm, d.anotacoes.join(' | ')])));
+  ajustarKpis();
+}
+
+function moverCartao(id, fase) {
+  const d = ESTADO.demandas.demandas.find(x => x.id === id);
+  if (!d || d.fase === fase) return;
+  const anterior = d.fase;
+  d.fase = fase;                       // move na hora; desfaz se o servidor recusar
+  renderGestao();
+  const run = servidor('moverDemanda',
+    r => {
+      if (!r || !r.ok) { d.fase = anterior; renderGestao(); toast((r && r.erro) || 'Não consegui mover.', true); return; }
+      d.atualizadaEm = r.atualizadaEm || d.atualizadaEm;
+      toast(d.titulo + ' → ' + fase);
+    },
+    e => { d.fase = anterior; renderGestao(); toast('Erro: ' + (e && e.message ? e.message : e), true); });
+  if (run) run.moverDemanda(ESTADO.token, id, fase);
+}
+
+/** Ficha da demanda: dados, histórico e nova anotação. */
+function abrirDemanda(id) {
+  const dados = ESTADO.demandas;
+  const d = id ? dados.demandas.find(x => x.id === id) : null;
+  const v = d && d.placa ? viaturaDaMulta(d.placa) : null;
+
+  htm('gaveta-cab', `<div class="titulo"><h2>${d ? esc(d.titulo) : 'Nova demanda'}</h2>
+    <div class="sub">${d ? esc(d.fase) + (d.placa ? ' • ' + esc(d.placa) : ' • geral da frota') + (d.criadaEm ? ' • criada em ' + esc(d.criadaEm) : '') : 'quadro de gestão da frota'}</div></div>
+    <button class="gaveta-fechar" onclick="fecharFicha()">×</button>`);
+
+  htm('gaveta-corpo',
+    secao('Demanda', `<div class="form-grade">
+      <div class="form-campo largo"><label>Título</label><input type="text" id="dem-titulo" value="${escAttr(d ? d.titulo : '')}"></div>
+      <div class="form-campo largo"><label>Descrição</label><textarea id="dem-desc" rows="3">${esc(d ? d.descricao : '')}</textarea></div>
+      <div class="form-campo"><label>Viatura (vazio = geral da frota)</label>
+        <input type="text" id="dem-placa" list="lista-placas-dem" value="${escAttr(d ? d.placa : '')}" style="text-transform:uppercase">
+        <datalist id="lista-placas-dem">${(ESTADO.veiculos || []).map(x => `<option value="${escAttr(x.placa)}">${esc(x.modeloCurto || x.modelo || '')}</option>`).join('')}</datalist></div>
+      <div class="form-campo"><label>Fase</label><select id="dem-fase">
+        ${dados.fases.map(x => `<option value="${escAttr(x)}" ${d && d.fase === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div>
+      <div class="form-campo"><label>Prioridade</label><select id="dem-prio">
+        ${dados.prioridades.map(x => `<option value="${escAttr(x)}" ${d && d.prioridade === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div>
+      <div class="form-campo"><label>Responsável</label><input type="text" id="dem-resp" value="${escAttr(d ? d.responsavel : '')}"></div>
+      <div class="form-campo"><label>Prazo</label><input type="text" id="dem-prazo" placeholder="dd/mm/aaaa" value="${escAttr(d ? d.prazo : '')}"></div>
+    </div>`) +
+    (v ? secao('Viatura', `<div class="grade-dados">
+        <div class="dado"><div class="k">Placa</div><div class="v" style="font-size:14px">${esc(v.placa)}</div></div>
+        <div class="dado"><div class="k">Modelo</div><div class="v" style="font-size:14px">${esc(v.modelo)}</div></div>
+        <div class="dado"><div class="k">Unidade</div><div class="v" style="font-size:14px">${esc(v.unidade || '—')}</div></div>
+        <div class="dado"><div class="k">Status</div><div class="v" style="font-size:14px">${esc(v.status || '—')}</div></div>
+      </div>
+      <div class="form-acoes" style="margin-top:8px">
+        <button class="btn claro" onclick="fecharFicha(); setTimeout(function(){ abrirFicha('${escAttr(v.placa)}'); }, 120)">Abrir ficha da viatura</button>
+      </div>`) : '') +
+    (d ? secao('Histórico e anotações', `
+      <div class="historico">${d.anotacoes.length ? d.anotacoes.map(a => `<div class="hist-item">${esc(a)}</div>`).join('') : '<div class="nao">Sem anotações ainda</div>'}</div>
+      <div class="form-campo largo" style="margin-top:10px"><label>Nova anotação</label><textarea id="dem-nota" rows="2" placeholder="o que aconteceu, o que falta, com quem está…"></textarea></div>
+      <button class="btn claro" id="btn-anotar">Anotar</button>`) : '') +
+    `<div class="form-acoes">
+      <button class="btn amarelo" id="btn-salvar-dem">${d ? 'Salvar' : 'Criar demanda'}</button>
+      <button class="btn claro" onclick="fecharFicha()">Cancelar</button>
+      ${d && ESTADO.admin ? '<button class="btn claro" id="btn-excluir-dem" style="margin-left:auto; color:var(--vermelho)">Excluir</button>' : ''}
+    </div>`);
+
+  cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
+  document.body.style.overflow = 'hidden';
+
+  ouvir('btn-salvar-dem', 'click', () => {
+    const campos = { titulo: val('dem-titulo'), descricao: (el('dem-desc') || {}).value || '',
+      placa: val('dem-placa').toUpperCase(), fase: val('dem-fase'), prioridade: val('dem-prio'),
+      responsavel: val('dem-resp'), prazo: val('dem-prazo') };
+    if (!campos.titulo.trim()) { toast('Informe o título.'); return; }
+    const btn = el('btn-salvar-dem'); btn.disabled = true; btn.textContent = 'Gravando…';
+    const run = servidor('salvarDemanda',
+      r => {
+        if (!r || !r.ok) { btn.disabled = false; btn.textContent = 'Salvar'; toast((r && r.erro) || 'Falha ao gravar.', true); return; }
+        toast(r.novo ? 'Demanda criada.' : 'Demanda atualizada.');
+        fecharFicha(); ESTADO.demandas = null; renderGestao();
+      },
+      e => { btn.disabled = false; btn.textContent = 'Salvar'; toast('Erro: ' + (e && e.message ? e.message : e), true); });
+    if (run) run.salvarDemanda(ESTADO.token, id || '', campos);
+  });
+
+  ouvir('btn-anotar', 'click', () => {
+    const texto = (el('dem-nota') || {}).value || '';
+    if (!texto.trim()) { toast('Escreva a anotação.'); return; }
+    const btn = el('btn-anotar'); btn.disabled = true;
+    const run = servidor('anotarDemanda',
+      r => {
+        btn.disabled = false;
+        if (!r || !r.ok) { toast((r && r.erro) || 'Falha ao anotar.', true); return; }
+        d.anotacoes.push(r.anotacao);
+        abrirDemanda(id);
+        toast('Anotação registrada.');
+      },
+      e => { btn.disabled = false; toast('Erro: ' + (e && e.message ? e.message : e), true); });
+    if (run) run.anotarDemanda(ESTADO.token, id, texto);
+  });
+
+  ouvir('btn-excluir-dem', 'click', () => {
+    if (!confirm('Excluir a demanda "' + d.titulo + '"? A linha sai da planilha.')) return;
+    const run = servidor('excluirDemanda',
+      r => {
+        if (!r || !r.ok) { toast((r && r.erro) || 'Falha ao excluir.', true); return; }
+        toast('Demanda excluída.'); fecharFicha(); ESTADO.demandas = null; renderGestao();
+      },
+      e => toast('Erro: ' + (e && e.message ? e.message : e), true));
+    if (run) run.excluirDemanda(ESTADO.token, id);
+  });
+}
+
+/** Demandas de uma viatura, para exibir na ficha dela. */
+function demandasDaViatura(placa) {
+  const d = ESTADO.demandas;
+  if (!d || !placa) return [];
+  return d.demandas.filter(x => x.placa === placa);
 }
 
 </script>

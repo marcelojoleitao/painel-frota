@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.54.0';
+const CODIGO_VERSAO = '2.55.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -5576,6 +5576,182 @@ function migrarResumoGlosaGravar() { return migrarResumoGlosa(true); }
 
 /** Insere a linha "Outros descontos" nas tabelas dos termos de atesto. */
 function ajustarTabelasModelosPagamentoAplicar() { return ajustarTabelasModelosPagamento(true); }
+
+
+/* ============================================================
+   GESTÃO DE DEMANDAS — quadro com três fases
+   Aba "Demandas" na planilha-mãe, criada na primeira execução.
+   Uma demanda pode estar ligada a uma viatura (placa) ou ser geral
+   da frota. As anotações ficam num histórico dentro da própria linha.
+   ============================================================ */
+
+const DEMANDAS = {
+  aba: 'Demandas',
+  fases: ['Caixa de entrada', 'Em resolução', 'Concluído'],
+  prioridades: ['Normal', 'Alta', 'Urgente'],
+  cab: ['ID', 'Criada em', 'Criada por', 'Fase', 'Prioridade', 'Título', 'Descrição', 'Placa',
+        'Responsável', 'Prazo', 'Atualizada em', 'Concluída em', 'Anotações']
+};
+
+function _abaDemandas_() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  let aba = ss.getSheetByName(DEMANDAS.aba);
+  if (!aba) {
+    aba = ss.insertSheet(DEMANDAS.aba);
+    aba.getRange(1, 1, 1, DEMANDAS.cab.length).setValues([DEMANDAS.cab]);
+    aba.setFrozenRows(1);
+    aba.getRange(1, 1, 1, DEMANDAS.cab.length).setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF');
+    aba.setColumnWidth(6, 260); aba.setColumnWidth(7, 320); aba.setColumnWidth(13, 420);
+  }
+  return aba;
+}
+
+function _linhaDemanda_(aba, id) {
+  const n = aba.getLastRow();
+  if (n < 2) return -1;
+  const ids = aba.getRange(2, 1, n - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) if (String(ids[i][0]) === String(id)) return i + 2;
+  return -1;
+}
+
+/** Todas as demandas, já prontas para o quadro. */
+function lerDemandas(token) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const aba = _abaDemandas_();
+    const n = aba.getLastRow();
+    const lista = [];
+    if (n > 1) {
+      aba.getRange(2, 1, n - 1, DEMANDAS.cab.length).getValues().forEach((l, i) => {
+        if (!String(l[0]).trim() && !String(l[5]).trim()) return;
+        lista.push({
+          id: String(l[0]), linha: i + 2,
+          criadaEm: _dataTxt_(l[1]), criadaPor: String(l[2] || ''),
+          fase: String(l[3] || DEMANDAS.fases[0]), prioridade: String(l[4] || 'Normal'),
+          titulo: String(l[5] || ''), descricao: String(l[6] || ''),
+          placa: String(l[7] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase(),
+          responsavel: String(l[8] || ''), prazo: _dataBR_(l[9]),
+          atualizadaEm: _dataTxt_(l[10]), concluidaEm: _dataTxt_(l[11]),
+          anotacoes: String(l[12] || '').split('\n').filter(x => x.trim())
+        });
+      });
+    }
+    return { ok: true, demandas: lista, fases: DEMANDAS.fases, prioridades: DEMANDAS.prioridades };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Cria ou atualiza uma demanda. Sem id, cria. */
+function salvarDemanda(token, id, dados) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Quadro ocupado. Tente de novo.' }; }
+  try {
+    const aba = _abaDemandas_();
+    const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm');
+    const titulo = String((dados || {}).titulo || '').trim();
+    if (!titulo) return { ok: false, erro: 'Informe o título da demanda.' };
+
+    let linha = id ? _linhaDemanda_(aba, id) : -1;
+    let novoId = id;
+    if (linha < 0) {
+      novoId = 'D' + Utilities.formatDate(new Date(), CONFIG.FUSO, 'yyMMddHHmmss');
+      linha = Math.max(aba.getLastRow() + 1, 2);
+      aba.getRange(linha, 1, 1, DEMANDAS.cab.length).setValues([[
+        novoId, agora, p.sessao.email, dados.fase || DEMANDAS.fases[0], dados.prioridade || 'Normal',
+        titulo, dados.descricao || '', String(dados.placa || '').toUpperCase(),
+        dados.responsavel || '', _dataBR_(dados.prazo), agora, '',
+        agora + ' • ' + p.sessao.email + ': demanda criada'
+      ]]);
+    } else {
+      const atual = aba.getRange(linha, 1, 1, DEMANDAS.cab.length).getValues()[0];
+      const mudancas = [];
+      const campo = (indice, valor, rotulo) => {
+        const antes = String(atual[indice] || '').trim();
+        const depois = String(valor === null || valor === undefined ? '' : valor).trim();
+        if (depois !== antes) mudancas.push(rotulo + ': "' + antes + '" → "' + depois + '"');
+        return depois;
+      };
+      const fase = campo(3, dados.fase || atual[3], 'fase');
+      const prioridade = campo(4, dados.prioridade || atual[4], 'prioridade');
+      const tit = campo(5, titulo, 'título');
+      const desc = campo(6, dados.descricao || '', 'descrição');
+      const placa = campo(7, String(dados.placa || '').toUpperCase(), 'placa');
+      const resp = campo(8, dados.responsavel || '', 'responsável');
+      const prazo = campo(9, _dataBR_(dados.prazo), 'prazo');
+      const concluida = /conclu/i.test(fase) ? (String(atual[11] || '').trim() || agora) : '';
+      aba.getRange(linha, 4, 1, 9).setValues([[fase, prioridade, tit, desc, placa, resp, prazo, agora, concluida]]);
+      if (mudancas.length) {
+        const historico = String(atual[12] || '');
+        aba.getRange(linha, 13).setValue((historico ? historico + '\n' : '') + agora + ' • ' + p.sessao.email + ': ' + mudancas.join('; '));
+      }
+    }
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, p.sessao.email, id ? 'Editar demanda' : 'Criar demanda', String(dados.placa || ''), novoId, titulo);
+    return { ok: true, id: novoId, novo: !id };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/** Move a demanda de fase (usado ao arrastar o cartão). */
+function moverDemanda(token, id, fase) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (DEMANDAS.fases.indexOf(fase) < 0) return { ok: false, erro: 'Fase inválida.' };
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(15000); } catch (e) { return { ok: false, erro: 'Quadro ocupado.' }; }
+  try {
+    const aba = _abaDemandas_();
+    const linha = _linhaDemanda_(aba, id);
+    if (linha < 0) return { ok: false, erro: 'Demanda não encontrada.' };
+    const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm');
+    const anterior = String(aba.getRange(linha, 4).getValue() || '');
+    if (anterior === fase) return { ok: true, id: id, fase: fase };
+    aba.getRange(linha, 4).setValue(fase);
+    aba.getRange(linha, 11).setValue(agora);
+    if (/conclu/i.test(fase)) { if (!String(aba.getRange(linha, 12).getValue() || '').trim()) aba.getRange(linha, 12).setValue(agora); }
+    else aba.getRange(linha, 12).setValue('');
+    const historico = String(aba.getRange(linha, 13).getValue() || '');
+    aba.getRange(linha, 13).setValue((historico ? historico + '\n' : '') + agora + ' • ' + p.sessao.email + ': ' + anterior + ' → ' + fase);
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, p.sessao.email, 'Mover demanda', '', id, anterior + ' → ' + fase);
+    return { ok: true, id: id, fase: fase, atualizadaEm: agora };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/** Acrescenta uma anotação ao histórico da demanda. */
+function anotarDemanda(token, id, texto) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const nota = String(texto || '').trim();
+  if (!nota) return { ok: false, erro: 'Escreva a anotação.' };
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(15000); } catch (e) { return { ok: false, erro: 'Quadro ocupado.' }; }
+  try {
+    const aba = _abaDemandas_();
+    const linha = _linhaDemanda_(aba, id);
+    if (linha < 0) return { ok: false, erro: 'Demanda não encontrada.' };
+    const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm');
+    const historico = String(aba.getRange(linha, 13).getValue() || '');
+    const linhaNova = agora + ' • ' + p.sessao.email + ': ' + nota.replace(/\n/g, ' ');
+    aba.getRange(linha, 13).setValue((historico ? historico + '\n' : '') + linhaNova);
+    aba.getRange(linha, 11).setValue(agora);
+    SpreadsheetApp.flush();
+    return { ok: true, anotacao: linhaNova };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/** Remove uma demanda (só o administrador). */
+function excluirDemanda(token, id) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (!p.sessao.admin) return { ok: false, erro: 'Apenas o administrador pode excluir.' };
+  try {
+    const aba = _abaDemandas_();
+    const linha = _linhaDemanda_(aba, id);
+    if (linha < 0) return { ok: false, erro: 'Demanda não encontrada.' };
+    const titulo = String(aba.getRange(linha, 6).getValue() || '');
+    aba.deleteRow(linha);
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, p.sessao.email, 'Excluir demanda', '', id, titulo);
+    return { ok: true };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
 
 /* ============================================================
    MULTAS — acompanhamento dos processos e geração das defesas
