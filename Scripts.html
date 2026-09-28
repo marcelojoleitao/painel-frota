@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.50.2';
+const VERSAO_PAINEL = '2.51.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -720,7 +720,17 @@ function abrirFicha(placa) {
     : `<div class="ok-txt">Sem multas</div>`;
 
   const pdfsV = pdfsDaViatura(v);
-  const osHtml = (os.length ? os.map(o => `<div class="os-item ${o.origem === 'ACEITE' ? 'aceite' : ''}"><b>OS ${esc(o.os)}</b> ${pdfLinkHtml(o.os)} • ${esc(o.status)} • ${o.valor ? fmtMoeda(o.valor) : ''}${o.oficina ? ' • ' + esc(o.oficina) : ''}${o.limiteAceite ? ' • aceite até ' + prazoHtml(o.limiteISO, o.limiteAceite) : ''}<div class="linha2" style="color:var(--tinta-suave)">${esc(o.data)}${o.relato ? ' • ' + esc(o.relato) : ''}${o.obs ? ' • ' + esc(o.obs) : ''}</div></div>`).join('')
+  const aceitesV = os.filter(o => o.origem === 'ACEITE')
+    .sort((a, b) => (diasAte(a.limiteISO) === null ? 9999 : diasAte(a.limiteISO)) - (diasAte(b.limiteISO) === null ? 9999 : diasAte(b.limiteISO)));
+  const osPendentes = os.filter(o => o.origem !== 'ACEITE');
+  const aceitesHtml = aceitesV.length ? aceitesV.map(a => {
+    const d = diasAte(a.limiteISO);
+    return `<div class="os-item aceite"><b>OS ${esc(a.os)}</b> ${pdfLinkHtml(a.os)} • ${esc(a.status || 'aguardando aceite')} • ${a.valor ? fmtMoeda(a.valor) : ''}
+      ${a.limiteAceite ? ' • prazo <span class="prazo ' + classePrazo(d) + '">' + esc(a.limiteAceite.substring(0, 10)) + '</span>' : ''}
+      ${d !== null ? `<span class="vinculo"> ${d < 0 ? Math.abs(d) + ' dia(s) vencido' : d === 0 ? 'vence hoje' : 'faltam ' + d + ' dia(s)'}</span>` : ''}
+      <div class="linha2" style="color:var(--tinta-suave)">aprovada ${esc((a.data || '—').substring(0, 10))} • início ${esc((a.inicio || '—').substring(0, 10))} • concluída ${esc((a.conclusao || '—').substring(0, 10))}${a.obs ? ' • ' + esc(a.obs) : ''}</div></div>`;
+  }).join('') : '<div class="nao">Nenhum aceite registrado para esta viatura</div>';
+  const osHtml = (osPendentes.length ? osPendentes.map(o => `<div class="os-item"><b>OS ${esc(o.os)}</b> ${pdfLinkHtml(o.os)} • ${esc(o.status)} • ${o.valor ? fmtMoeda(o.valor) : ''}${o.oficina ? ' • ' + esc(o.oficina) : ''}${o.limiteAceite ? ' • aceite até ' + prazoHtml(o.limiteISO, o.limiteAceite) : ''}<div class="linha2" style="color:var(--tinta-suave)">${esc(o.data)}${o.relato ? ' • ' + esc(o.relato) : ''}${o.obs ? ' • ' + esc(o.obs) : ''}</div></div>`).join('')
     : `<div class="nao">Nenhuma OS pendente ou aguardando aceite no GoodManager</div>`) +
     (pdfsV.length ? `<div class="k" style="font-size:11px; color:var(--tinta-suave); text-transform:uppercase; letter-spacing:.06em; margin:10px 0 4px">Ordens de serviço em PDF (${pdfsV.length})</div><div style="display:flex; flex-wrap:wrap; gap:6px">${pdfsV.map(f => `<a class="pdf-link" href="${escAttr(f.url)}" target="_blank" rel="noopener" title="${escAttr(f.pasta)}">${icoPdf()} ${esc(f.nome.replace(/\.pdf$/i, ''))}</a>`).join('')}</div>` : '');
 
@@ -777,7 +787,8 @@ function abrirFicha(placa) {
     ${(v.statusInv || v.obsInv) ? secao('Inventário', grade([['Status inventário', v.statusInv], ['Observações', v.obsInv, '', true]])) : ''}
 
     ${ESTADO.admin ? secaoAcoesFicha(v) : ''}
-    ${secao('Ordens de serviço', osHtml, (os.length ? `<span class="badge manutencao">${os.length} em andamento</span> ` : '') + (pdfsV.length ? `<span class="badge neutro">${pdfsV.length} PDF</span>` : ''))}
+    ${secao('Ordens de serviço', osHtml, (osPendentes.length ? `<span class="badge manutencao">${osPendentes.length} em andamento</span> ` : '') + (pdfsV.length ? `<span class="badge neutro">${pdfsV.length} PDF</span>` : ''))}
+    ${secao('Aceites', aceitesHtml, aceitesV.length ? `<span class="badge ${aceitesV.some(a => { const d = diasAte(a.limiteISO); return d !== null && d <= 3; }) ? 'indisponivel' : 'neutro'}">${aceitesV.length}</span>` : '')}
     ${secao('Gestor de frota da unidade', gestorHtml)}
   `);
 
@@ -1449,7 +1460,8 @@ function renderOS(lista) {
   const c = el('os-conteudo');
   if (c) {
     document.querySelectorAll('#subabas-os .subaba').forEach(b => b.classList.toggle('ativa', b.dataset.sub === ESTADO.subOS));
-    if (ESTADO.subOS === 'acompanhar') renderOSAcompanhar(lista);
+    if (ESTADO.subOS === 'aceites') renderAceites(lista);
+    else if (ESTADO.subOS === 'acompanhar') renderOSAcompanhar(lista);
     else { c.innerHTML = '<div class="kpis" id="kpis-os"></div><div class="grade" id="graficos-os"></div>'; renderOSPanorama(lista); }
     return;
   }
@@ -4201,6 +4213,141 @@ function verTextoDoCrlv(placa) {
     },
     e => toast('Erro: ' + (e && e.message ? e.message : e), true));
   if (run) run.textoCrlvViatura(ESTADO.token, placa);
+}
+
+
+/* ============================================================
+   ACEITES — o que a oficina concluiu e aguarda o aceite do gestor
+   ============================================================ */
+function diasAte(iso) {
+  if (!iso) return null;
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const alvo = new Date(iso + 'T00:00:00');
+  return Math.round((alvo - hoje) / 86400000);
+}
+
+function classePrazo(dias) {
+  if (dias === null) return '';
+  if (dias < 0) return 'vencido';
+  if (dias <= 3) return 'critico';
+  if (dias <= 7) return 'atencao';
+  return 'folga';
+}
+
+function renderAceites(lista) {
+  const c = el('os-conteudo'); if (!c) return;
+  const exib = new Set(lista.map(v => v.placa));
+  const filtroAtivo = Object.values(ESTADO.filtros).some(s => s.size) || ESTADO.busca || ESTADO.odoMin !== null || ESTADO.odoMax !== null;
+
+  // liga cada aceite à viatura e ao registro da aba OS (para o link da análise)
+  const porOs = {};
+  (ESTADO.dados.os || []).filter(o => o.origem === 'PENDENTE').forEach(o => { porOs[String(o.os).replace(/\D/g, '')] = o; });
+
+  const todos = (ESTADO.dados.os || []).filter(o => o.origem === 'ACEITE').map(a => {
+    const v = viaturaDaMulta(a.placa);
+    const naOS = porOs[String(a.os).replace(/\D/g, '')] || null;
+    return Object.assign({}, a, {
+      v: v, dias: diasAte(a.limiteISO),
+      unidadeReal: v ? (v.unidadeCurta || v.unidade || '—') : (a.unidade || '—'),
+      modeloReal: v ? (v.modeloCurto || v.modelo) : (a.modelo || ''),
+      linkAnalise: naOS ? naOS.linkAnalise : '', aprovacao: naOS ? naOS.aprovacao : ''
+    });
+  }).filter(a => !filtroAtivo || !a.v || exib.has(a.v.placa));
+
+  const contesta = a => /contest/i.test(a.status || '') || /contest/i.test(a.obs || '');
+  const pendente = a => !/aceit|conclu[ií]d|cobrad/i.test(a.status || '');
+  const grupos = {
+    todos: todos,
+    vencendo: todos.filter(a => pendente(a) && a.dias !== null && a.dias >= 0 && a.dias <= 3),
+    vencidos: todos.filter(a => pendente(a) && a.dias !== null && a.dias < 0),
+    contestacao: todos.filter(contesta),
+    pendentes: todos.filter(pendente)
+  };
+  const sel = ESTADO.filtroAceite && grupos[ESTADO.filtroAceite] ? grupos[ESTADO.filtroAceite] : todos;
+  const ordenados = sel.slice().sort((a, b) => {
+    const da = a.dias === null ? 9999 : a.dias, db = b.dias === null ? 9999 : b.dias;
+    return da - db || (b.valor || 0) - (a.valor || 0);
+  });
+  const soma = arr => arr.reduce((s, a) => s + (a.valor || 0), 0);
+
+  const kpiFiltro = (chave, rotulo, arr, sub, cor) =>
+    `<div class="kpi ${cor || ''} ${ESTADO.filtroAceite === chave ? 'selecionado' : ''}" data-fa="${chave}" style="cursor:pointer">
+      <div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${fmtInt(arr.length)}</div>
+      <div class="kpi-sub">${sub}</div></div>`;
+
+  const porUnidade = new Map();
+  ordenados.forEach(a => porUnidade.set(a.unidadeReal, (porUnidade.get(a.unidadeReal) || 0) + (a.valor || 0)));
+
+  c.innerHTML = `
+    <div class="kpis">
+      ${kpiFiltro('todos', 'Aceites registrados', grupos.todos, fmtMoeda(soma(grupos.todos)), '')}
+      ${kpiFiltro('pendentes', 'Aguardando aceite', grupos.pendentes, fmtMoeda(soma(grupos.pendentes)), grupos.pendentes.length ? 'ambar' : 'verde')}
+      ${kpiFiltro('vencendo', 'Vencem em até 3 dias', grupos.vencendo, fmtMoeda(soma(grupos.vencendo)), grupos.vencendo.length ? 'vermelho' : 'verde')}
+      ${kpiFiltro('vencidos', 'Prazo esgotado', grupos.vencidos, fmtMoeda(soma(grupos.vencidos)), grupos.vencidos.length ? 'vermelho' : 'verde')}
+      ${kpiFiltro('contestacao', 'Em contestação', grupos.contestacao, fmtMoeda(soma(grupos.contestacao)), grupos.contestacao.length ? 'ambar' : '')}
+    </div>
+
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); margin-bottom:14px">
+      <div class="cartao"><div class="cartao-cab"><h3>Valor por unidade</h3><small>na seleção atual</small></div>
+        <div class="barras compacto" style="max-height:220px; overflow:auto">
+        ${(() => {
+          const itens = Array.from(porUnidade.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
+          const maximo = Math.max(1, ...itens.map(i => i[1]));
+          return itens.map(([k, v]) => `<button class="barra" style="cursor:default"><span class="rotulo">${esc(k)}</span>
+            <span class="trilha"><span class="preench" style="width:${Math.round(v / maximo * 100)}%; background:var(--azul)"></span></span>
+            <span class="valor">${fmtMoeda(v)}</span></button>`).join('') || '<div class="vazio">Sem dados</div>';
+        })()}</div></div>
+      <div class="cartao"><div class="cartao-cab"><h3>Prazo de aceite</h3><small>quantas em cada faixa</small></div>
+        <div class="barras compacto">
+        ${(() => {
+          const faixas = [['Prazo esgotado', grupos.vencidos.length, 'var(--vermelho)'],
+            ['Até 3 dias', grupos.vencendo.length, '#E8743B'],
+            ['4 a 7 dias', grupos.pendentes.filter(a => a.dias !== null && a.dias > 3 && a.dias <= 7).length, 'var(--ambar)'],
+            ['Mais de 7 dias', grupos.pendentes.filter(a => a.dias === null || a.dias > 7).length, 'var(--verde)']];
+          const maximo = Math.max(1, ...faixas.map(f => f[1]));
+          return faixas.map(([r, n, cor]) => `<button class="barra" style="cursor:default"><span class="rotulo">${esc(r)}</span>
+            <span class="trilha"><span class="preench" style="width:${Math.round(n / maximo * 100)}%; background:${cor}"></span></span>
+            <span class="valor">${n}</span></button>`).join('');
+        })()}</div></div>
+    </div>
+
+    <div class="cartao largo">
+      <div class="cartao-cab"><h3>Aceites</h3><small>${ordenados.length} registro(s) — ordenados pelo prazo</small></div>
+      <div class="tabela-rol os-rol" style="max-height:620px">
+        <table class="tabela-multas">
+          <colgroup><col style="width:13%"><col style="width:9%"><col style="width:12%"><col style="width:10%">
+            <col style="width:9%"><col style="width:9%"><col style="width:9%"><col style="width:11%"><col style="width:10%"><col></colgroup>
+          <thead><tr><th>OS</th><th>Placa</th><th>Modelo</th><th>Unidade</th>
+            <th>Aprovação</th><th>Início</th><th>Conclusão</th><th>Prazo p/ aceite</th><th style="text-align:right">Valor</th><th>Situação</th></tr></thead>
+          <tbody>
+          ${ordenados.slice(0, 400).map(a => `<tr class="${a.dias !== null && a.dias < 0 && pendente(a) ? 'cobrada' : ''}">
+            <td><b style="font-family:var(--fonte-dados)">${esc(a.os)}</b>
+              <div style="margin-top:3px; display:flex; gap:4px; flex-wrap:wrap">${pdfLinkHtml(a.os)}
+                ${a.linkAnalise ? `<a class="pdf-link analise" href="${escAttr(a.linkAnalise)}" target="_blank" rel="noopener">${icoPdf()} análise</a>` : ''}</div></td>
+            <td>${a.v ? `<a class="link-btn" style="font-family:var(--fonte-dados); font-weight:700" onclick="abrirFicha('${escAttr(a.v.placa)}')">${esc(a.placa)}</a>` : esc(a.placa)}</td>
+            <td>${esc(a.modeloReal || '—')}</td>
+            <td>${esc(a.unidadeReal)}</td>
+            <td class="c">${esc((a.data || '').substring(0, 10))}</td>
+            <td class="c">${esc((a.inicio || '').substring(0, 10))}</td>
+            <td class="c">${esc((a.conclusao || '').substring(0, 10))}</td>
+            <td><span class="prazo ${classePrazo(a.dias)}">${esc((a.limiteAceite || '—').substring(0, 10))}</span>
+              ${a.dias !== null && pendente(a) ? `<div class="vinculo">${a.dias < 0 ? Math.abs(a.dias) + ' dia(s) vencido' : a.dias === 0 ? 'vence hoje' : 'faltam ' + a.dias + ' dia(s)'}</div>` : ''}</td>
+            <td class="num" style="text-align:right">${fmtMoeda(a.valor || 0)}</td>
+            <td>${badgeStatusOS(a.status)}
+              ${contesta(a) ? '<div class="vinculo" style="color:var(--vermelho)">em contestação</div>' : ''}
+              ${a.obs ? `<div class="obs-multa" title="${escAttr(a.obs)}">${esc(a.obs)}</div>` : ''}</td>
+          </tr>`).join('') || '<tr><td colspan="10"><div class="vazio">Nenhum aceite nesta seleção</div></td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <div class="cartao-dica">Os prazos em vermelho já venceram; em laranja, vencem em até três dias. Modelo e unidade vêm da ConsultaBD pela placa. Use os filtros da esquerda para recortar por unidade ou status da viatura.</div>
+    </div>`;
+
+  c.querySelectorAll('.kpi[data-fa]').forEach(k => k.addEventListener('click', () => {
+    ESTADO.filtroAceite = ESTADO.filtroAceite === k.dataset.fa ? '' : k.dataset.fa;
+    renderAceites(ESTADO.filtrado);
+  }));
+  ajustarKpis();
 }
 
 </script>

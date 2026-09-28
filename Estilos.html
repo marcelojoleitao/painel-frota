@@ -625,6 +625,12 @@ table.tabela td.acoes { text-align: right; }
 .etapa-item .val { flex: 1; overflow-wrap: anywhere; font-family: var(--fonte-dados); font-size: 11.5px; }
 .tabela-simples td { padding: 4px 6px; border-bottom: 1px solid var(--borda); font-size: 12.5px; }
 
+.prazo { display: inline-block; border-radius: 6px; padding: 2px 7px; font-size: 11.5px; font-weight: 700; font-family: var(--fonte-dados); }
+.prazo.vencido { background: #FDECEA; color: #9A2F24; border: 1px solid var(--vermelho); }
+.prazo.critico { background: #FDF0E7; color: #9A4A24; border: 1px solid #E8743B; }
+.prazo.atencao { background: #FFF6E5; color: #8A6200; border: 1px solid var(--ambar); }
+.prazo.folga { background: #E9F7EF; color: #1E7A4D; border: 1px solid var(--verde); }
+
 /* ============ MULTAS ============ */
 .dobra { border: 1px solid var(--borda); border-radius: var(--raio-p); background: #fff; padding: 6px 10px; }
 .dobra > summary { cursor: pointer; font-size: 12.5px; font-weight: 700; color: var(--azul); padding: 4px 0; }
