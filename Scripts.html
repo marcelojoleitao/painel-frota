@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.55.0';
+const VERSAO_PAINEL = '2.56.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -874,6 +874,11 @@ function debounce(fn, ms) { let t; return function () { clearTimeout(t); t = set
 
 function iniciarApp() {
   document.querySelectorAll('#abas .topo-aba').forEach(b => b.addEventListener('click', () => mudarAba(b.dataset.aba)));
+  document.querySelectorAll('#subabas-gestao .subaba').forEach(b => b.addEventListener('click', () => {
+    ESTADO.subGestao = b.dataset.sub;
+    document.querySelectorAll('#subabas-gestao .subaba').forEach(x => x.classList.toggle('ativa', x === b));
+    renderGestao();
+  }));
   document.querySelectorAll('#subabas-multas .subaba').forEach(b => b.addEventListener('click', () => {
     ESTADO.subMultas = b.dataset.sub;
     document.querySelectorAll('#subabas-multas .subaba').forEach(x => x.classList.toggle('ativa', x === b));
@@ -4466,6 +4471,7 @@ function exportarCsv(nome, colunas, linhas) {
    ============================================================ */
 function renderGestao() {
   const c = el('gestao-conteudo'); if (!c) return;
+  if (ESTADO.subGestao === 'notas') return renderNotas(c);
   if (!ESTADO.demandas) {
     c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Carregando o quadro…</div></div>';
     const run = servidor('lerDemandas',
@@ -4709,6 +4715,171 @@ function demandasDaViatura(placa) {
   const d = ESTADO.demandas;
   if (!d || !placa) return [];
   return d.demandas.filter(x => x.placa === placa);
+}
+
+
+/* ---------------- anotações da gestão ---------------- */
+function renderNotas(c) {
+  if (!ESTADO.notas) {
+    c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Carregando anotações…</div></div>';
+    const run = servidor('lerNotas',
+      r => {
+        if (!r || !r.ok) { c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha ao ler.') + '</div></div>'; return; }
+        ESTADO.notas = r; renderNotas(c);
+      },
+      e => { c.innerHTML = '<div class="cartao largo"><div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div></div>'; });
+    if (run) run.lerNotas(ESTADO.token, false);
+    return;
+  }
+  const f = ESTADO.filtroNotas;
+  const todas = ESTADO.notas.notas.filter(n => {
+    if (f.categoria && n.categoria !== f.categoria) return false;
+    if (f.busca) {
+      const alvo = (n.titulo + ' ' + n.categoria + ' ' + (n.sensivel ? '' : n.conteudo)).toLowerCase();
+      if (alvo.indexOf(f.busca.toLowerCase()) < 0) return false;
+    }
+    return true;
+  });
+  const categorias = ESTADO.notas.categorias;
+  const contagem = {};
+  ESTADO.notas.notas.forEach(n => { contagem[n.categoria] = (contagem[n.categoria] || 0) + 1; });
+
+  c.innerHTML = `
+    <div class="cartao largo" style="margin-bottom:12px">
+      <div class="os-barra-acoes">
+        <div class="busca" style="max-width:280px"><input id="nota-busca" type="search" placeholder="título ou conteúdo…" value="${escAttr(f.busca)}"></div>
+        <select id="nota-cat" style="max-width:220px">
+          <option value="">Todas as categorias</option>
+          ${categorias.map(x => `<option value="${escAttr(x)}" ${f.categoria === x ? 'selected' : ''}>${esc(x)}${contagem[x] ? ' (' + contagem[x] + ')' : ''}</option>`).join('')}
+        </select>
+        ${(f.categoria || f.busca) ? '<button class="btn claro" id="nota-limpar">Limpar</button>' : ''}
+        <div style="flex:1"></div>
+        <button class="btn amarelo" id="btn-nova-nota">+ Nova anotação</button>
+      </div>
+      <div class="cartao-dica">As anotações ficam na planilha-mãe e seguem as permissões dela — quem tem acesso à planilha vê o conteúdo. Marque como sensível o que for senha ou credencial: assim o texto só aparece quando você pedir, e cada exibição fica registrada no log.</div>
+    </div>
+
+    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+      ${todas.map(n => `<article class="nota ${n.sensivel ? 'sensivel' : ''}" data-id="${escAttr(n.id)}">
+        <div class="nota-cab">
+          <h4>${esc(n.titulo)}</h4>
+          <span class="dem-tag">${esc(n.categoria)}</span>
+        </div>
+        <div class="nota-corpo" id="nota-corpo-${escAttr(n.id)}">${n.sensivel
+          ? `<button class="btn claro" data-revelar="${escAttr(n.id)}" style="width:100%">🔒 mostrar conteúdo</button>`
+          : `<pre>${esc(n.conteudo)}</pre>`}</div>
+        <div class="nota-rodape">
+          <span>${esc(n.atualizadaEm || n.criadaEm)}${n.autor ? ' • ' + esc(n.autor.split('@')[0]) : ''}</span>
+          <span>
+            ${n.sensivel ? '' : `<button class="link-btn" data-copiar="${escAttr(n.id)}">copiar</button>`}
+            <button class="link-btn" data-editar-nota="${escAttr(n.id)}">editar</button>
+          </span>
+        </div>
+      </article>`).join('') || '<div class="cartao"><div class="vazio">Nenhuma anotação ainda. Use o botão acima para criar a primeira.</div></div>'}
+    </div>`;
+
+  ouvir('btn-nova-nota', 'click', () => abrirNota(null));
+  ouvir('nota-cat', 'change', () => { ESTADO.filtroNotas.categoria = val('nota-cat'); renderNotas(c); });
+  ouvir('nota-limpar', 'click', () => { ESTADO.filtroNotas = { categoria: '', busca: '' }; renderNotas(c); });
+  const busca = el('nota-busca');
+  if (busca) busca.addEventListener('input', () => {
+    ESTADO.filtroNotas.busca = busca.value;
+    clearTimeout(ESTADO._tn);
+    ESTADO._tn = setTimeout(() => { const pos = busca.selectionStart; renderNotas(c); const n = el('nota-busca'); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} } }, 400);
+  });
+  c.querySelectorAll('button[data-editar-nota]').forEach(b => b.addEventListener('click', () => abrirNota(b.dataset.editarNota)));
+  c.querySelectorAll('button[data-revelar]').forEach(b => b.addEventListener('click', () => revelarConteudo(b.dataset.revelar)));
+  c.querySelectorAll('button[data-copiar]').forEach(b => b.addEventListener('click', () => {
+    const n = ESTADO.notas.notas.find(x => x.id === b.dataset.copiar);
+    if (!n) return;
+    copiarTexto(n.conteudo);
+  }));
+}
+
+function copiarTexto(texto) {
+  try {
+    navigator.clipboard.writeText(texto);
+    toast('Copiado.');
+  } catch (e) {
+    const t = document.createElement('textarea');
+    t.value = texto; document.body.appendChild(t); t.select();
+    try { document.execCommand('copy'); toast('Copiado.'); } catch (e2) { toast('Não consegui copiar.', true); }
+    t.remove();
+  }
+}
+
+function revelarConteudo(id) {
+  const caixa = el('nota-corpo-' + id);
+  if (caixa) caixa.innerHTML = '<div class="foto-data">abrindo…</div>';
+  const run = servidor('revelarNota',
+    r => {
+      if (!r || !r.ok) { if (caixa) caixa.innerHTML = '<div class="foto-data">' + esc((r && r.erro) || 'falha') + '</div>'; return; }
+      const n = ESTADO.notas.notas.find(x => x.id === id);
+      if (n) n.conteudo = r.conteudo;
+      if (caixa) {
+        caixa.innerHTML = '<pre>' + esc(r.conteudo) + '</pre><button class="link-btn" id="copiar-' + id + '">copiar</button>';
+        ouvir('copiar-' + id, 'click', () => copiarTexto(r.conteudo));
+      }
+    },
+    e => { if (caixa) caixa.innerHTML = '<div class="foto-data">erro: ' + esc(String(e && e.message ? e.message : e)) + '</div>'; });
+  if (run) run.revelarNota(ESTADO.token, id);
+}
+
+function abrirNota(id) {
+  const n = id ? ESTADO.notas.notas.find(x => x.id === id) : null;
+  const categorias = ESTADO.notas.categorias;
+  const preencher = conteudo => {
+    htm('gaveta-cab', `<div class="titulo"><h2>${n ? 'Editar anotação' : 'Nova anotação'}</h2>
+      <div class="sub">${n ? esc(n.categoria) + ' • ' + esc(n.atualizadaEm || n.criadaEm) : 'anotações da gestão da frota'}</div></div>
+      <button class="gaveta-fechar" onclick="fecharFicha()">×</button>`);
+    htm('gaveta-corpo', secao('Anotação', `<div class="form-grade">
+        <div class="form-campo largo"><label>Título</label><input type="text" id="nota-titulo" value="${escAttr(n ? n.titulo : '')}"></div>
+        <div class="form-campo"><label>Categoria</label><select id="nota-categoria">
+          ${categorias.map(x => `<option value="${escAttr(x)}" ${n && n.categoria === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div>
+        <div class="form-campo"><label>Conteúdo sensível</label>
+          <select id="nota-sensivel"><option value="">Não</option><option value="1" ${n && n.sensivel ? 'selected' : ''}>Sim — ocultar até pedir</option></select></div>
+        <div class="form-campo largo"><label>Conteúdo</label><textarea id="nota-conteudo" rows="8" placeholder="uma linha por informação">${esc(conteudo)}</textarea></div>
+      </div>`) +
+      `<div class="form-acoes">
+        <button class="btn amarelo" id="btn-salvar-nota">${n ? 'Salvar' : 'Criar'}</button>
+        <button class="btn claro" onclick="fecharFicha()">Cancelar</button>
+        ${n && ESTADO.admin ? '<button class="btn claro" id="btn-excluir-nota" style="margin-left:auto; color:var(--vermelho)">Excluir</button>' : ''}
+      </div>`);
+    cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
+    document.body.style.overflow = 'hidden';
+
+    ouvir('btn-salvar-nota', 'click', () => {
+      const dados = { titulo: val('nota-titulo'), categoria: val('nota-categoria'),
+        conteudo: (el('nota-conteudo') || {}).value || '', sensivel: !!val('nota-sensivel') };
+      if (!dados.titulo.trim()) { toast('Informe o título.'); return; }
+      const btn = el('btn-salvar-nota'); btn.disabled = true; btn.textContent = 'Gravando…';
+      const run = servidor('salvarNota',
+        r => {
+          if (!r || !r.ok) { btn.disabled = false; btn.textContent = 'Salvar'; toast((r && r.erro) || 'Falha.', true); return; }
+          toast(r.novo ? 'Anotação criada.' : 'Anotação atualizada.');
+          fecharFicha(); ESTADO.notas = null; renderGestao();
+        },
+        e => { btn.disabled = false; btn.textContent = 'Salvar'; toast('Erro: ' + (e && e.message ? e.message : e), true); });
+      if (run) run.salvarNota(ESTADO.token, id || '', dados);
+    });
+    ouvir('btn-excluir-nota', 'click', () => {
+      if (!confirm('Excluir a anotação "' + n.titulo + '"?')) return;
+      const run = servidor('excluirNota',
+        r => { if (!r || !r.ok) { toast((r && r.erro) || 'Falha.', true); return; } toast('Excluída.'); fecharFicha(); ESTADO.notas = null; renderGestao(); },
+        e => toast('Erro: ' + (e && e.message ? e.message : e), true));
+      if (run) run.excluirNota(ESTADO.token, id);
+    });
+  };
+
+  // conteúdo sensível precisa ser buscado antes de editar
+  if (n && n.sensivel && !n.conteudo) {
+    const run = servidor('revelarNota',
+      r => preencher(r && r.ok ? r.conteudo : ''),
+      () => preencher(''));
+    if (run) run.revelarNota(ESTADO.token, id); else preencher('');
+    return;
+  }
+  preencher(n ? n.conteudo : '');
 }
 
 </script>

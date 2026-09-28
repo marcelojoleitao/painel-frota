@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.55.0';
+const CODIGO_VERSAO = '2.56.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -5751,6 +5751,150 @@ function excluirDemanda(token, id) {
     _logAcao_(p.ss, p.sessao.email, 'Excluir demanda', '', id, titulo);
     return { ok: true };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+
+/* ============================================================
+   ANOTAÇÕES — notas curtas de apoio à gestão da frota
+   Aba "AnotacoesGestao" na planilha-mãe. Substitui os bilhetes
+   espalhados: senhas de sistema, processos de referência, links,
+   pendências pontuais. Conteúdo marcado como sensível vem oculto
+   e só aparece quando o usuário pede.
+   ============================================================ */
+
+const NOTAS = {
+  aba: 'AnotacoesGestao',
+  cab: ['ID', 'Criada em', 'Autor', 'Categoria', 'Título', 'Conteúdo', 'Sensível', 'Atualizada em'],
+  categorias: ['Acessos e senhas', 'Processos de referência', 'Links úteis', 'Contatos', 'Garantias', 'Pendências', 'Geral']
+};
+
+function _abaNotas_() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  let aba = ss.getSheetByName(NOTAS.aba);
+  if (!aba) {
+    aba = ss.insertSheet(NOTAS.aba);
+    aba.getRange(1, 1, 1, NOTAS.cab.length).setValues([NOTAS.cab]);
+    aba.setFrozenRows(1);
+    aba.getRange(1, 1, 1, NOTAS.cab.length).setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF');
+    aba.setColumnWidth(5, 240); aba.setColumnWidth(6, 460);
+  }
+  return aba;
+}
+
+function _linhaNota_(aba, id) {
+  const n = aba.getLastRow();
+  if (n < 2) return -1;
+  const ids = aba.getRange(2, 1, n - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) if (String(ids[i][0]) === String(id)) return i + 2;
+  return -1;
+}
+
+/** Lista as anotações. O conteúdo sensível só vai junto se for pedido. */
+function lerNotas(token, comSensivel) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const aba = _abaNotas_();
+    const n = aba.getLastRow();
+    const lista = [];
+    if (n > 1) {
+      aba.getRange(2, 1, n - 1, NOTAS.cab.length).getValues().forEach(l => {
+        const titulo = String(l[4] || '').trim();
+        if (!titulo) return;
+        const sensivel = /sim|x|true|1/i.test(String(l[6] || ''));
+        lista.push({ id: String(l[0]), criadaEm: _dataTxt_(l[1]), autor: String(l[2] || ''),
+          categoria: String(l[3] || 'Geral'), titulo: titulo,
+          conteudo: (sensivel && !comSensivel) ? '' : String(l[5] || ''),
+          sensivel: sensivel, atualizadaEm: _dataTxt_(l[7]) });
+      });
+    }
+    return { ok: true, notas: lista, categorias: NOTAS.categorias };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Conteúdo de uma anotação sensível, sob demanda. */
+function revelarNota(token, id) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const aba = _abaNotas_();
+    const linha = _linhaNota_(aba, id);
+    if (linha < 0) return { ok: false, erro: 'Anotação não encontrada.' };
+    const conteudo = String(aba.getRange(linha, 6).getValue() || '');
+    _logAcao_(p.ss, p.sessao.email, 'Ver anotação sensível', '', id, String(aba.getRange(linha, 5).getValue() || ''));
+    return { ok: true, conteudo: conteudo };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Cria ou atualiza uma anotação. */
+function salvarNota(token, id, dados) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(15000); } catch (e) { return { ok: false, erro: 'Planilha ocupada.' }; }
+  try {
+    const titulo = String((dados || {}).titulo || '').trim();
+    if (!titulo) return { ok: false, erro: 'Informe o título.' };
+    const aba = _abaNotas_();
+    const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm');
+    let linha = id ? _linhaNota_(aba, id) : -1;
+    let novoId = id;
+    if (linha < 0) {
+      novoId = 'N' + Utilities.formatDate(new Date(), CONFIG.FUSO, 'yyMMddHHmmss');
+      linha = Math.max(aba.getLastRow() + 1, 2);
+      aba.getRange(linha, 1, 1, NOTAS.cab.length).setValues([[novoId, agora, p.sessao.email,
+        dados.categoria || 'Geral', titulo, dados.conteudo || '', dados.sensivel ? 'Sim' : '', agora]]);
+    } else {
+      aba.getRange(linha, 4, 1, 5).setValues([[dados.categoria || 'Geral', titulo,
+        dados.conteudo || '', dados.sensivel ? 'Sim' : '', agora]]);
+    }
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, p.sessao.email, id ? 'Editar anotação' : 'Criar anotação', '', novoId, titulo);
+    return { ok: true, id: novoId, novo: !id };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/** Exclui uma anotação. */
+function excluirNota(token, id) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (!p.sessao.admin) return { ok: false, erro: 'Apenas o administrador pode excluir.' };
+  try {
+    const aba = _abaNotas_();
+    const linha = _linhaNota_(aba, id);
+    if (linha < 0) return { ok: false, erro: 'Anotação não encontrada.' };
+    const titulo = String(aba.getRange(linha, 5).getValue() || '');
+    aba.deleteRow(linha);
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, p.sessao.email, 'Excluir anotação', '', id, titulo);
+    return { ok: true };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Traz o conteúdo da aba "Anotações" antiga para o formato novo. */
+function importarAnotacoesAntigas() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const origem = ss.getSheetByName('Anotações') || ss.getSheetByName('Anotacoes');
+  if (!origem) { Logger.log('Aba "Anotações" não encontrada.'); return; }
+  const valores = origem.getDataRange().getValues();
+  Logger.log('Aba encontrada: ' + origem.getName() + ' — ' + valores.length + ' linha(s), ' + (valores[0] || []).length + ' coluna(s).');
+  Logger.log('Primeiras linhas, para conferência:');
+  valores.slice(0, 8).forEach((l, i) => Logger.log('  ' + (i + 1) + ': ' + l.map(c => String(c || '').substring(0, 40)).join(' | ')));
+  const aba = _abaNotas_();
+  const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm');
+  const autor = Session.getEffectiveUser().getEmail();
+  const novas = [];
+  valores.forEach((l, i) => {
+    if (i === 0 && /TITULO|T[ÍI]TULO|ASSUNTO/i.test(String(l[0] || ''))) return;   // cabeçalho
+    const titulo = String(l[0] || '').trim();
+    const conteudo = l.slice(1).map(c => String(c || '').trim()).filter(Boolean).join(' • ');
+    if (!titulo && !conteudo) return;
+    const texto = (titulo + ' ' + conteudo).toLowerCase();
+    const sensivel = /senha|login|acesso|token|credencial/.test(texto);
+    novas.push(['N' + Utilities.formatDate(new Date(), CONFIG.FUSO, 'yyMMddHHmmss') + i, agora, autor,
+      sensivel ? 'Acessos e senhas' : 'Geral', titulo || conteudo.substring(0, 60), conteudo, sensivel ? 'Sim' : '', agora]);
+  });
+  if (!novas.length) { Logger.log('Nada a importar.'); return; }
+  aba.getRange(aba.getLastRow() + 1, 1, novas.length, NOTAS.cab.length).setValues(novas);
+  SpreadsheetApp.flush();
+  Logger.log(novas.length + ' anotação(ões) importada(s) para ' + NOTAS.aba + '. A aba antiga não foi alterada.');
+  return novas.length + ' importadas';
 }
 
 /* ============================================================
