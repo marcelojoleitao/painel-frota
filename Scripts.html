@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.56.0';
+const VERSAO_PAINEL = '2.56.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -83,6 +83,9 @@ const ESTADO = {
   subAcoes: 'executar', lote: null, fila: null, subDados: 'importar', subOS: 'panorama', nivelOS: 'n2', osEditadas: {},
   subPag: 'panorama', processo: null, compProcesso: {}, tituloEditado: {},
   subMultas: 'acompanhar', multas: null, projecao: null, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
+  filtroAceite: '', filtroOS: { unidade: '', oficina: '' }, filtroAceites: { unidade: '', oficina: '' },
+  subGestao: 'quadro', demandas: null, notas: null,
+  filtroGestao: { placa: '', responsavel: '', busca: '' }, filtroNotas: { categoria: '', busca: '' },
   ordemMulta: { campo: 'linha', dir: -1 },
   dados: null,
   veiculos: [],
