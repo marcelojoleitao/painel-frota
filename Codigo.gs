@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.59.4';
+const CODIGO_VERSAO = '2.60.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4269,16 +4269,25 @@ function _replicarFormulas_(aba, primeiraLinhaNova, qtdLinhas, colunasEscritas) 
    e família de peça, e sai em PDF em vez de escrever numa aba.
    ============================================================ */
 
-/** Placas com processo de acidente ainda em aberto (aba Acidentes: col. B preenchida, col. C vazia). */
+/**
+ * Placas com sinistro ainda em aberto: status "Em Processo" na aba Acidentes.
+ * É o que alerta no processo de pagamento da manutenção, porque o reparo pode
+ * vir a ser ressarcido por terceiro (IN PRF 40/2021, arts. 46 a 51).
+ */
 function _placasComAcidenteAberto_() {
   const mapa = {};
   try {
     const aba = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_ACIDENTES);
     if (!aba || aba.getLastRow() < 2) return mapa;
-    aba.getRange(2, 1, aba.getLastRow() - 1, 3).getValues().forEach(l => {
-      const placa = String(l[1] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-      const pago = String(l[2] || '').trim();
-      if (placa && !pago) mapa[placa] = String(l[0] || '').trim();   // col. A = referência do processo
+    const info = _colunasSinistro_(aba);
+    const valores = aba.getRange(2, 1, aba.getLastRow() - 1, info.largura).getValues();
+    valores.forEach(l => {
+      const placa = String(l[info.col.placa] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      if (!placa) return;
+      const status = _normCab_(l[info.col.status]);
+      // sem status preenchido, mantém o comportamento antigo: considera em aberto
+      const emAberto = status ? status.indexOf('EM PROCESSO') === 0 : true;
+      if (emAberto) mapa[placa] = String(l[info.col.processo] || '').trim();
     });
   } catch (e) { Logger.log('Aba Acidentes: ' + e); }
   return mapa;
@@ -5643,6 +5652,142 @@ function migrarResumoGlosaGravar() { return migrarResumoGlosa(true); }
 /** Insere a linha "Outros descontos" nas tabelas dos termos de atesto. */
 function ajustarTabelasModelosPagamentoAplicar() { return ajustarTabelasModelosPagamento(true); }
 
+
+
+/* ============================================================
+   SINISTROS — acompanhamento dos processos de dano a viatura
+   Aba "Acidentes" na planilha-mãe. A coluna Status define o que
+   ainda pesa na manutenção: "Em Processo" é o que alerta no
+   processo de pagamento (IN PRF 40/2021, arts. 43 a 54).
+   ============================================================ */
+
+const SINISTROS = {
+  status: ['Em Processo', 'Pago por Terceiro', 'Pago via PRF'],
+  // nome na planilha → campo usado pelo painel
+  campos: {
+    processo: 'Processo', placa: 'Placa', observacao: 'Observação', total: 'Total',
+    pecas: 'Valor em Peças', mo: 'Valor e Mão de Obra', status: 'Status', data: 'Data do Sinistro'
+  },
+  // colunas úteis que o painel usa se existirem (criadas por prepararColunasSinistro)
+  extras: {
+    tipo: 'Tipo', condutor: 'Condutor', unidade: 'Unidade', terceiro: 'Terceiro/Seguradora',
+    comunicacao: 'Data da Comunicação', fipe: 'Valor FIPE', ressarcimento: 'Ressarcimento',
+    conclusao: 'Data de Conclusão'
+  },
+  tipos: ['Acidente', 'Incidente', 'Avaria', 'Furto/Roubo', 'Fenômeno natural']
+};
+
+function _abaSinistros_() {
+  const aba = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_ACIDENTES);
+  if (!aba) throw new Error('Aba "' + CONFIG.ABA_ACIDENTES + '" não encontrada.');
+  return aba;
+}
+
+/** Onde está cada campo na aba, pelo nome do cabeçalho. */
+function _colunasSinistro_(aba) {
+  const cab = aba.getRange(1, 1, 1, Math.max(aba.getLastColumn(), 8)).getValues()[0].map(c => _normCab_(c));
+  const achar = nome => cab.indexOf(_normCab_(nome));
+  const col = {};
+  Object.keys(SINISTROS.campos).forEach(k => { col[k] = achar(SINISTROS.campos[k]); });
+  Object.keys(SINISTROS.extras).forEach(k => { const i = achar(SINISTROS.extras[k]); if (i >= 0) col[k] = i; });
+  return { col: col, largura: Math.max(aba.getLastColumn(), 8) };
+}
+
+/** Acrescenta as colunas extras à direita, sem mexer nas existentes. */
+function prepararColunasSinistro() {
+  const aba = _abaSinistros_();
+  const c = _colunasSinistro_(aba);
+  let prox = aba.getLastColumn() + 1;
+  const criadas = [];
+  Object.keys(SINISTROS.extras).forEach(k => {
+    if (c.col[k] !== undefined && c.col[k] >= 0) return;
+    aba.getRange(1, prox).setValue(SINISTROS.extras[k]).setFontWeight('bold');
+    criadas.push(SINISTROS.extras[k]);
+    prox++;
+  });
+  SpreadsheetApp.flush();
+  Logger.log(criadas.length ? 'Colunas criadas: ' + criadas.join(', ') : 'Todas as colunas extras já existiam.');
+  limparCache();
+  return criadas.join(', ');
+}
+
+/** Lista os sinistros com o cruzamento da viatura. */
+function lerSinistros(token) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const aba = _abaSinistros_();
+    const info = _colunasSinistro_(aba);
+    const n = aba.getLastRow();
+    const lista = [];
+    if (n > 1) {
+      const valores = aba.getRange(2, 1, n - 1, info.largura).getValues();
+      valores.forEach((l, i) => {
+        const placa = String(l[info.col.placa] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+        const processo = String(l[info.col.processo] || '').trim();
+        if (!placa && !processo) return;
+        const item = { linha: i + 2, placa: placa, processo: processo,
+          observacao: String(l[info.col.observacao] || '').trim(),
+          total: _num_(l[info.col.total]) || 0,
+          pecas: _num_(l[info.col.pecas]) || 0,
+          mo: _num_(l[info.col.mo]) || 0,
+          status: String(l[info.col.status] || '').trim(),
+          data: _dataBR_(l[info.col.data]) };
+        Object.keys(SINISTROS.extras).forEach(k => {
+          if (info.col[k] === undefined || info.col[k] < 0) return;
+          const v = l[info.col[k]];
+          item[k] = /^data|conclusao|comunicacao/i.test(k) ? _dataBR_(v) : String(v === null || v === undefined ? '' : v).trim();
+        });
+        lista.push(item);
+      });
+    }
+    return { ok: true, sinistros: lista, status: SINISTROS.status, tipos: SINISTROS.tipos,
+      extras: Object.keys(SINISTROS.extras).filter(k => info.col[k] !== undefined && info.col[k] >= 0),
+      rotulosExtras: SINISTROS.extras };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Cria ou edita um registro de sinistro. */
+function salvarSinistro(token, linha, dados) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (!p.sessao.admin) return { ok: false, erro: 'Apenas o administrador pode registrar sinistros.' };
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Planilha ocupada.' }; }
+  try {
+    const aba = _abaSinistros_();
+    const info = _colunasSinistro_(aba);
+    const placa = String((dados || {}).placa || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    if (!placa) return { ok: false, erro: 'Informe a placa.' };
+    let alvo = parseInt(linha, 10) || 0;
+    const novo = !alvo;
+    if (novo) alvo = Math.max(aba.getLastRow() + 1, 2);
+
+    const gravar = (campo, valor) => {
+      const c = info.col[campo];
+      if (c === undefined || c < 0) return;
+      if (aba.getRange(alvo, c + 1).getFormula()) return;      // respeita fórmula
+      aba.getRange(alvo, c + 1).setValue(valor);
+    };
+    gravar('processo', String(dados.processo || '').trim());
+    gravar('placa', placa);
+    gravar('observacao', String(dados.observacao || '').trim());
+    gravar('pecas', _parseNumeroBR_(dados.pecas) || 0);
+    gravar('mo', _parseNumeroBR_(dados.mo) || 0);
+    // o total é somado aqui quando a coluna não for fórmula
+    gravar('total', (_parseNumeroBR_(dados.pecas) || 0) + (_parseNumeroBR_(dados.mo) || 0));
+    gravar('status', String(dados.status || SINISTROS.status[0]).trim());
+    gravar('data', _dataBR_(dados.data));
+    Object.keys(SINISTROS.extras).forEach(k => {
+      if (dados[k] === undefined) return;
+      gravar(k, /^data|conclusao|comunicacao/i.test(k) ? _dataBR_(dados[k]) : String(dados[k] || '').trim());
+    });
+
+    SpreadsheetApp.flush();
+    limparCache();
+    _logAcao_(p.ss, p.sessao.email, novo ? 'Registrar sinistro' : 'Editar sinistro', placa,
+      String(dados.processo || ''), String(dados.status || '') + ' • ' + _moedaBR_((_parseNumeroBR_(dados.pecas) || 0) + (_parseNumeroBR_(dados.mo) || 0)));
+    return { ok: true, linha: alvo, novo: novo };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
 
 /* ============================================================
    GESTÃO DE DEMANDAS — quadro com três fases

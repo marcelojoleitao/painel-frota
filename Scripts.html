@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.59.4';
+const VERSAO_PAINEL = '2.60.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -84,7 +84,7 @@ const ESTADO = {
   subPag: 'panorama', processo: null, compProcesso: {}, tituloEditado: {},
   subMultas: 'acompanhar', multas: null, projecao: null, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
   filtroAceite: '', filtroOS: { unidade: '', oficina: '' }, filtroAceites: { unidade: '', oficina: '' },
-  subGestao: 'quadro', demandas: null, notas: null, soComDemanda: false,
+  subGestao: 'quadro', demandas: null, notas: null, soComDemanda: false, sinistros: null, filtroSinistro: { status: '', busca: '' },
   filtroGestao: { placa: '', responsavel: '', busca: '' }, filtroNotas: { categoria: '', busca: '' },
   ordemMulta: { campo: 'linha', dir: -1 },
   dados: null,
@@ -4546,6 +4546,7 @@ function carregarDemandasEmFundo() {
 function renderGestao() {
   const c = el('gestao-conteudo'); if (!c) return;
   if (ESTADO.subGestao === 'notas') return renderNotas(c);
+  if (ESTADO.subGestao === 'sinistros') return renderSinistros(c);
   if (!ESTADO.demandas) {
     c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Carregando o quadro…</div></div>';
     const run = servidor('lerDemandas',
@@ -4989,6 +4990,182 @@ function abrirNota(id) {
     return;
   }
   preencher(n ? n.conteudo : '');
+}
+
+
+/* ---------------- sinistros ---------------- */
+function renderSinistros(c) {
+  if (!ESTADO.sinistros) {
+    c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Carregando sinistros…</div></div>';
+    const run = servidor('lerSinistros',
+      r => {
+        if (!r || !r.ok) { c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha ao ler.') + '</div></div>'; return; }
+        ESTADO.sinistros = r; renderSinistros(c);
+      },
+      e => { c.innerHTML = '<div class="cartao largo"><div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div></div>'; });
+    if (run) run.lerSinistros(ESTADO.token);
+    return;
+  }
+  const dados = ESTADO.sinistros;
+  const f = ESTADO.filtroSinistro;
+  const norm = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+  const emProcesso = s2 => norm(s2.status).indexOf('EM PROCESSO') === 0 || !s2.status;
+
+  const todos = dados.sinistros.filter(s2 => {
+    if (f.status && s2.status !== f.status) return false;
+    if (f.busca) {
+      const alvo = (s2.placa + ' ' + s2.processo + ' ' + s2.observacao + ' ' + (s2.condutor || '') + ' ' + (s2.terceiro || '')).toLowerCase();
+      if (alvo.indexOf(f.busca.toLowerCase()) < 0) return false;
+    }
+    return true;
+  }).sort((a, b) => chaveData(b.data).localeCompare(chaveData(a.data)) || b.total - a.total);
+
+  const abertos = dados.sinistros.filter(emProcesso);
+  const porTerceiro = dados.sinistros.filter(s2 => /TERCEIRO/.test(norm(s2.status)));
+  const viaPrf = dados.sinistros.filter(s2 => /VIA PRF/.test(norm(s2.status)));
+  const soma = arr => arr.reduce((t, x) => t + (x.total || (x.pecas + x.mo) || 0), 0);
+
+  const kpiF = (chave, rotulo, arr, cor) =>
+    `<div class="kpi ${cor || ''} ${f.status === chave ? 'selecionado' : ''}" ${chave ? `data-fsin="${escAttr(chave)}"` : ''} style="${chave ? 'cursor:pointer' : ''}">
+      <div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${fmtInt(arr.length)}</div>
+      <div class="kpi-sub">${fmtMoeda(soma(arr))}</div></div>`;
+
+  c.innerHTML = `
+    <div class="kpis">
+      ${kpiF('', 'Sinistros registrados', dados.sinistros, '')}
+      ${kpiF('Em Processo', 'Em processo', abertos, abertos.length ? 'ambar' : 'verde')}
+      ${kpiF('Pago por Terceiro', 'Pagos por terceiro', porTerceiro, 'verde')}
+      ${kpiF('Pago via PRF', 'Pagos via PRF', viaPrf, viaPrf.length ? 'vermelho' : '')}
+      ${kpi('Viaturas envolvidas', new Set(dados.sinistros.map(s2 => s2.placa).filter(Boolean)).size, 'placas distintas', '', null, true)}
+    </div>
+
+    <div class="cartao largo" style="margin-bottom:12px">
+      <div class="os-barra-acoes">
+        <div class="busca" style="max-width:280px"><input id="sin-busca" type="search" placeholder="placa, processo, observação…" value="${escAttr(f.busca)}"></div>
+        ${(f.status || f.busca) ? '<button class="btn claro" id="sin-limpar">Limpar</button>' : ''}
+        <div style="flex:1"></div>
+        <button class="btn claro" id="btn-exportar-sin">⤓ Exportar</button>
+        ${ESTADO.admin ? '<button class="btn amarelo" id="btn-novo-sinistro">+ Novo sinistro</button>' : ''}
+      </div>
+      <div class="cartao-dica">Sinistros marcados como <b>Em processo</b> alertam no processo de pagamento da manutenção: o reparo pode vir a ser ressarcido por terceiro, e não deve ser pago sem essa definição.</div>
+    </div>
+
+    <div class="cartao largo">
+      <div class="cartao-cab"><h3>Sinistros</h3><small>${todos.length} registro(s)</small></div>
+      <div class="tabela-rol" style="max-height:600px">
+        <table class="tabela-multas tabela-aceites">
+          <colgroup><col style="width:9%"><col style="width:16%"><col style="width:12%"><col style="width:8%">
+            <col style="width:9%"><col style="width:9%"><col style="width:9%"><col style="width:12%"><col></colgroup>
+          <thead><tr><th>Placa</th><th>Processo</th><th>Viatura</th><th>Data</th>
+            <th style="text-align:right">Peças</th><th style="text-align:right">Mão de obra</th><th style="text-align:right">Total</th>
+            <th>Situação</th><th>Observação</th></tr></thead>
+          <tbody>
+          ${todos.slice(0, 400).map(s2 => {
+            const v = viaturaDaMulta(s2.placa);
+            return `<tr class="${emProcesso(s2) ? 'cobrada' : ''}">
+              <td>${v ? `<a class="link-btn" style="font-family:var(--fonte-dados); font-weight:700" onclick="abrirFicha('${escAttr(v.placa)}')">${esc(s2.placa)}</a>` : esc(s2.placa || '—')}</td>
+              <td style="font-family:var(--fonte-dados); font-size:11.5px">${esc(s2.processo || '—')}</td>
+              <td>${esc(v ? (v.modeloCurto || v.modelo) : '')}${v && v.unidadeCurta ? `<div class="vinculo">${esc(v.unidadeCurta)}</div>` : ''}</td>
+              <td class="data-curta">${esc(s2.data || '—')}</td>
+              <td class="num" style="text-align:right">${s2.pecas ? fmtMoeda(s2.pecas) : '—'}</td>
+              <td class="num" style="text-align:right">${s2.mo ? fmtMoeda(s2.mo) : '—'}</td>
+              <td class="num" style="text-align:right"><b>${fmtMoeda(s2.total || (s2.pecas + s2.mo))}</b></td>
+              <td><span class="status-chip ${emProcesso(s2) ? 'andamento' : /TERCEIRO/.test(norm(s2.status)) ? 'deferido' : 'indeferido'}">${esc(s2.status || 'sem status')}</span>
+                ${ESTADO.admin ? `<div><button class="link-btn" data-editar-sin="${s2.linha}">editar</button></div>` : ''}</td>
+              <td>${s2.observacao ? `<div class="obs-multa" title="${escAttr(s2.observacao)}">${esc(s2.observacao)}</div>` : ''}
+                ${s2.terceiro ? `<div class="vinculo">terceiro: ${esc(s2.terceiro)}</div>` : ''}</td>
+            </tr>`;
+          }).join('') || '<tr><td colspan="9"><div class="vazio">Nenhum sinistro nesta seleção</div></td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+
+  c.querySelectorAll('.kpi[data-fsin]').forEach(k => k.addEventListener('click', () => {
+    ESTADO.filtroSinistro.status = ESTADO.filtroSinistro.status === k.dataset.fsin ? '' : k.dataset.fsin;
+    renderSinistros(c);
+  }));
+  ouvir('sin-limpar', 'click', () => { ESTADO.filtroSinistro = { status: '', busca: '' }; renderSinistros(c); });
+  const busca = el('sin-busca');
+  if (busca) busca.addEventListener('input', () => {
+    ESTADO.filtroSinistro.busca = busca.value;
+    clearTimeout(ESTADO._ts);
+    ESTADO._ts = setTimeout(() => { const pos = busca.selectionStart; renderSinistros(c); const n = el('sin-busca'); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} } }, 400);
+  });
+  ouvir('btn-novo-sinistro', 'click', () => abrirSinistro(null));
+  c.querySelectorAll('button[data-editar-sin]').forEach(b => b.addEventListener('click', () => abrirSinistro(parseInt(b.dataset.editarSin, 10))));
+  ouvir('btn-exportar-sin', 'click', () => exportarCsv(
+    'sinistros_' + new Date().toISOString().substring(0, 10) + '.csv',
+    ['Placa', 'Processo', 'Data', 'Peças', 'Mão de obra', 'Total', 'Situação', 'Observação'].concat(dados.extras.map(k => dados.rotulosExtras[k])),
+    todos.map(s2 => [s2.placa, s2.processo, s2.data, (s2.pecas || 0).toFixed(2).replace('.', ','),
+      (s2.mo || 0).toFixed(2).replace('.', ','), (s2.total || 0).toFixed(2).replace('.', ','),
+      s2.status, s2.observacao].concat(dados.extras.map(k => s2[k] || '')))));
+  ajustarKpis();
+}
+
+function abrirSinistro(linha) {
+  const dados = ESTADO.sinistros;
+  const s2 = linha ? dados.sinistros.find(x => x.linha === linha) : null;
+  const v = s2 ? viaturaDaMulta(s2.placa) : null;
+  const campoExtra = (k, rotulo) => {
+    if (dados.extras.indexOf(k) < 0) return '';
+    if (k === 'tipo') return `<div class="form-campo" data-ex="${k}"><label>${esc(rotulo)}</label>
+      <select data-s><option value=""></option>${dados.tipos.map(t => `<option value="${escAttr(t)}" ${s2 && s2.tipo === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>`;
+    return `<div class="form-campo" data-ex="${k}"><label>${esc(rotulo)}</label>
+      <input type="text" value="${escAttr(s2 ? s2[k] || '' : '')}" data-s></div>`;
+  };
+
+  htm('gaveta-cab', `<div class="titulo"><h2>${s2 ? 'Editar sinistro' : 'Novo sinistro'}</h2>
+    <div class="sub">${s2 ? esc(s2.placa) + (s2.processo ? ' • ' + esc(s2.processo) : '') : 'registro de dano a viatura'}</div></div>
+    <button class="gaveta-fechar" onclick="fecharFicha()">×</button>`);
+  htm('gaveta-corpo',
+    secao('Sinistro', `<div class="form-grade">
+      <div class="form-campo" data-c="placa"><label>Placa</label>
+        <input type="text" value="${escAttr(s2 ? s2.placa : '')}" list="lista-placas-sin" data-s style="text-transform:uppercase">
+        <datalist id="lista-placas-sin">${(ESTADO.veiculos || []).map(x => `<option value="${escAttr(x.placa)}">${esc(x.modeloCurto || x.modelo || '')}</option>`).join('')}</datalist></div>
+      <div class="form-campo" data-c="processo"><label>Processo SEI</label><input type="text" value="${escAttr(s2 ? s2.processo : '')}" data-s style="font-family:var(--fonte-dados)"></div>
+      <div class="form-campo" data-c="data"><label>Data do sinistro</label><input type="text" placeholder="dd/mm/aaaa" value="${escAttr(s2 ? s2.data : '')}" data-s></div>
+      <div class="form-campo" data-c="status"><label>Situação</label><select data-s>
+        ${dados.status.map(x => `<option value="${escAttr(x)}" ${s2 && s2.status === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div>
+      <div class="form-campo" data-c="pecas"><label>Valor em peças</label><input type="text" value="${escAttr(s2 && s2.pecas ? fmtDec(s2.pecas) : '')}" data-s class="num-campo"></div>
+      <div class="form-campo" data-c="mo"><label>Valor em mão de obra</label><input type="text" value="${escAttr(s2 && s2.mo ? fmtDec(s2.mo) : '')}" data-s class="num-campo"></div>
+      ${campoExtra('tipo', 'Tipo')}${campoExtra('condutor', 'Condutor')}${campoExtra('unidade', 'Unidade')}
+      ${campoExtra('terceiro', 'Terceiro/Seguradora')}${campoExtra('comunicacao', 'Data da comunicação')}
+      ${campoExtra('fipe', 'Valor FIPE')}${campoExtra('ressarcimento', 'Ressarcimento')}${campoExtra('conclusao', 'Data de conclusão')}
+      <div class="form-campo largo" data-c="observacao"><label>Observação</label><textarea rows="3" data-s>${esc(s2 ? s2.observacao : '')}</textarea></div>
+    </div>`) +
+    (v ? secao('Viatura', `<div class="grade-dados">
+      <div class="dado"><div class="k">Modelo</div><div class="v" style="font-size:14px">${esc(v.modelo)}</div></div>
+      <div class="dado"><div class="k">Unidade</div><div class="v" style="font-size:14px">${esc(v.unidade || '—')}</div></div>
+      <div class="dado"><div class="k">Status</div><div class="v" style="font-size:14px">${esc(v.status || '—')}</div></div>
+      <div class="dado"><div class="k">Ano</div><div class="v" style="font-size:14px">${esc((v.anoFab || '') + (v.anoMod ? '/' + v.anoMod : ''))}</div></div>
+    </div>` ) : '') +
+    `<div class="form-acoes">
+      <button class="btn amarelo" id="btn-salvar-sin">${s2 ? 'Salvar' : 'Registrar'}</button>
+      <button class="btn claro" onclick="fecharFicha()">Cancelar</button>
+    </div>`);
+  cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
+  document.body.style.overflow = 'hidden';
+
+  ouvir('btn-salvar-sin', 'click', () => {
+    const dadosEnvio = {};
+    document.querySelectorAll('#gaveta-corpo .form-campo[data-c]').forEach(fc => {
+      const i = fc.querySelector('[data-s]'); if (i) dadosEnvio[fc.dataset.c] = i.value;
+    });
+    document.querySelectorAll('#gaveta-corpo .form-campo[data-ex]').forEach(fc => {
+      const i = fc.querySelector('[data-s]'); if (i) dadosEnvio[fc.dataset.ex] = i.value;
+    });
+    if (!dadosEnvio.placa) { toast('Informe a placa.'); return; }
+    const btn = el('btn-salvar-sin'); btn.disabled = true; btn.textContent = 'Gravando…';
+    const run = servidor('salvarSinistro',
+      r => {
+        if (!r || !r.ok) { btn.disabled = false; btn.textContent = 'Salvar'; toast((r && r.erro) || 'Falha.', true); return; }
+        toast(r.novo ? 'Sinistro registrado.' : 'Sinistro atualizado.');
+        fecharFicha(); ESTADO.sinistros = null; renderGestao();
+      },
+      e => { btn.disabled = false; btn.textContent = 'Salvar'; toast('Erro: ' + (e && e.message ? e.message : e), true); });
+    if (run) run.salvarSinistro(ESTADO.token, linha || 0, dadosEnvio);
+  });
 }
 
 </script>
