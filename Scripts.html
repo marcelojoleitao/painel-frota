@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.64.1';
+const VERSAO_PAINEL = '2.64.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2973,7 +2973,7 @@ function renderOSAcompanhar(lista) {
     ESTADO.filtroOS[b.dataset.limpa] = '';
     renderOSAcompanhar(ESTADO.filtrado);
   }));
-  ouvir('btn-exportar-os', 'click', () => exportarCsv(
+  ouvir('btn-exportar-os', 'click', () => baixarCsv(
     'ordens_de_servico_' + new Date().toISOString().substring(0, 10) + '.csv',
     ['OS', 'Placa', 'Marca/Modelo', 'Unidade', 'Oficina', 'Data', 'Orçado', 'Situação', 'Aprovação', 'Observações', 'Diligência', 'Relato', 'Justificativa'],
     selecionadas.map(x => [x.o.os, x.o.placa, x.modeloCompleto || x.modelo, x.unidade, x.o.oficina, (x.o.data || '').substring(0, 10),
@@ -3573,7 +3573,7 @@ ${cabecalho('protocolo', 'Protocolo')}<th>Observações</th>${cabecalho('status'
   }
   ouvir('multa-limpar', 'click', () => { ESTADO.filtroMulta = { status: '', orgao: '', busca: '', especial: '' }; renderMultas(); });
   ouvir('btn-nova-multa', 'click', () => abrirFormMulta(null));
-  ouvir('btn-exportar-multas', 'click', () => exportarCsv(
+  ouvir('btn-exportar-multas', 'click', () => baixarCsv(
     'multas_' + new Date().toISOString().substring(0, 10) + '.csv',
     ['Linha', 'Tipo', 'Data da infração', 'AI', 'AI originário', 'Placa', 'Órgão', 'Processo', 'Enquadramento', 'Protocolo', 'Status', 'Data da defesa', 'Em cobrança', 'Observações'],
     filtradas.map(m => [m.linha, m.tipo, dataBR(m.dataInfracao), m.ai, m.aiOriginario, m.placa, m.orgao, m.processo,
@@ -4548,7 +4548,7 @@ function renderAceites(lista) {
     ESTADO.filtroAceites[b.dataset.limpaa] = '';
     renderAceites(ESTADO.filtrado);
   }));
-  ouvir('btn-exportar-aceites', 'click', () => exportarCsv(
+  ouvir('btn-exportar-aceites', 'click', () => baixarCsv(
     'aceites_' + new Date().toISOString().substring(0, 10) + '.csv',
     ['OS', 'Placa', 'Modelo', 'Unidade', 'Oficina', 'Aprovação', 'Início', 'Conclusão', 'Prazo p/ aceite', 'Dias restantes', 'Valor', 'Situação', 'Observações'],
     ordenados.map(a => [a.os, a.placa, a.modeloReal, a.unidadeReal, a.oficinaReal, (a.data || '').substring(0, 10),
@@ -4558,8 +4558,9 @@ function renderAceites(lista) {
 }
 
 
-/** Exporta para CSV o que está na tela (respeita nível, unidade e oficina). */
-function exportarCsv(nome, colunas, linhas) {
+/** Exporta uma lista qualquer para CSV. A exportação da tela de Viaturas é a
+    exportarCsv(), que usa as colunas visíveis — esta aqui recebe as colunas. */
+function baixarCsv(nome, colunas, linhas) {
   const escapar = v => {
     const t = String(v === null || v === undefined ? '' : v).replace(/"/g, '""');
     return /[";\n]/.test(t) ? '"' + t + '"' : t;
@@ -4746,7 +4747,7 @@ function desenharQuadro(c) {
     clearTimeout(ESTADO._tg);
     ESTADO._tg = setTimeout(() => { const pos = busca.selectionStart; renderGestao(); const n = el('gest-busca'); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} } }, 400);
   });
-  ouvir('btn-exportar-dem', 'click', () => exportarCsv(
+  ouvir('btn-exportar-dem', 'click', () => baixarCsv(
     'demandas_' + new Date().toISOString().substring(0, 10) + '.csv',
     ['ID', 'Fase', 'Prioridade', 'Título', 'Descrição', 'Placa', 'Processo SEI', 'Responsável', 'Prazo', 'Criada em', 'Atualizada em', 'Concluída em', 'Anotações'],
     todas.map(d => [d.id, d.fase, d.prioridade, d.titulo, d.descricao, (d.placas || [d.placa]).filter(Boolean).join(' '), d.sei || '', d.responsavel, d.prazo,
@@ -5190,7 +5191,7 @@ function renderSinistros(c) {
   });
   ouvir('btn-novo-sinistro', 'click', () => abrirSinistro(null));
   c.querySelectorAll('button[data-editar-sin]').forEach(b => b.addEventListener('click', () => abrirSinistro(parseInt(b.dataset.editarSin, 10))));
-  ouvir('btn-exportar-sin', 'click', () => exportarCsv(
+  ouvir('btn-exportar-sin', 'click', () => baixarCsv(
     'sinistros_' + new Date().toISOString().substring(0, 10) + '.csv',
     ['Placa', 'Processo', 'Data', 'Peças', 'Mão de obra', 'Total', 'Situação', 'Observação'].concat(dados.extras.map(k => dados.rotulosExtras[k])),
     todos.map(s2 => [s2.placa, s2.processo, s2.data, (s2.pecas || 0).toFixed(2).replace('.', ','),
@@ -5552,7 +5553,7 @@ function renderMultasCobranca(c) {
     if (!ESTADO.multas) { toast('Carregando as bases de multas…'); const run = servidor('lerMultas', r => { if (r && r.ok) { ESTADO.multas = r; abrirFormMultaCom(ai, placa); } }, () => {}); if (run) run.lerMultas(ESTADO.token); return; }
     abrirFormMultaCom(ai, placa);
   }));
-  ouvir('btn-exportar-cob', 'click', () => exportarCsv(
+  ouvir('btn-exportar-cob', 'click', () => baixarCsv(
     'multas_em_cobranca_' + new Date().toISOString().substring(0, 10) + '.csv',
     ['AI', 'Placa', 'Viatura', 'Unidade', 'Status da VTR', 'Uso', 'Propriedade', 'Exercício', 'Licenciamento vence', 'Abastecimento recente', 'Rodando irregular', 'Infração', 'Descrição', 'Vencimento', 'Valor', 'A pagar', 'Consulta em', 'Registrada', 'Status', 'Enquadramento', 'Processo'],
     todos.map(x => [x.ai, x.placa, x.modelo, x.unidade, x.statusVtr, x.uso || '', x.propriedade || '', x.anoEx || '', x.vencLic || '',
