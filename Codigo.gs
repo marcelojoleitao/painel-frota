@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.61.3';
+const CODIGO_VERSAO = '2.61.4';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -32,7 +32,7 @@ const CONFIG = {
   COL_LOGIN_NOME:  3,   // C  SERVIDORES
   COL_LOGIN_LOT:   6,   // F  LOTAÇÃO ATUAL
   COL_LOGIN_EMAIL: 7,   // G  E-MAIL
-  ADMINS:         ['marcelo.leitao@prf.gov.br'],
+  ADMINS:         ['marcelo.leitao@prf.gov.br', 'luciano.savi@prf.gov.br'],
   SESSAO_SEG:     6 * 3600,
 
   // Ordens de serviço (planilha base). Se o nome não bater, o app procura pelo cabeçalho.
