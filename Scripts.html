@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.59.3';
+const VERSAO_PAINEL = '2.59.4';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2901,18 +2901,6 @@ function renderOSAcompanhar(lista) {
       ${NIVEIS_OS.filter(n => contagem[n.k]).map(n => `<button class="subaba ${nivel === n.k ? 'ativa' : ''}" data-nivel="${n.k}">${esc(n.rotulo)}<span class="n">${contagem[n.k]}</span></button>`).join('')}
       ${contagem['outros'] ? `<button class="subaba ${nivel === 'outros' ? 'ativa' : ''}" data-nivel="outros">Outros<span class="n">${contagem['outros']}</span></button>` : ''}
       <button class="subaba ${nivel === 'todas' ? 'ativa' : ''}" data-nivel="todas">Todas<span class="n">${todas.length}</span></button>
-    </div>
-
-    <div class="cartao largo" style="margin-bottom:12px">
-      <div class="cartao-cab"><h3>Situações encontradas na coluna I</h3><small>o que a planilha traz, com a contagem de cada uma</small></div>
-      <div style="display:flex; gap:6px; flex-wrap:wrap">
-        ${(() => {
-          const mapa = new Map();
-          todos.forEach(a => mapa.set(a.status || '(sem status)', (mapa.get(a.status || '(sem status)') || 0) + 1));
-          return Array.from(mapa.entries()).sort((x, y) => y[1] - x[1])
-            .map(([k, v]) => `<span class="dem-tag" style="font-size:11.5px; padding:3px 8px">${esc(k)} <b>${v}</b></span>`).join('');
-        })()}
-      </div>
     </div>
 
     <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); margin-bottom:14px">
