@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.59.0';
+const VERSAO_PAINEL = '2.59.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4582,7 +4582,10 @@ function desenharQuadro(c) {
         draggable="true" data-id="${escAttr(d.id)}">
       <div class="dem-titulo">${esc(d.titulo)}</div>
       <div class="dem-meta">
-        ${d.placa ? `<span class="dem-tag placa" title="${escAttr(v ? v.modelo : '')}">${esc(d.placa)}</span>` : '<span class="dem-tag geral">frota</span>'}
+        ${d.placa
+          ? `<span class="dem-tag placa" title="${escAttr(v ? v.modelo + (v.unidade ? ' • ' + v.unidade : '') : 'viatura fora do cadastro')}">${esc(d.placa)}</span>
+             ${v ? `<span class="dem-tag modelo">${esc(v.modeloCurto || v.modelo)}</span>` : ''}`
+          : '<span class="dem-tag geral">frota</span>'}
         ${d.prioridade !== 'Normal' ? `<span class="dem-tag prio">${esc(d.prioridade)}</span>` : ''}
         ${d.responsavel ? `<span class="dem-tag">${esc(d.responsavel)}</span>` : ''}
         ${d.prazo ? `<span class="dem-tag ${atrasada(d) ? 'venceu' : 'prazo'}">${esc(d.prazo)}</span>` : ''}
