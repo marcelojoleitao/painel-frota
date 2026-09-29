@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.58.0';
+const VERSAO_PAINEL = '2.58.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -84,7 +84,7 @@ const ESTADO = {
   subPag: 'panorama', processo: null, compProcesso: {}, tituloEditado: {},
   subMultas: 'acompanhar', multas: null, projecao: null, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
   filtroAceite: '', filtroOS: { unidade: '', oficina: '' }, filtroAceites: { unidade: '', oficina: '' },
-  subGestao: 'quadro', demandas: null, notas: null,
+  subGestao: 'quadro', demandas: null, notas: null, soComDemanda: false,
   filtroGestao: { placa: '', responsavel: '', busca: '' }, filtroNotas: { categoria: '', busca: '' },
   ordemMulta: { campo: 'linha', dir: -1 },
   dados: null,
@@ -197,7 +197,8 @@ function passaDim(v, k) {
 function aplicar() {
   const dims = Object.keys(ESTADO.filtros).filter(k => ESTADO.filtros[k].size > 0);
   ESTADO.base = ESTADO.veiculos.filter(passaBase);
-  ESTADO.filtrado = ESTADO.base.filter(v => dims.every(k => passaDim(v, k)));
+  ESTADO.filtrado = ESTADO.base.filter(v => dims.every(k => passaDim(v, k)))
+    .filter(v => !ESTADO.soComDemanda || demandasAbertas(v.placa).length);
   ESTADO.porDim = {};
   DIMENSOES.forEach(d => {
     const outras = dims.filter(k => k !== d.k);
@@ -334,6 +335,7 @@ function mudarAba(aba) {
   if ((aba === 'acoes' || aba === 'dados' || aba === 'multas') && !ESTADO.admin) aba = 'painel';
   if (aba === 'os') setTimeout(ajustarAlturasOS, 60);
   setTimeout(ajustarFiltrosLaterais, 0);
+  if (aba === 'viaturas' || aba === 'painel') carregarDemandasEmFundo();
   ESTADO.aba = aba;
   document.querySelectorAll('#abas .topo-aba').forEach(b => b.classList.toggle('ativa', b.dataset.aba === aba));
   ['painel', 'viaturas', 'uso', 'manut', 'os', 'pagamentos', 'patrimonio', 'gestao', 'acoes', 'multas', 'dados'].forEach(a => cls('aba-' + a, 'oculto', a !== aba));
@@ -585,7 +587,12 @@ function celula(v, c) {
     case 'simnao': return `<td class="${x === 'Sim' ? 'sim' : 'nao'}">${x || '—'}</td>`;
     case 'lic': return `<td class="${x === 'Atrasado' ? 'alerta-txt' : x === 'Em dia' ? 'ok-txt' : ''}">${esc(x || '—')}</td>`;
     case 'mono': return `<td style="font-family:var(--fonte-dados)">${esc(x || '—')}</td>`;
-    case 'docs': { const n = pdfsDaViatura(v).length; return `<td class="acoes">${iconeDoc(v.linkTomb, 'Tombamento (PDF)', icoPdf())}${iconeDoc(v.linkCrlv, 'CRLV', icoDoc())}${iconeDoc(v.temFotos === 'Sim' ? '#' : '', 'Fotos', icoFoto(), true)}${n ? `<span class="icone-doc" title="${n} OS em PDF — abrir ficha" onclick="event.stopPropagation(); abrirFicha(this.closest('tr').dataset.placa)" style="color:var(--ambar)">${icoOs()}</span>` : ''}</td>`; }
+    case 'docs': {
+      const n = pdfsDaViatura(v).length;
+      const dem = demandasAbertas(v.placa);
+      const vencida = dem.some(atrasada);
+      return `<td class="acoes">${iconeDoc(v.linkTomb, 'Tombamento (PDF)', icoPdf())}${iconeDoc(v.linkCrlv, 'CRLV', icoDoc())}${iconeDoc(v.temFotos === 'Sim' ? '#' : '', 'Fotos', icoFoto(), true)}${n ? `<span class="icone-doc" title="${n} OS em PDF — abrir ficha" onclick="event.stopPropagation(); abrirFicha(this.closest('tr').dataset.placa)" style="color:var(--ambar)">${icoOs()}</span>` : ''}${dem.length ? `<span class="icone-doc demanda-icone ${vencida ? 'vencida' : ''}" title="${dem.length} demanda(s) aberta(s)${vencida ? ' — alguma com prazo vencido' : ''}: ${escAttr(dem.map(d => d.titulo).join(' • '))}" onclick="event.stopPropagation(); abrirFicha(this.closest('tr').dataset.placa)">⬤<span class="conta-dem">${dem.length}</span></span>` : ''}</td>`;
+    }
     default: return `<td class="${c.cl || ''}" title="${escAttr(x || '')}">${esc(x || '—')}</td>`;
   }
 }
@@ -930,6 +937,13 @@ function iniciarApp() {
   ouvir('btn-nova-viatura', 'click', () => abrirFormViatura(null));
   ouvir('btn-colunas', 'click', e => { e.stopPropagation(); cls('menu-colunas', 'oculto', !el('menu-colunas').classList.contains('oculto')); });
   document.addEventListener('click', e => { if (!e.target.closest('.seletor-colunas')) cls('menu-colunas', 'oculto', true); });
+  ouvir('btn-so-demanda', 'click', () => {
+    ESTADO.soComDemanda = !ESTADO.soComDemanda;
+    cls('btn-so-demanda', 'amarelo', ESTADO.soComDemanda);
+    cls('btn-so-demanda', 'claro', !ESTADO.soComDemanda);
+    if (ESTADO.soComDemanda && !ESTADO.demandas) { carregarDemandasEmFundo(); toast('Carregando o quadro de demandas…'); }
+    aplicar();
+  });
   ouvir('btn-filtros', 'click', () => {
     const corpo = el('corpo'), painel = el('painel-filtros');
     if (window.innerWidth <= 900) { painel.classList.toggle('aberta'); return; }
@@ -4490,6 +4504,23 @@ function exportarCsv(nome, colunas, linhas) {
   toast(linhas.length + ' linha(s) exportada(s).');
 }
 
+
+
+/** Demandas abertas de uma viatura (vazio enquanto o quadro não carregou). */
+function demandasAbertas(placa) {
+  if (!ESTADO.demandas || !placa) return [];
+  return ESTADO.demandas.demandas.filter(d => d.placa === placa && !/conclu/i.test(d.fase));
+}
+
+/** Carrega o quadro em segundo plano, para os indicadores aparecerem na lista. */
+function carregarDemandasEmFundo() {
+  if (ESTADO.demandas || ESTADO._carregandoDemandas) return;
+  ESTADO._carregandoDemandas = true;
+  const run = servidor('lerDemandas',
+    r => { if (r && r.ok) { ESTADO.demandas = r; if (ESTADO.aba === 'viaturas') aplicar(); } },
+    () => {});
+  if (run) run.lerDemandas(ESTADO.token);
+}
 
 /* ============================================================
    GESTÃO — quadro de demandas da frota
