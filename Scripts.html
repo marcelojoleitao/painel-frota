@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.64.0';
+const VERSAO_PAINEL = '2.64.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -5367,6 +5367,18 @@ function montarSeletorViaturas(idCampo, idChips, idBusca, idLista) {
 
 
 
+
+/**
+ * Viatura rodando indevidamente: disponível na frota, licenciamento atrasado
+ * e abastecimento recente — ou seja, em uso sem estar regular.
+ */
+function usoIrregular(x) {
+  const disponivel = /DISPON|ATIVA|EM USO/i.test(String(x.statusVtr || '').normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+  const atrasado = situacaoLicenciamento(x.anoEx).atrasado;
+  const abastecendo = /SIM|S$|\d/i.test(String(x.abastRecente || '').trim());
+  return disponivel && atrasado && abastecendo;
+}
+
 /** Situação do licenciamento pelo ano de exercício: em dia, vence este ano ou atrasado. */
 function situacaoLicenciamento(anoEx) {
   const ano = parseInt(String(anoEx || '').replace(/\D/g, ''), 10);
@@ -5395,6 +5407,7 @@ function renderMultasCobranca(c) {
   const todos = dados.itens.filter(x => {
     if (f.registro === 'sem' && x.registrada) return false;
     if (f.registro === 'com' && !x.registrada) return false;
+    if (f.registro === 'irregular' && !usoIrregular(x)) return false;
     if (f.unidade && (x.unidade || '—') !== f.unidade) return false;
     if (f.propriedade && (x.propriedade || 'não informada') !== f.propriedade) return false;
     if (f.busca) {
@@ -5438,7 +5451,14 @@ function renderMultasCobranca(c) {
       ${kpiF('com', 'Já acompanhadas', comRegistro, fmtMoeda(soma(comRegistro)), 'verde')}
       ${(() => {
         const atrasadas = new Set(dados.itens.filter(x => situacaoLicenciamento(x.anoEx).atrasado).map(x => x.placa));
-        return kpi('Viaturas atingidas', placas.size, atrasadas.size ? atrasadas.size + ' com licenciamento atrasado' : 'licenciamento em dia', atrasadas.size ? 'vermelho' : '', null, true);
+        return kpi('Viaturas atingidas', placas.size, atrasadas.size ? atrasadas.size + ' com licenciamento atrasado' : 'licenciamento em dia', atrasadas.size ? 'ambar' : '', null, true);
+      })()}
+      ${(() => {
+        const irregulares = dados.itens.filter(usoIrregular);
+        const placasIrr = new Set(irregulares.map(x => x.placa));
+        return `<div class="kpi ${placasIrr.size ? 'vermelho' : 'verde'} ${f.registro === 'irregular' ? 'selecionado' : ''}" data-fcreg="irregular" style="cursor:pointer">
+          <div class="kpi-rotulo">Rodando irregular</div><div class="kpi-valor">${fmtInt(placasIrr.size)}</div>
+          <div class="kpi-sub">disponível, atrasada e abastecendo</div></div>`;
       })()}
     </div>
 
@@ -5467,10 +5487,10 @@ function renderMultasCobranca(c) {
       </div>
       <div class="tabela-rol os-rol" style="max-height:620px">
         <table class="tabela-multas tabela-aceites">
-          <colgroup><col style="width:9%"><col style="width:6%"><col style="width:10%"><col style="width:8%"><col style="width:7%">
-            <col style="width:7%"><col style="width:9%"><col style="width:16%"><col style="width:6.5%"><col style="width:7.5%"><col></colgroup>
+          <colgroup><col style="width:10%"><col style="width:6.5%"><col style="width:11%"><col style="width:9%"><col style="width:12%">
+            <col style="width:8%"><col style="width:17%"><col style="width:7%"><col style="width:8%"><col></colgroup>
           <thead><tr><th>AI</th><th>Placa</th><th>Viatura</th><th>Unidade</th><th>Status da VTR</th>
-            <th>Propriedade</th><th>Licenciamento</th><th>Infração</th><th>Vencimento</th><th style="text-align:right">A pagar</th><th>Acompanhamento</th></tr></thead>
+            <th>Propriedade</th><th>Infração</th><th>Vencimento</th><th style="text-align:right">A pagar</th><th>Acompanhamento</th></tr></thead>
           <tbody>
           ${todos.slice(0, 400).map(x => {
             const v = viaturaDaMulta(x.placa);
@@ -5480,11 +5500,15 @@ function renderMultasCobranca(c) {
               <td>${v ? `<a class="link-btn" style="font-family:var(--fonte-dados); font-weight:700" onclick="abrirFicha('${escAttr(v.placa)}')">${esc(x.placa)}</a>` : esc(x.placa)}</td>
               <td>${esc(v ? (v.modeloCurto || v.modelo) : x.modelo)}</td>
               <td>${esc(x.unidade || '—')}</td>
-              <td>${esc(x.statusVtr || '—')}${x.uso ? `<div class="vinculo">${esc(x.uso)}</div>` : ''}</td>
+              <td>${(() => {
+                const lic = situacaoLicenciamento(x.anoEx);
+                const irr = usoIrregular(x);
+                return `<div>${esc(x.statusVtr || 'sem status')}</div>
+                  <div style="margin-top:3px"><span class="prazo ${lic.classe}">${esc(lic.texto)}</span></div>
+                  ${x.uso ? `<div class="vinculo">${esc(x.uso)}</div>` : ''}
+                  ${irr ? '<div class="alerta-irregular" title="Viatura disponível, licenciamento atrasado e abastecimento recente">⚠ rodando irregular</div>' : ''}`;
+              })()}</td>
               <td>${esc(x.propriedade || '—')}</td>
-              <td>${(() => { const lic = situacaoLicenciamento(x.anoEx);
-                return `<span class="prazo ${lic.classe}">${esc(lic.texto)}</span>` +
-                  (x.vencLic ? `<div class="vinculo">vence ${esc(x.vencLic)}</div>` : ''); })()}</td>
               <td>${esc(x.descricao || '—')}${x.infracao ? `<div class="vinculo">${esc(x.infracao)}</div>` : ''}</td>
               <td class="data-curta">${esc(x.vencimento || '—')}</td>
               <td class="num" style="text-align:right"><b>${fmtMoeda(x.aPagar)}</b>
@@ -5496,7 +5520,7 @@ function renderMultasCobranca(c) {
                 : `<span class="status-chip" style="background:#FDECEA; color:#9A2F24">não registrada</span>
                    <div><button class="link-btn" data-novacobranca="${escAttr(x.ai)}|${escAttr(x.placa)}">registrar</button></div>`}</td>
             </tr>`;
-          }).join('') || '<tr><td colspan="11"><div class="vazio">Nenhuma multa nesta seleção</div></td></tr>'}
+          }).join('') || '<tr><td colspan="10"><div class="vazio">Nenhuma multa nesta seleção</div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -5530,8 +5554,9 @@ function renderMultasCobranca(c) {
   }));
   ouvir('btn-exportar-cob', 'click', () => exportarCsv(
     'multas_em_cobranca_' + new Date().toISOString().substring(0, 10) + '.csv',
-    ['AI', 'Placa', 'Viatura', 'Unidade', 'Status da VTR', 'Propriedade', 'Exercício', 'Licenciamento vence', 'Infração', 'Descrição', 'Vencimento', 'Valor', 'A pagar', 'Consulta em', 'Registrada', 'Status', 'Enquadramento', 'Processo'],
-    todos.map(x => [x.ai, x.placa, x.modelo, x.unidade, x.statusVtr, x.propriedade || '', x.anoEx || '', x.vencLic || '', x.infracao, x.descricao, x.vencimento,
+    ['AI', 'Placa', 'Viatura', 'Unidade', 'Status da VTR', 'Uso', 'Propriedade', 'Exercício', 'Licenciamento vence', 'Abastecimento recente', 'Rodando irregular', 'Infração', 'Descrição', 'Vencimento', 'Valor', 'A pagar', 'Consulta em', 'Registrada', 'Status', 'Enquadramento', 'Processo'],
+    todos.map(x => [x.ai, x.placa, x.modelo, x.unidade, x.statusVtr, x.uso || '', x.propriedade || '', x.anoEx || '', x.vencLic || '',
+      x.abastRecente || '', usoIrregular(x) ? 'sim' : 'não', x.infracao, x.descricao, x.vencimento,
       (x.valor || 0).toFixed(2).replace('.', ','), (x.aPagar || 0).toFixed(2).replace('.', ','),
       x.consultaEm, x.registrada ? 'sim' : 'não', x.status, x.enquadramento, x.processo])));
   ajustarKpis();
