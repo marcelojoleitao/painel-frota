@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.59.1';
+const VERSAO_PAINEL = '2.59.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2903,6 +2903,18 @@ function renderOSAcompanhar(lista) {
       <button class="subaba ${nivel === 'todas' ? 'ativa' : ''}" data-nivel="todas">Todas<span class="n">${todas.length}</span></button>
     </div>
 
+    <div class="cartao largo" style="margin-bottom:12px">
+      <div class="cartao-cab"><h3>Situações encontradas na coluna I</h3><small>o que a planilha traz, com a contagem de cada uma</small></div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap">
+        ${(() => {
+          const mapa = new Map();
+          todos.forEach(a => mapa.set(a.status || '(sem status)', (mapa.get(a.status || '(sem status)') || 0) + 1));
+          return Array.from(mapa.entries()).sort((x, y) => y[1] - x[1])
+            .map(([k, v]) => `<span class="dem-tag" style="font-size:11.5px; padding:3px 8px">${esc(k)} <b>${v}</b></span>`).join('');
+        })()}
+      </div>
+    </div>
+
     <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); margin-bottom:14px">
       <div class="cartao"><div class="cartao-cab"><h3>Orçado por unidade</h3><small>clique para filtrar</small></div>
         <div class="barras compacto" style="max-height:240px; overflow:auto">${barras(porUnidade, 'var(--azul)', 'unidade')}</div></div>
@@ -4351,11 +4363,15 @@ function renderAceites(lista) {
     });
   }).filter(a => !filtroAtivo || !a.v || exib.has(a.v.placa));
 
-  // contestação é um estado próprio: sai de "aguardando aceite" para não contar duas vezes
-  const contesta = a => /contest/i.test(a.status || '') || /contest/i.test(a.obs || '');
-  const resolvido = a => /aceit|conclu[ií]d|cobrad/i.test(a.status || '');
-  const aguardando = a => !resolvido(a) && !contesta(a);
-  const emAberto = a => !resolvido(a);                       // aguardando + contestação
+  // Comparação pelo valor do status (coluna I), sem procurar pedaços de palavra:
+  // "Aguardando Aceite" contém "aceite", e era isso que fazia o filtro antigo
+  // classificá-la como já resolvida.
+  const norm = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+  const contesta = a => /CONTEST/.test(norm(a.status)) || /CONTEST/.test(norm(a.obs));
+  const aguardando = a => norm(a.status).indexOf('AGUARDANDO ACEITE') === 0;
+  const resolvido = a => !aguardando(a) && !contesta(a) &&
+    /(ACEITE REALIZADO|ACEITA|ACEITO|CONCLUID|COBRAD|FINALIZAD|PAGA)/.test(norm(a.status));
+  const emAberto = a => aguardando(a) || contesta(a);        // o que ainda depende de ação
   const grupos = {
     todos: todos,
     vencendo: todos.filter(a => emAberto(a) && a.dias !== null && a.dias >= 0 && a.dias <= 3),
@@ -4390,6 +4406,18 @@ function renderAceites(lista) {
       ${kpiFiltro('vencendo', 'Vencem em até 3 dias', grupos.vencendo, fmtMoeda(soma(grupos.vencendo)), grupos.vencendo.length ? 'vermelho' : 'verde')}
       ${kpiFiltro('vencidos', 'Prazo esgotado', grupos.vencidos, fmtMoeda(soma(grupos.vencidos)), grupos.vencidos.length ? 'vermelho' : 'verde')}
       ${kpiFiltro('contestacao', 'Em contestação', grupos.contestacao, fmtMoeda(soma(grupos.contestacao)), grupos.contestacao.length ? 'ambar' : '')}
+    </div>
+
+    <div class="cartao largo" style="margin-bottom:12px">
+      <div class="cartao-cab"><h3>Situações encontradas na coluna I</h3><small>o que a planilha traz, com a contagem de cada uma</small></div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap">
+        ${(() => {
+          const mapa = new Map();
+          todos.forEach(a => mapa.set(a.status || '(sem status)', (mapa.get(a.status || '(sem status)') || 0) + 1));
+          return Array.from(mapa.entries()).sort((x, y) => y[1] - x[1])
+            .map(([k, v]) => `<span class="dem-tag" style="font-size:11.5px; padding:3px 8px">${esc(k)} <b>${v}</b></span>`).join('');
+        })()}
+      </div>
     </div>
 
     <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); margin-bottom:14px">
