@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.56.3';
+const VERSAO_PAINEL = '2.56.4';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4316,14 +4316,17 @@ function renderAceites(lista) {
     });
   }).filter(a => !filtroAtivo || !a.v || exib.has(a.v.placa));
 
+  // contestação é um estado próprio: sai de "aguardando aceite" para não contar duas vezes
   const contesta = a => /contest/i.test(a.status || '') || /contest/i.test(a.obs || '');
-  const pendente = a => !/aceit|conclu[ií]d|cobrad/i.test(a.status || '');
+  const resolvido = a => /aceit|conclu[ií]d|cobrad/i.test(a.status || '');
+  const aguardando = a => !resolvido(a) && !contesta(a);
+  const emAberto = a => !resolvido(a);                       // aguardando + contestação
   const grupos = {
     todos: todos,
-    vencendo: todos.filter(a => pendente(a) && a.dias !== null && a.dias >= 0 && a.dias <= 3),
-    vencidos: todos.filter(a => pendente(a) && a.dias !== null && a.dias < 0),
+    vencendo: todos.filter(a => emAberto(a) && a.dias !== null && a.dias >= 0 && a.dias <= 3),
+    vencidos: todos.filter(a => emAberto(a) && a.dias !== null && a.dias < 0),
     contestacao: todos.filter(contesta),
-    pendentes: todos.filter(pendente)
+    pendentes: todos.filter(aguardando)
   };
   const fa = ESTADO.filtroAceites;
   const sel = (ESTADO.filtroAceite && grupos[ESTADO.filtroAceite] ? grupos[ESTADO.filtroAceite] : todos)
@@ -4348,7 +4351,7 @@ function renderAceites(lista) {
   c.innerHTML = `
     <div class="kpis">
       ${kpiFiltro('todos', 'Aceites registrados', grupos.todos, fmtMoeda(soma(grupos.todos)), '')}
-      ${kpiFiltro('pendentes', 'Aguardando aceite', grupos.pendentes, fmtMoeda(soma(grupos.pendentes)), grupos.pendentes.length ? 'ambar' : 'verde')}
+      ${kpiFiltro('pendentes', 'Aguardando aceite', grupos.pendentes, fmtMoeda(soma(grupos.pendentes)) + ' • sem as contestadas', grupos.pendentes.length ? 'ambar' : 'verde')}
       ${kpiFiltro('vencendo', 'Vencem em até 3 dias', grupos.vencendo, fmtMoeda(soma(grupos.vencendo)), grupos.vencendo.length ? 'vermelho' : 'verde')}
       ${kpiFiltro('vencidos', 'Prazo esgotado', grupos.vencidos, fmtMoeda(soma(grupos.vencidos)), grupos.vencidos.length ? 'vermelho' : 'verde')}
       ${kpiFiltro('contestacao', 'Em contestação', grupos.contestacao, fmtMoeda(soma(grupos.contestacao)), grupos.contestacao.length ? 'ambar' : '')}
@@ -4382,8 +4385,8 @@ function renderAceites(lista) {
         ${(() => {
           const faixas = [['Prazo esgotado', grupos.vencidos.length, 'var(--vermelho)'],
             ['Até 3 dias', grupos.vencendo.length, '#E8743B'],
-            ['4 a 7 dias', grupos.pendentes.filter(a => a.dias !== null && a.dias > 3 && a.dias <= 7).length, 'var(--ambar)'],
-            ['Mais de 7 dias', grupos.pendentes.filter(a => a.dias === null || a.dias > 7).length, 'var(--verde)']];
+            ['4 a 7 dias', todos.filter(a => emAberto(a) && a.dias !== null && a.dias > 3 && a.dias <= 7).length, 'var(--ambar)'],
+            ['Mais de 7 dias', todos.filter(a => emAberto(a) && (a.dias === null || a.dias > 7)).length, 'var(--verde)']];
           const maximo = Math.max(1, ...faixas.map(f => f[1]));
           return faixas.map(([r, n, cor]) => `<button class="barra" style="cursor:default"><span class="rotulo">${esc(r)}</span>
             <span class="trilha"><span class="preench" style="width:${Math.round(n / maximo * 100)}%; background:${cor}"></span></span>
@@ -4406,7 +4409,7 @@ function renderAceites(lista) {
           <thead><tr><th>OS</th><th>Placa</th><th>Modelo</th><th>Unidade</th><th>Oficina</th>
             <th>Aprovação</th><th>Início</th><th>Conclusão</th><th>Prazo p/ aceite</th><th style="text-align:right">Valor</th><th>Situação</th></tr></thead>
           <tbody>
-          ${ordenados.slice(0, 400).map(a => `<tr class="${a.dias !== null && a.dias < 0 && pendente(a) ? 'cobrada' : ''}">
+          ${ordenados.slice(0, 400).map(a => `<tr class="${a.dias !== null && a.dias < 0 && emAberto(a) ? 'cobrada' : ''}">
             <td><b style="font-family:var(--fonte-dados)">${esc(a.os)}</b>
               <div style="margin-top:3px; display:flex; gap:4px; flex-wrap:wrap">${pdfLinkHtml(a.os)}
                 ${a.linkAnalise ? `<a class="pdf-link analise" href="${escAttr(a.linkAnalise)}" target="_blank" rel="noopener">${icoPdf()} análise</a>` : ''}</div></td>
@@ -4418,10 +4421,10 @@ function renderAceites(lista) {
             <td class="c data-curta">${esc((a.inicio || '').substring(0, 10))}</td>
             <td class="c data-curta">${esc((a.conclusao || '').substring(0, 10))}</td>
             <td><span class="prazo ${classePrazo(a.dias)}">${esc((a.limiteAceite || '—').substring(0, 10))}</span>
-              ${a.dias !== null && pendente(a) ? `<div class="vinculo">${a.dias < 0 ? Math.abs(a.dias) + ' dia(s) vencido' : a.dias === 0 ? 'vence hoje' : 'faltam ' + a.dias + ' dia(s)'}</div>` : ''}</td>
+              ${a.dias !== null && emAberto(a) ? `<div class="vinculo">${a.dias < 0 ? Math.abs(a.dias) + ' dia(s) vencido' : a.dias === 0 ? 'vence hoje' : 'faltam ' + a.dias + ' dia(s)'}</div>` : ''}</td>
             <td class="num" style="text-align:right">${fmtMoeda(a.valor || 0)}</td>
             <td>${badgeStatusOS(a.status)}
-              ${contesta(a) ? '<div class="vinculo" style="color:var(--vermelho)">em contestação</div>' : ''}
+              ${contesta(a) && !/contest/i.test(a.status || '') ? '<div class="vinculo" style="color:var(--vermelho)">em contestação (pela observação)</div>' : ''}
               ${a.obs ? `<div class="obs-multa" title="${escAttr(a.obs)}">${esc(a.obs)}</div>` : ''}</td>
           </tr>`).join('') || '<tr><td colspan="11"><div class="vazio">Nenhum aceite nesta seleção</div></td></tr>'}
           </tbody>
