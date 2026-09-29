@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.62.4';
+const VERSAO_PAINEL = '2.62.5';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -3387,8 +3387,10 @@ function contraste(a, b) {
 /** Aceita a cor de fonte da planilha só quando ela é legível sobre o fundo. */
 function contrasteBom(fundo, fonte) { return contraste(fundo, fonte) >= 4.5; }
 
-/** Preto ou branco, o que for mais legível sobre o fundo. */
-function corLegivel(fundo) { return luminancia(fundo) > 0.45 ? '#14181F' : '#FFFFFF'; }
+/** Preto ou branco, o que tiver melhor contraste sobre o fundo. */
+function corLegivel(fundo) {
+  return contraste(fundo, '#14181F') >= contraste(fundo, '#FFFFFF') ? '#14181F' : '#FFFFFF';
+}
 
 /** Escurece uma cor, para a borda destacar do próprio fundo. */
 function escurecer(cor, fator) {
