@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.62.3';
+const VERSAO_PAINEL = '2.62.4';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -3347,10 +3347,55 @@ function estiloStatus(status) {
   if (!achou) achou = cores.find(c => c.contem && alvo.indexOf(String(c.texto).trim().toLowerCase()) >= 0);
   if (!achou) return '';
   const partes = [];
-  if (achou.fundo) partes.push('background:' + achou.fundo);
-  if (achou.fonte) partes.push('color:' + achou.fonte);
-  if (achou.fundo) partes.push('border-color:' + achou.fundo);
+  if (achou.fundo) {
+    partes.push('background:' + achou.fundo);
+    partes.push('border-color:' + escurecer(achou.fundo, 0.22));
+    // a cor de fonte da planilha às vezes some no fundo; só é usada quando tem contraste
+    const fonte = achou.fonte && contrasteBom(achou.fundo, achou.fonte) ? achou.fonte : corLegivel(achou.fundo);
+    partes.push('color:' + fonte);
+  } else if (achou.fonte) {
+    partes.push('color:' + achou.fonte);
+  }
   return partes.join(';');
+}
+
+/** Componentes de uma cor em hexadecimal. */
+function rgbDe(cor) {
+  const t = String(cor || '').trim();
+  const m = t.match(/^#?([0-9a-f]{6})$/i);
+  if (m) { const n = parseInt(m[1], 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+  const c = t.match(/^#?([0-9a-f]{3})$/i);
+  if (c) return c[1].split('').map(x => parseInt(x + x, 16));
+  const r = t.match(/rgba?\((\d+)[,\s]+(\d+)[,\s]+(\d+)/i);
+  if (r) return [Number(r[1]), Number(r[2]), Number(r[3])];
+  return null;
+}
+
+/** Luminância relativa, para decidir entre texto claro e escuro. */
+function luminancia(cor) {
+  const rgb = rgbDe(cor);
+  if (!rgb) return 1;
+  const v = rgb.map(x => { const c = x / 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); });
+  return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+}
+
+function contraste(a, b) {
+  const la = luminancia(a), lb = luminancia(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+/** Aceita a cor de fonte da planilha só quando ela é legível sobre o fundo. */
+function contrasteBom(fundo, fonte) { return contraste(fundo, fonte) >= 4.5; }
+
+/** Preto ou branco, o que for mais legível sobre o fundo. */
+function corLegivel(fundo) { return luminancia(fundo) > 0.45 ? '#14181F' : '#FFFFFF'; }
+
+/** Escurece uma cor, para a borda destacar do próprio fundo. */
+function escurecer(cor, fator) {
+  const rgb = rgbDe(cor);
+  if (!rgb) return cor;
+  const f = 1 - (fator || 0.2);
+  return 'rgb(' + rgb.map(x => Math.max(0, Math.round(x * f))).join(',') + ')';
 }
 
 function classeStatus(st) {
@@ -3478,9 +3523,9 @@ ${cabecalho('protocolo', 'Protocolo')}<th>Observações</th>${cabecalho('status'
             <td style="font-family:var(--fonte-dados); font-size:11.5px">${esc(m.protocolo || '')}</td>
             <td>${m.observacoes ? `<div class="obs-multa" title="${escAttr(m.observacoes)}">${esc(m.observacoes)}</div>` : ''}</td>
             <td><select class="status-sel ${classeStatus(m.status)}" data-status="${m.linha}" style="${escAttr(estiloStatus(m.status))}" title="Alterar o status grava na planilha na hora">
-                <option value="">sem status</option>
-                ${(ESTADO.multas.bases.status || []).map(st => `<option value="${escAttr(st)}" ${st === m.status ? 'selected' : ''}>${esc(st)}</option>`).join('')}
-                ${m.status && (ESTADO.multas.bases.status || []).indexOf(m.status) < 0 ? `<option value="${escAttr(m.status)}" selected>${esc(m.status)}</option>` : ''}
+                <option value="" style="background:#fff; color:#14181F">sem status</option>
+                ${(ESTADO.multas.bases.status || []).map(st => `<option value="${escAttr(st)}" ${st === m.status ? 'selected' : ''} style="background:#fff; color:#14181F">${esc(st)}</option>`).join('')}
+                ${m.status && (ESTADO.multas.bases.status || []).indexOf(m.status) < 0 ? `<option value="${escAttr(m.status)}" selected style="background:#fff; color:#14181F">${esc(m.status)}</option>` : ''}
               </select>
               ${m.dataDefesa ? `<div class="vinculo">defesa em ${esc(dataBR(m.dataDefesa))}</div>` : ''}</td>
             <td>${m.linkDefesa ? `<a class="pdf-link" href="${escAttr(m.linkDefesa)}" target="_blank" rel="noopener">abrir</a>` : ''}
