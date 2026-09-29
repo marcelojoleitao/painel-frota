@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.56.5';
+const VERSAO_PAINEL = '2.56.6';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -683,7 +683,14 @@ function renderPatrimonio(lista) {
   ajustarKpis();
 }
 
-function chaveData(d) { return String(d || '').split(' ')[0].split('/').reverse().join(''); }
+function chaveData(d) {
+  const t = String(d || '').trim().split(' ')[0];
+  const br = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (br) return br[3] + ('0' + br[2]).slice(-2) + ('0' + br[1]).slice(-2);
+  const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return iso[1] + iso[2] + iso[3];
+  return '';                                     // texto que não é data não ordena
+}
 function ultimaData(datas) {
   const ord = datas.filter(Boolean).map(d => ({ d, k: chaveData(d) })).sort((a, b) => b.k.localeCompare(a.k));
   return ord.length ? ord[0].d : '';
@@ -4280,15 +4287,6 @@ function verTextoDoCrlv(placa) {
 }
 
 
-
-/** Data de uma OS em formato comparável (AAAAMMDD), para ordenar. */
-function chaveData(txt) {
-  const m = String(txt || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
-  if (m) return m[3] + m[2] + m[1];
-  const iso = String(txt || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return iso[1] + iso[2] + iso[3];
-  return '';
-}
 
 /* ============================================================
    ACEITES — o que a oficina concluiu e aguarda o aceite do gestor
