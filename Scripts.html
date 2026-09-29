@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.57.1';
+const VERSAO_PAINEL = '2.58.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4033,7 +4033,8 @@ function mostrarComposicaoProjecao(r) {
       O valor "Orçado" de OS sem aprovação fica de fora, porque inclui itens que não serão pagos. Registros com mais de
       ${r.mesesValidos} meses também saem, por serem resíduo de meses já faturados.
       Hoje é dia ${r.diaDoMes}: ${r.diaDoMes <= 20 ? 'ainda há prazo para a nota da oficina entrar neste mês' : 'sobra pouco prazo para a nota entrar neste mês'}.
-      ${r.media ? 'Média das últimas faturas: <b>' + fmtMoeda(r.media) + '</b>.' : ''}</div>
+      ${r.media ? 'Média das últimas faturas: <b>' + fmtMoeda(r.media) + '</b>.' : ''}
+      ${r.foraDaAbaAceites ? '<br><b>' + r.foraDaAbaAceites + ' OS</b> marcadas como cobradas ficaram de fora por não constarem na aba Aceites — são registros antigos.' : ''}</div>
       <div class="tabela-rol" style="max-height:280px"><table class="tabela-simples" style="width:100%">
         <thead><tr><th>Origem</th><th class="num">OS</th><th class="num">Valor</th>
           <th class="num">${esc(r.proximo.comp)}</th><th class="num">${esc(r.seguinte.comp)}</th></tr></thead>

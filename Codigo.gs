@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.57.1';
+const CODIGO_VERSAO = '2.58.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1369,38 +1369,42 @@ function projecaoOS(token) {
       return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])) >= limite;
     };
 
-    // ---- 1. cobradas ainda não faturadas
-    const cobradas = (d.osPorStatus['Cobradas'] || []);
-    const aFaturar = cobradas.filter(o => !d.faturadas[o.os] && recente(o.data) && o.aprovado > 0);
-
-    // ---- 2. aceites pendentes (valor medido)
+    // ---- a aba Aceites define o universo válido: OS que não estão nela são
+    // antigas e não entram em projeção nenhuma
+    const naAbaAceites = {};
     const aceites = [];
     try {
       const tab = _abaPorCabecalho_(ss, CONFIG.ABA_OS_ACEITES, ['OS', 'Placa', 'Valor Total']);
       if (tab) _linhasComoObjetos_(tab).forEach(o => {
-        const os = String(_txt_(o['OS'])).replace(/\D/g, '');
+        const chave = String(_txt_(o['OS'])).replace(/\D/g, '');
+        if (chave) naAbaAceites[chave] = { status: _txt_(o['Status']), valor: _num_(o['Valor Total']) || 0 };
+        const os = chave;
         const status = _txt_(o['Status']);
         if (!os || d.faturadas[os]) return;                       // já faturada
-        if (/cobrad/i.test(status)) return;                       // já contada em 1
+        if (/cobrad/i.test(status)) return;                       // entra como cobrada, abaixo
         const valor = _num_(o['Valor Total']) || 0;
         if (valor <= 0) return;
-        const conclusao = _dataTxt_(o['Data Conclusão Serviço']);
-        if (!recente(conclusao || _dataTxt_(o['Data Aprovação']))) return;
-        aceites.push({ os: os, placa: _txt_(o['Placa']), valor: valor, status: status, conclusao: conclusao });
+        aceites.push({ os: os, placa: _txt_(o['Placa']), valor: valor, status: status,
+          conclusao: _dataTxt_(o['Data Conclusão Serviço']) });
       });
     } catch (e) { Logger.log('Aceites na projeção: ' + e); }
+
+    // ---- 1. cobradas ainda não faturadas, somente as que constam na aba Aceites
+    const cobradas = (d.osPorStatus['Cobradas'] || []);
+    const aFaturar = cobradas.filter(o => !d.faturadas[o.os] && naAbaAceites[o.os] && o.aprovado > 0);
 
     const jaContadas = {};
     aFaturar.forEach(o => { jaContadas[o.os] = true; });
     const aceitesLimpos = aceites.filter(a => !jaContadas[a.os]);
     aceitesLimpos.forEach(a => { jaContadas[a.os] = true; });
 
-    // ---- 3. concluídas e não cobradas que não estejam nas listas acima
+    // ---- 3. concluídas e não cobradas, também só as que estão na aba Aceites
     const concluidas = (d.osPorStatus['Concluídas e Não Cobradas'] || [])
-      .filter(o => !jaContadas[o.os] && !d.faturadas[o.os] && recente(o.data) && o.aprovado > 0);
+      .filter(o => !jaContadas[o.os] && !d.faturadas[o.os] && naAbaAceites[o.os] && o.aprovado > 0);
     concluidas.forEach(o => { jaContadas[o.os] = true; });
 
-    // ---- 4. aprovadas e não iniciadas (só valor aprovado)
+    // ---- 4. aprovadas e não iniciadas: ainda não chegaram à aba Aceites (o
+    // serviço nem começou), então aqui o corte por data continua valendo
     const aprovadas = (d.osPorStatus['Aprovadas e Não Iniciadas'] || [])
       .filter(o => !jaContadas[o.os] && !d.faturadas[o.os] && recente(o.data) && o.aprovado > 0);
 
@@ -1454,6 +1458,8 @@ function projecaoOS(token) {
           valor: Math.round(d.osPorStatus[st].reduce((s, o) => s + (o.aprovado > 0 ? o.aprovado : 0), 0) * 100) / 100,
           orcado: Math.round(d.osPorStatus[st].reduce((s, o) => s + (o.orcado || 0), 0) * 100) / 100 })).sort((a, b) => b.orcado - a.orcado) },
       jaFaturadas: cobradas.length - aFaturar.length,
+      foraDaAbaAceites: cobradas.filter(o => !d.faturadas[o.os] && !naAbaAceites[o.os]).length,
+      totalNaAbaAceites: Object.keys(naAbaAceites).length,
       historico: historico, media: media, diaDoMes: diaDoMes,
       fatiaAceites: fatiaAceites, fatiaAprovadas: fatiaAprovadas, mesesValidos: PROJECAO_MESES_VALIDOS,
       descartados: (cobradas.length - aFaturar.length) };
