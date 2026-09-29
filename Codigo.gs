@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.63.3';
+const CODIGO_VERSAO = '2.63.4';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6519,6 +6519,17 @@ function verCoresStatusMultas() {
 }
 
 
+/** Primeiro valor não vazio entre as colunas candidatas de uma linha. */
+function _valorEntreColunas_(linha, candidatas) {
+  for (let i = 0; i < candidatas.length; i++) {
+    const c = candidatas[i];
+    if (c === undefined || c < 0) continue;
+    const v = String(linha[c] === null || linha[c] === undefined ? '' : linha[c]).trim();
+    if (v) return v;
+  }
+  return '';
+}
+
 /**
  * Multas em cobrança: um AI por linha, a partir do texto de multas da
  * ConsultaBD, cruzado com a planilha de acompanhamento (aba Multas).
@@ -6572,8 +6583,7 @@ function lerMultasEmCobranca(token) {
           unidade: idx.unidade !== undefined ? String(l[idx.unidade] || '') : '',
           statusVtr: idx.status !== undefined ? String(l[idx.status] || '') : '',
           uso: idx.uso !== undefined ? String(l[idx.uso] || '') : '',
-          propriedade: idx.prop !== undefined ? String(l[idx.prop] || '') : '',
-          cnpj: idx.cnpj !== undefined ? String(l[idx.cnpj] || '') : '',
+          propriedade: _valorEntreColunas_(l, [idx.prop, 65]),
           descricao: item.descricao || '', infracao: item.infracao || '',
           vencimento: item.venc || '', valor: item.valor || 0, aPagar: item.aPagar || item.valor || 0,
           consultaEm: m.consultaEm || '',
@@ -7294,6 +7304,18 @@ function conferirColunasConsultaBD() {
     Logger.log('  ' + k.padEnd(10) + (i === undefined ? 'NÃO ENCONTRADA' : _letraColuna_(i + 1) + '  "' + cab[i] + '"'));
   });
   Logger.log('Cabeçalho da coluna BN: "' + (cab[65] || '') + '"');
+  // colunas com o mesmo nome costumam ser a causa de campo vazio
+  const repetidas = [];
+  cab.forEach((nome, i) => { if (_normCab_(nome) === 'PROPRIEDADE') repetidas.push(_letraColuna_(i + 1)); });
+  Logger.log('Colunas chamadas "Propriedade": ' + (repetidas.join(', ') || 'nenhuma'));
+  // amostra do conteúdo real de cada uma
+  const n = Math.min(5, aba.getLastRow() - 1);
+  if (n > 0) {
+    repetidas.forEach(letra => {
+      const valores = aba.getRange(2, cab.findIndex((c, i) => _letraColuna_(i + 1) === letra) + 1, n, 1).getValues();
+      Logger.log('   ' + letra + ': ' + valores.map(v => '"' + String(v[0] || '') + '"').join(' '));
+    });
+  }
   return 'ok';
 }
 
