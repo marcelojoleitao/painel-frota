@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.61.2';
+const CODIGO_VERSAO = '2.61.3';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -5892,14 +5892,53 @@ function _abaSinistros_() {
   return aba;
 }
 
-/** Onde está cada campo na aba, pelo nome do cabeçalho. */
+/**
+ * Onde está cada campo na aba. O cabeçalho é procurado nas primeiras linhas,
+ * os nomes casam por aproximação (acento, caixa e variações de escrita) e,
+ * se nada casar, vale a ordem original das colunas A a H.
+ */
+const SINISTROS_ALT = {
+  processo: ['Processo', 'Processo SEI', 'Nº do Processo'],
+  placa: ['Placa'],
+  observacao: ['Observação', 'Observacoes', 'Observações', 'Obs'],
+  total: ['Total', 'Valor Total'],
+  pecas: ['Valor em Peças', 'Valor Peças', 'Peças'],
+  mo: ['Valor e Mão de Obra', 'Valor em Mão de Obra', 'Valor Mão de Obra', 'Mão de Obra', 'Serviços'],
+  status: ['Status', 'Situação'],
+  data: ['Data do Sinistro', 'Data do Acidente', 'Data']
+};
+const SINISTROS_POSICAO = { processo: 0, placa: 1, observacao: 2, total: 3, pecas: 4, mo: 5, status: 6, data: 7 };
+
 function _colunasSinistro_(aba) {
-  const cab = aba.getRange(1, 1, 1, Math.max(aba.getLastColumn(), 8)).getValues()[0].map(c => _normCab_(c));
-  const achar = nome => cab.indexOf(_normCab_(nome));
+  const nLin = Math.min(6, Math.max(aba.getLastRow(), 1));
+  const largura = Math.max(aba.getLastColumn(), 8);
+  const topo = aba.getRange(1, 1, nLin, largura).getValues();
+  let linhaCab = 0;
+  for (let i = 0; i < topo.length; i++) {
+    if (topo[i].some(c => _normCab_(c) === 'PLACA')) { linhaCab = i; break; }
+  }
+  const cab = topo[linhaCab].map(c => _normCab_(c));
+  const achar = nomes => {
+    for (let i = 0; i < nomes.length; i++) {
+      const alvo = _normCab_(nomes[i]);
+      const exato = cab.indexOf(alvo);
+      if (exato >= 0) return exato;
+    }
+    for (let i = 0; i < nomes.length; i++) {          // por aproximação
+      const alvo = _normCab_(nomes[i]);
+      const p = cab.findIndex(c => c && (c.indexOf(alvo) === 0 || alvo.indexOf(c) === 0));
+      if (p >= 0) return p;
+    }
+    return -1;
+  };
   const col = {};
-  Object.keys(SINISTROS.campos).forEach(k => { col[k] = achar(SINISTROS.campos[k]); });
-  Object.keys(SINISTROS.extras).forEach(k => { const i = achar(SINISTROS.extras[k]); if (i >= 0) col[k] = i; });
-  return { col: col, largura: Math.max(aba.getLastColumn(), 8) };
+  Object.keys(SINISTROS.campos).forEach(k => {
+    let i = achar(SINISTROS_ALT[k] || [SINISTROS.campos[k]]);
+    if (i < 0 && SINISTROS_POSICAO[k] !== undefined) i = SINISTROS_POSICAO[k];   // reserva pela posição
+    col[k] = i;
+  });
+  Object.keys(SINISTROS.extras).forEach(k => { const i = achar([SINISTROS.extras[k]]); if (i >= 0) col[k] = i; });
+  return { col: col, largura: largura, linhaCab: linhaCab + 1, cabecalho: topo[linhaCab].map(c => String(c || '').trim()) };
 }
 
 /** Acrescenta as colunas extras à direita, sem mexer nas existentes. */
@@ -5928,13 +5967,13 @@ function lerSinistros(token) {
     const info = _colunasSinistro_(aba);
     const n = aba.getLastRow();
     const lista = [];
-    if (n > 1) {
-      const valores = aba.getRange(2, 1, n - 1, info.largura).getValues();
+    if (n > info.linhaCab) {
+      const valores = aba.getRange(info.linhaCab + 1, 1, n - info.linhaCab, info.largura).getValues();
       valores.forEach((l, i) => {
         const placa = String(l[info.col.placa] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
         const processo = String(l[info.col.processo] || '').trim();
         if (!placa && !processo) return;
-        const item = { linha: i + 2, placa: placa, processo: processo,
+        const item = { linha: info.linhaCab + 1 + i, placa: placa, processo: processo,
           observacao: String(l[info.col.observacao] || '').trim(),
           total: _num_(l[info.col.total]) || 0,
           pecas: _num_(l[info.col.pecas]) || 0,
@@ -5951,7 +5990,10 @@ function lerSinistros(token) {
     }
     return { ok: true, sinistros: lista, status: SINISTROS.status, tipos: SINISTROS.tipos,
       extras: Object.keys(SINISTROS.extras).filter(k => info.col[k] !== undefined && info.col[k] >= 0),
-      rotulosExtras: SINISTROS.extras };
+      rotulosExtras: SINISTROS.extras,
+      diagnostico: { linhaCabecalho: info.linhaCab, cabecalho: info.cabecalho,
+        colunas: Object.keys(SINISTROS.campos).map(k => k + '=' + (info.col[k] >= 0 ? _letraColuna_(info.col[k] + 1) : 'não achou')).join(' '),
+        linhasNaAba: n } };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 
@@ -5968,7 +6010,7 @@ function salvarSinistro(token, linha, dados) {
     if (!placa) return { ok: false, erro: 'Informe a placa.' };
     let alvo = parseInt(linha, 10) || 0;
     const novo = !alvo;
-    if (novo) alvo = Math.max(aba.getLastRow() + 1, 2);
+    if (novo) alvo = Math.max(aba.getLastRow() + 1, info.linhaCab + 1);
 
     const gravar = (campo, valor) => {
       const c = info.col[campo];

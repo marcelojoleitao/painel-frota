@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.61.2';
+const VERSAO_PAINEL = '2.61.3';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -5078,7 +5078,13 @@ function renderSinistros(c) {
               <td>${s2.observacao ? `<div class="obs-multa" title="${escAttr(s2.observacao)}">${esc(s2.observacao)}</div>` : ''}
                 ${s2.terceiro ? `<div class="vinculo">terceiro: ${esc(s2.terceiro)}</div>` : ''}</td>
             </tr>`;
-          }).join('') || '<tr><td colspan="9"><div class="vazio">Nenhum sinistro nesta seleção</div></td></tr>'}
+          }).join('') || `<tr><td colspan="9"><div class="vazio">Nenhum sinistro nesta seleção${
+            dados.sinistros.length ? '' : (dados.diagnostico
+              ? '<div style="margin-top:10px; font-size:11.5px; text-align:left; color:var(--tinta-suave)">A aba tem ' +
+                dados.diagnostico.linhasNaAba + ' linha(s), cabeçalho na linha ' + dados.diagnostico.linhaCabecalho +
+                '.<br>Colunas encontradas: ' + esc(dados.diagnostico.colunas) +
+                '<br>Cabeçalho lido: ' + esc(dados.diagnostico.cabecalho.filter(Boolean).join(' | ')) + '</div>'
+              : '')}</div></td></tr>`}
           </tbody>
         </table>
       </div>
