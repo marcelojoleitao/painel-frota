@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.61.1';
+const VERSAO_PAINEL = '2.61.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -811,6 +811,7 @@ function abrirFicha(placa) {
 
     ${ESTADO.admin ? secaoAcoesFicha(v) : ''}
     ${secao('Ordens de serviço', osHtml, (osPendentes.length ? `<span class="badge manutencao">${osPendentes.length} em andamento</span> ` : '') + (pdfsV.length ? `<span class="badge neutro">${pdfsV.length} PDF</span>` : ''))}
+    ${secao('Limite de reparo (IN 40/2021, art. 32)', `<div id="fipe-${escAttr(v.placa)}" class="cartao-dica">consultando o valor de referência…</div>`)}
     ${(() => {
       const dem = demandasDaViatura(v.placa);
       if (!ESTADO.demandas) return '';
@@ -831,6 +832,7 @@ function abrirFicha(placa) {
   cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
   const corpo = el('gaveta-corpo'); if (corpo) corpo.scrollTop = 0;
   document.body.style.overflow = 'hidden';
+  carregarLimiteReparo(v.placa);
 }
 function fecharFicha() { cls('gaveta-fundo', 'aberta', false); cls('gaveta', 'aberta', false); document.body.style.overflow = ''; }
 
