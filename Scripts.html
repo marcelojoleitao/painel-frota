@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.56.4';
+const VERSAO_PAINEL = '2.56.5';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -1550,9 +1550,10 @@ function cartaoTabelaAceites(ace, porPlaca) {
 }
 
 function cartaoTabelaOS(pend, porPlaca) {
-  const card = document.createElement('div'); card.className = 'cartao largo';
+  const card = document.createElement('div'); card.className = 'cartao linha-cheia';
   const bs = botoesStatus(pend, 'filtroStatusOS', () => renderOS(ESTADO.filtrado));
-  const lista = (ESTADO.filtroStatusOS ? pend.filter(o => o.status === ESTADO.filtroStatusOS) : pend).slice().sort((a, b) => (b.valor || 0) - (a.valor || 0));
+  const lista = (ESTADO.filtroStatusOS ? pend.filter(o => o.status === ESTADO.filtroStatusOS) : pend).slice()
+    .sort((a, b) => chaveData(b.data).localeCompare(chaveData(a.data)) || (b.valor || 0) - (a.valor || 0));
   card.innerHTML = `<div class="cartao-cab"><h3>Ordens de serviço — status (aba OS, col. G)</h3><small>${lista.length} OS</small></div>${bs.html}
     <div class="mini-tabela" style="max-height:520px"><table class="tabela-simples"><thead><tr><th>OS</th><th>Placa</th><th>Modelo</th><th>Unidade</th><th>Oficina</th><th>Orçado</th><th>Aprovado</th><th>Status</th><th>Observações / relato</th></tr></thead><tbody>
     ${lista.slice(0, 400).map(o => { const v = porPlaca[o.placa]; return `<tr class="${v ? 'linha' : ''}" ${v ? `data-placa="${escAttr(v.placa)}"` : ''}><td><b style="font-family:var(--fonte-dados)">${esc(o.os)}</b> ${pdfLinkHtml(o.os)}</td><td style="font-family:var(--fonte-dados)">${esc(o.placa)}</td><td>${esc(v ? v.modeloCurto : o.modelo)}</td><td>${esc(o.unidade)}</td><td title="${escAttr(o.oficina)}">${esc((o.oficina || '').substring(0, 32))}</td><td class="num">${fmtMoeda(o.valor || 0)}</td><td class="num">${o.aprovado ? fmtMoeda(o.aprovado) : '—'}</td><td>${badgeStatusOS(o.status)}</td><td title="${escAttr([o.obs, o.relato, o.justificativa].filter(Boolean).join(' • '))}">${esc([o.obs, o.relato].filter(Boolean).join(' • ').substring(0, 80))}</td></tr>`; }).join('') || '<tr><td colspan="9"><div class="vazio">Nenhuma OS</div></td></tr>'}</tbody></table></div>`;
@@ -2830,7 +2831,9 @@ function renderOSAcompanhar(lista) {
   const selecionadas = (nivel === 'todas' ? todas : todas.filter(x => x.nivel === nivel))
     .filter(x => !f.unidade || (x.unidade || '—') === f.unidade)
     .filter(x => !f.oficina || (x.o.oficina || '—') === f.oficina)
-    .sort((a, b) => pesoNivel(a.nivel) - pesoNivel(b.nivel) || (b.o.valor || 0) - (a.o.valor || 0));
+    .sort((a, b) => pesoNivel(a.nivel) - pesoNivel(b.nivel) ||
+      chaveData(b.o.data).localeCompare(chaveData(a.o.data)) ||    // mais recente primeiro
+      (b.o.valor || 0) - (a.o.valor || 0));
 
   const soma = arr => arr.reduce((s, x) => s + (x.o.valor || 0), 0);
   const n2 = todas.filter(x => x.nivel === 'n2');
@@ -4276,6 +4279,16 @@ function verTextoDoCrlv(placa) {
   if (run) run.textoCrlvViatura(ESTADO.token, placa);
 }
 
+
+
+/** Data de uma OS em formato comparável (AAAAMMDD), para ordenar. */
+function chaveData(txt) {
+  const m = String(txt || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return m[3] + m[2] + m[1];
+  const iso = String(txt || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[1] + iso[2] + iso[3];
+  return '';
+}
 
 /* ============================================================
    ACEITES — o que a oficina concluiu e aguarda o aceite do gestor
