@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.63.1';
+const VERSAO_PAINEL = '2.63.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -5385,6 +5385,7 @@ function renderMultasCobranca(c) {
     if (f.registro === 'sem' && x.registrada) return false;
     if (f.registro === 'com' && !x.registrada) return false;
     if (f.unidade && (x.unidade || '—') !== f.unidade) return false;
+    if (f.propriedade && (x.propriedade || 'não informada') !== f.propriedade) return false;
     if (f.busca) {
       const alvo = (x.ai + ' ' + x.placa + ' ' + x.descricao + ' ' + x.infracao + ' ' + x.unidade + ' ' +
                     x.enquadramento + ' ' + (x.propriedade || '')).toLowerCase();
@@ -5427,15 +5428,15 @@ function renderMultasCobranca(c) {
       ${kpi('Viaturas atingidas', placas.size, 'com multa em aberto', '', null, true)}
     </div>
 
-    <details class="dobra" ${f.unidade ? 'open' : ''}>
-      <summary>Valor por unidade e por enquadramento${f.unidade ? ' — filtro ativo' : ''}</summary>
+    <details class="dobra" ${(f.unidade || f.propriedade) ? 'open' : ''}>
+      <summary>Valor por unidade, enquadramento e propriedade${(f.unidade || f.propriedade) ? ' — filtro ativo' : ''}</summary>
       <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
         <div class="cartao"><div class="cartao-cab"><h3>Por unidade</h3><small>clique para filtrar</small></div>
           <div class="barras compacto" style="max-height:220px; overflow:auto">${barras(porUnidade, 'var(--azul)', 'unidade')}</div></div>
         <div class="cartao"><div class="cartao-cab"><h3>Por enquadramento</h3><small>do acompanhamento ou da descrição</small></div>
           <div class="barras compacto" style="max-height:220px; overflow:auto">${barras(porEnquadramento, 'var(--ambar)', null)}</div></div>
-        <div class="cartao"><div class="cartao-cab"><h3>Por propriedade</h3><small>de quem é a viatura</small></div>
-          <div class="barras compacto" style="max-height:220px; overflow:auto">${barras(porPropriedade, 'var(--verde)', null)}</div></div>
+        <div class="cartao"><div class="cartao-cab"><h3>Por propriedade</h3><small>clique para filtrar</small></div>
+          <div class="barras compacto" style="max-height:220px; overflow:auto">${barras(porPropriedade, 'var(--verde)', 'propriedade')}</div></div>
       </div>
     </details>
 
@@ -5444,14 +5445,16 @@ function renderMultasCobranca(c) {
         <small>${todos.length} AI(s)${dados.consultaEm ? ' • última consulta ' + esc(dados.consultaEm) : ''}</small></div>
       <div class="os-barra-acoes">
         <div class="busca" style="max-width:280px"><input id="cob-busca" type="search" placeholder="AI, placa, infração, unidade…" value="${escAttr(f.busca)}"></div>
-        ${(f.registro || f.unidade || f.busca) ? '<button class="btn claro" id="cob-limpar">Limpar</button>' : ''}
+        ${f.unidade ? `<span class="chip-filtro">unidade: ${esc(f.unidade)} <button data-limpacob="unidade">×</button></span>` : ''}
+        ${f.propriedade ? `<span class="chip-filtro">propriedade: ${esc(f.propriedade)} <button data-limpacob="propriedade">×</button></span>` : ''}
+        ${(f.registro || f.unidade || f.propriedade || f.busca) ? '<button class="btn claro" id="cob-limpar">Limpar</button>' : ''}
         <div style="flex:1"></div>
         <button class="btn claro" id="btn-exportar-cob">⤓ Exportar</button>
       </div>
       <div class="tabela-rol os-rol" style="max-height:620px">
         <table class="tabela-multas tabela-aceites">
-          <colgroup><col style="width:10%"><col style="width:6.5%"><col style="width:10%"><col style="width:9%"><col style="width:8%">
-            <col style="width:9%"><col style="width:16%"><col style="width:7%"><col style="width:8%"><col></colgroup>
+          <colgroup><col style="width:10%"><col style="width:6.5%"><col style="width:11%"><col style="width:9%"><col style="width:8%">
+            <col style="width:8%"><col style="width:18%"><col style="width:7%"><col style="width:8%"><col></colgroup>
           <thead><tr><th>AI</th><th>Placa</th><th>Viatura</th><th>Unidade</th><th>Status da VTR</th>
             <th>Propriedade</th><th>Infração</th><th>Vencimento</th><th style="text-align:right">A pagar</th><th>Acompanhamento</th></tr></thead>
           <tbody>
@@ -5464,7 +5467,7 @@ function renderMultasCobranca(c) {
               <td>${esc(v ? (v.modeloCurto || v.modelo) : x.modelo)}</td>
               <td>${esc(x.unidade || '—')}</td>
               <td>${esc(x.statusVtr || '—')}${x.uso ? `<div class="vinculo">${esc(x.uso)}</div>` : ''}</td>
-              <td>${esc(x.propriedade || '—')}${x.cnpj ? `<div class="vinculo" style="font-family:var(--fonte-dados)">${esc(x.cnpj)}</div>` : ''}</td>
+              <td>${esc(x.propriedade || '—')}</td>
               <td>${esc(x.descricao || '—')}${x.infracao ? `<div class="vinculo">${esc(x.infracao)}</div>` : ''}</td>
               <td class="data-curta">${esc(x.vencimento || '—')}</td>
               <td class="num" style="text-align:right"><b>${fmtMoeda(x.aPagar)}</b>
@@ -5492,7 +5495,11 @@ function renderMultasCobranca(c) {
     ESTADO.filtroCobranca[chave] = ESTADO.filtroCobranca[chave] === b.dataset.valor ? '' : b.dataset.valor;
     renderMultasCobranca(c);
   }));
-  ouvir('cob-limpar', 'click', () => { ESTADO.filtroCobranca = { registro: '', unidade: '', busca: '' }; renderMultasCobranca(c); });
+  ouvir('cob-limpar', 'click', () => { ESTADO.filtroCobranca = { registro: '', unidade: '', propriedade: '', busca: '' }; renderMultasCobranca(c); });
+  c.querySelectorAll('button[data-limpacob]').forEach(b => b.addEventListener('click', () => {
+    ESTADO.filtroCobranca[b.dataset.limpacob] = '';
+    renderMultasCobranca(c);
+  }));
   const busca = el('cob-busca');
   if (busca) busca.addEventListener('input', () => {
     ESTADO.filtroCobranca.busca = busca.value;
@@ -5506,8 +5513,8 @@ function renderMultasCobranca(c) {
   }));
   ouvir('btn-exportar-cob', 'click', () => exportarCsv(
     'multas_em_cobranca_' + new Date().toISOString().substring(0, 10) + '.csv',
-    ['AI', 'Placa', 'Viatura', 'Unidade', 'Status da VTR', 'Propriedade', 'CNPJ proprietário', 'Infração', 'Descrição', 'Vencimento', 'Valor', 'A pagar', 'Consulta em', 'Registrada', 'Status', 'Enquadramento', 'Processo'],
-    todos.map(x => [x.ai, x.placa, x.modelo, x.unidade, x.statusVtr, x.propriedade || '', x.cnpj || '', x.infracao, x.descricao, x.vencimento,
+    ['AI', 'Placa', 'Viatura', 'Unidade', 'Status da VTR', 'Propriedade', 'Infração', 'Descrição', 'Vencimento', 'Valor', 'A pagar', 'Consulta em', 'Registrada', 'Status', 'Enquadramento', 'Processo'],
+    todos.map(x => [x.ai, x.placa, x.modelo, x.unidade, x.statusVtr, x.propriedade || '', x.infracao, x.descricao, x.vencimento,
       (x.valor || 0).toFixed(2).replace('.', ','), (x.aPagar || 0).toFixed(2).replace('.', ','),
       x.consultaEm, x.registrada ? 'sim' : 'não', x.status, x.enquadramento, x.processo])));
   ajustarKpis();
