@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.63.4';
+const VERSAO_PAINEL = '2.64.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -5366,6 +5366,17 @@ function montarSeletorViaturas(idCampo, idChips, idBusca, idLista) {
 }
 
 
+
+/** Situação do licenciamento pelo ano de exercício: em dia, vence este ano ou atrasado. */
+function situacaoLicenciamento(anoEx) {
+  const ano = parseInt(String(anoEx || '').replace(/\D/g, ''), 10);
+  if (!ano) return { classe: '', texto: 'sem exercício', atrasado: false };
+  const atual = new Date().getFullYear();
+  if (ano < atual) return { classe: 'vencido', texto: ano + ' — atrasado', atrasado: true, anos: atual - ano };
+  if (ano === atual) return { classe: 'atencao', texto: String(ano), atrasado: false };
+  return { classe: 'folga', texto: String(ano), atrasado: false };
+}
+
 /* ---------------- multas em cobrança ---------------- */
 function renderMultasCobranca(c) {
   if (!ESTADO.cobranca) {
@@ -5388,7 +5399,7 @@ function renderMultasCobranca(c) {
     if (f.propriedade && (x.propriedade || 'não informada') !== f.propriedade) return false;
     if (f.busca) {
       const alvo = (x.ai + ' ' + x.placa + ' ' + x.descricao + ' ' + x.infracao + ' ' + x.unidade + ' ' +
-                    x.enquadramento + ' ' + (x.propriedade || '')).toLowerCase();
+                    x.enquadramento + ' ' + (x.propriedade || '') + ' ' + (x.anoEx || '')).toLowerCase();
       if (alvo.indexOf(f.busca.toLowerCase()) < 0) return false;
     }
     return true;
@@ -5425,7 +5436,10 @@ function renderMultasCobranca(c) {
       ${kpi('Valor a pagar', fmtMoeda(soma(todos)), todos.length !== dados.itens.length ? 'na seleção' : 'total cobrado', 'vermelho', null, true)}
       ${kpiF('sem', 'Sem registro na planilha', semRegistro, fmtMoeda(soma(semRegistro)), semRegistro.length ? 'ambar' : 'verde')}
       ${kpiF('com', 'Já acompanhadas', comRegistro, fmtMoeda(soma(comRegistro)), 'verde')}
-      ${kpi('Viaturas atingidas', placas.size, 'com multa em aberto', '', null, true)}
+      ${(() => {
+        const atrasadas = new Set(dados.itens.filter(x => situacaoLicenciamento(x.anoEx).atrasado).map(x => x.placa));
+        return kpi('Viaturas atingidas', placas.size, atrasadas.size ? atrasadas.size + ' com licenciamento atrasado' : 'licenciamento em dia', atrasadas.size ? 'vermelho' : '', null, true);
+      })()}
     </div>
 
     <details class="dobra" ${(f.unidade || f.propriedade) ? 'open' : ''}>
@@ -5453,10 +5467,10 @@ function renderMultasCobranca(c) {
       </div>
       <div class="tabela-rol os-rol" style="max-height:620px">
         <table class="tabela-multas tabela-aceites">
-          <colgroup><col style="width:10%"><col style="width:6.5%"><col style="width:11%"><col style="width:9%"><col style="width:8%">
-            <col style="width:8%"><col style="width:18%"><col style="width:7%"><col style="width:8%"><col></colgroup>
+          <colgroup><col style="width:9%"><col style="width:6%"><col style="width:10%"><col style="width:8%"><col style="width:7%">
+            <col style="width:7%"><col style="width:9%"><col style="width:16%"><col style="width:6.5%"><col style="width:7.5%"><col></colgroup>
           <thead><tr><th>AI</th><th>Placa</th><th>Viatura</th><th>Unidade</th><th>Status da VTR</th>
-            <th>Propriedade</th><th>Infração</th><th>Vencimento</th><th style="text-align:right">A pagar</th><th>Acompanhamento</th></tr></thead>
+            <th>Propriedade</th><th>Licenciamento</th><th>Infração</th><th>Vencimento</th><th style="text-align:right">A pagar</th><th>Acompanhamento</th></tr></thead>
           <tbody>
           ${todos.slice(0, 400).map(x => {
             const v = viaturaDaMulta(x.placa);
@@ -5468,6 +5482,9 @@ function renderMultasCobranca(c) {
               <td>${esc(x.unidade || '—')}</td>
               <td>${esc(x.statusVtr || '—')}${x.uso ? `<div class="vinculo">${esc(x.uso)}</div>` : ''}</td>
               <td>${esc(x.propriedade || '—')}</td>
+              <td>${(() => { const lic = situacaoLicenciamento(x.anoEx);
+                return `<span class="prazo ${lic.classe}">${esc(lic.texto)}</span>` +
+                  (x.vencLic ? `<div class="vinculo">vence ${esc(x.vencLic)}</div>` : ''); })()}</td>
               <td>${esc(x.descricao || '—')}${x.infracao ? `<div class="vinculo">${esc(x.infracao)}</div>` : ''}</td>
               <td class="data-curta">${esc(x.vencimento || '—')}</td>
               <td class="num" style="text-align:right"><b>${fmtMoeda(x.aPagar)}</b>
@@ -5479,7 +5496,7 @@ function renderMultasCobranca(c) {
                 : `<span class="status-chip" style="background:#FDECEA; color:#9A2F24">não registrada</span>
                    <div><button class="link-btn" data-novacobranca="${escAttr(x.ai)}|${escAttr(x.placa)}">registrar</button></div>`}</td>
             </tr>`;
-          }).join('') || '<tr><td colspan="10"><div class="vazio">Nenhuma multa nesta seleção</div></td></tr>'}
+          }).join('') || '<tr><td colspan="11"><div class="vazio">Nenhuma multa nesta seleção</div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -5513,8 +5530,8 @@ function renderMultasCobranca(c) {
   }));
   ouvir('btn-exportar-cob', 'click', () => exportarCsv(
     'multas_em_cobranca_' + new Date().toISOString().substring(0, 10) + '.csv',
-    ['AI', 'Placa', 'Viatura', 'Unidade', 'Status da VTR', 'Propriedade', 'Infração', 'Descrição', 'Vencimento', 'Valor', 'A pagar', 'Consulta em', 'Registrada', 'Status', 'Enquadramento', 'Processo'],
-    todos.map(x => [x.ai, x.placa, x.modelo, x.unidade, x.statusVtr, x.propriedade || '', x.infracao, x.descricao, x.vencimento,
+    ['AI', 'Placa', 'Viatura', 'Unidade', 'Status da VTR', 'Propriedade', 'Exercício', 'Licenciamento vence', 'Infração', 'Descrição', 'Vencimento', 'Valor', 'A pagar', 'Consulta em', 'Registrada', 'Status', 'Enquadramento', 'Processo'],
+    todos.map(x => [x.ai, x.placa, x.modelo, x.unidade, x.statusVtr, x.propriedade || '', x.anoEx || '', x.vencLic || '', x.infracao, x.descricao, x.vencimento,
       (x.valor || 0).toFixed(2).replace('.', ','), (x.aPagar || 0).toFixed(2).replace('.', ','),
       x.consultaEm, x.registrada ? 'sim' : 'não', x.status, x.enquadramento, x.processo])));
   ajustarKpis();

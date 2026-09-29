@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.63.4';
+const CODIGO_VERSAO = '2.64.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6584,6 +6584,9 @@ function lerMultasEmCobranca(token) {
           statusVtr: idx.status !== undefined ? String(l[idx.status] || '') : '',
           uso: idx.uso !== undefined ? String(l[idx.uso] || '') : '',
           propriedade: _valorEntreColunas_(l, [idx.prop, 65]),
+          anoEx: idx.anoEx !== undefined ? String(l[idx.anoEx] || '').replace(/\D/g, '') : '',
+          vencLic: idx.vencLic !== undefined ? _dataBR_(l[idx.vencLic]) : '',
+          statusLic: idx.statusLic !== undefined ? String(l[idx.statusLic] || '') : '',
           descricao: item.descricao || '', infracao: item.infracao || '',
           vencimento: item.venc || '', valor: item.valor || 0, aPagar: item.aPagar || item.valor || 0,
           consultaEm: m.consultaEm || '',
