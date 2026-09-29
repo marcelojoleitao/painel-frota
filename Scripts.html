@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.56.2';
+const VERSAO_PAINEL = '2.56.3';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4762,8 +4762,8 @@ function renderNotas(c) {
       <div class="cartao-dica">As anotações ficam na planilha-mãe e seguem as permissões dela — quem tem acesso à planilha vê o conteúdo. Marque como sensível o que for senha ou credencial: assim o texto só aparece quando você pedir, e cada exibição fica registrada no log.</div>
     </div>
 
-    <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
-      ${todas.map(n => `<article class="nota ${n.sensivel ? 'sensivel' : ''}" data-id="${escAttr(n.id)}">
+    <div class="mural">
+      ${todas.map((n, i) => `<article class="nota cor${i % 5} ${n.sensivel ? 'sensivel' : ''}" data-id="${escAttr(n.id)}">
         <div class="nota-cab">
           <h4>${esc(n.titulo)}</h4>
           <span class="dem-tag">${esc(n.categoria)}</span>
