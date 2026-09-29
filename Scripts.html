@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.63.0';
+const VERSAO_PAINEL = '2.63.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -5154,7 +5154,8 @@ function renderSinistros(c) {
             return `<tr class="${emProcesso(s2) ? 'cobrada' : ''}">
               <td>${v ? `<a class="link-btn" style="font-family:var(--fonte-dados); font-weight:700" onclick="abrirFicha('${escAttr(v.placa)}')">${esc(s2.placa)}</a>` : esc(s2.placa || '—')}</td>
               <td style="font-family:var(--fonte-dados); font-size:11.5px">${esc(s2.processo || '—')}</td>
-              <td>${esc(v ? (v.modeloCurto || v.modelo) : '')}${v && v.unidadeCurta ? `<div class="vinculo">${esc(v.unidadeCurta)}</div>` : ''}</td>
+              <td>${esc(v ? (v.modeloCurto || v.modelo) : '')}${v && v.unidadeCurta ? `<div class="vinculo">${esc(v.unidadeCurta)}</div>` : ''}
+                ${v && v.prop ? `<div class="vinculo">${esc(v.prop)}</div>` : ''}</td>
               <td class="data-curta">${esc(s2.data || '—')}</td>
               <td class="num" style="text-align:right">${s2.pecas ? fmtMoeda(s2.pecas) : '—'}</td>
               <td class="num" style="text-align:right">${s2.mo ? fmtMoeda(s2.mo) : '—'}</td>
@@ -5385,7 +5386,8 @@ function renderMultasCobranca(c) {
     if (f.registro === 'com' && !x.registrada) return false;
     if (f.unidade && (x.unidade || '—') !== f.unidade) return false;
     if (f.busca) {
-      const alvo = (x.ai + ' ' + x.placa + ' ' + x.descricao + ' ' + x.infracao + ' ' + x.unidade + ' ' + x.enquadramento).toLowerCase();
+      const alvo = (x.ai + ' ' + x.placa + ' ' + x.descricao + ' ' + x.infracao + ' ' + x.unidade + ' ' +
+                    x.enquadramento + ' ' + (x.propriedade || '')).toLowerCase();
       if (alvo.indexOf(f.busca.toLowerCase()) < 0) return false;
     }
     return true;
@@ -5395,11 +5397,12 @@ function renderMultasCobranca(c) {
   const semRegistro = dados.itens.filter(x => !x.registrada);
   const comRegistro = dados.itens.filter(x => x.registrada);
   const placas = new Set(dados.itens.map(x => x.placa));
-  const porUnidade = new Map(), porEnquadramento = new Map();
+  const porUnidade = new Map(), porEnquadramento = new Map(), porPropriedade = new Map();
   dados.itens.forEach(x => {
     porUnidade.set(x.unidade || '—', (porUnidade.get(x.unidade || '—') || 0) + (x.aPagar || 0));
     const e = x.enquadramento || x.descricao || 'sem descrição';
     porEnquadramento.set(e, (porEnquadramento.get(e) || 0) + (x.aPagar || 0));
+    porPropriedade.set(x.propriedade || 'não informada', (porPropriedade.get(x.propriedade || 'não informada') || 0) + (x.aPagar || 0));
   });
 
   const barras = (mapa, cor, chave) => {
@@ -5431,6 +5434,8 @@ function renderMultasCobranca(c) {
           <div class="barras compacto" style="max-height:220px; overflow:auto">${barras(porUnidade, 'var(--azul)', 'unidade')}</div></div>
         <div class="cartao"><div class="cartao-cab"><h3>Por enquadramento</h3><small>do acompanhamento ou da descrição</small></div>
           <div class="barras compacto" style="max-height:220px; overflow:auto">${barras(porEnquadramento, 'var(--ambar)', null)}</div></div>
+        <div class="cartao"><div class="cartao-cab"><h3>Por propriedade</h3><small>de quem é a viatura</small></div>
+          <div class="barras compacto" style="max-height:220px; overflow:auto">${barras(porPropriedade, 'var(--verde)', null)}</div></div>
       </div>
     </details>
 
@@ -5445,10 +5450,10 @@ function renderMultasCobranca(c) {
       </div>
       <div class="tabela-rol os-rol" style="max-height:620px">
         <table class="tabela-multas tabela-aceites">
-          <colgroup><col style="width:11%"><col style="width:7%"><col style="width:11%"><col style="width:10%"><col style="width:8%">
-            <col style="width:18%"><col style="width:8%"><col style="width:9%"><col></colgroup>
+          <colgroup><col style="width:10%"><col style="width:6.5%"><col style="width:10%"><col style="width:9%"><col style="width:8%">
+            <col style="width:9%"><col style="width:16%"><col style="width:7%"><col style="width:8%"><col></colgroup>
           <thead><tr><th>AI</th><th>Placa</th><th>Viatura</th><th>Unidade</th><th>Status da VTR</th>
-            <th>Infração</th><th>Vencimento</th><th style="text-align:right">A pagar</th><th>Acompanhamento</th></tr></thead>
+            <th>Propriedade</th><th>Infração</th><th>Vencimento</th><th style="text-align:right">A pagar</th><th>Acompanhamento</th></tr></thead>
           <tbody>
           ${todos.slice(0, 400).map(x => {
             const v = viaturaDaMulta(x.placa);
@@ -5459,6 +5464,7 @@ function renderMultasCobranca(c) {
               <td>${esc(v ? (v.modeloCurto || v.modelo) : x.modelo)}</td>
               <td>${esc(x.unidade || '—')}</td>
               <td>${esc(x.statusVtr || '—')}${x.uso ? `<div class="vinculo">${esc(x.uso)}</div>` : ''}</td>
+              <td>${esc(x.propriedade || '—')}${x.cnpj ? `<div class="vinculo" style="font-family:var(--fonte-dados)">${esc(x.cnpj)}</div>` : ''}</td>
               <td>${esc(x.descricao || '—')}${x.infracao ? `<div class="vinculo">${esc(x.infracao)}</div>` : ''}</td>
               <td class="data-curta">${esc(x.vencimento || '—')}</td>
               <td class="num" style="text-align:right"><b>${fmtMoeda(x.aPagar)}</b>
@@ -5470,7 +5476,7 @@ function renderMultasCobranca(c) {
                 : `<span class="status-chip" style="background:#FDECEA; color:#9A2F24">não registrada</span>
                    <div><button class="link-btn" data-novacobranca="${escAttr(x.ai)}|${escAttr(x.placa)}">registrar</button></div>`}</td>
             </tr>`;
-          }).join('') || '<tr><td colspan="9"><div class="vazio">Nenhuma multa nesta seleção</div></td></tr>'}
+          }).join('') || '<tr><td colspan="10"><div class="vazio">Nenhuma multa nesta seleção</div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -5500,8 +5506,8 @@ function renderMultasCobranca(c) {
   }));
   ouvir('btn-exportar-cob', 'click', () => exportarCsv(
     'multas_em_cobranca_' + new Date().toISOString().substring(0, 10) + '.csv',
-    ['AI', 'Placa', 'Viatura', 'Unidade', 'Status da VTR', 'Infração', 'Descrição', 'Vencimento', 'Valor', 'A pagar', 'Consulta em', 'Registrada', 'Status', 'Enquadramento', 'Processo'],
-    todos.map(x => [x.ai, x.placa, x.modelo, x.unidade, x.statusVtr, x.infracao, x.descricao, x.vencimento,
+    ['AI', 'Placa', 'Viatura', 'Unidade', 'Status da VTR', 'Propriedade', 'CNPJ proprietário', 'Infração', 'Descrição', 'Vencimento', 'Valor', 'A pagar', 'Consulta em', 'Registrada', 'Status', 'Enquadramento', 'Processo'],
+    todos.map(x => [x.ai, x.placa, x.modelo, x.unidade, x.statusVtr, x.propriedade || '', x.cnpj || '', x.infracao, x.descricao, x.vencimento,
       (x.valor || 0).toFixed(2).replace('.', ','), (x.aPagar || 0).toFixed(2).replace('.', ','),
       x.consultaEm, x.registrada ? 'sim' : 'não', x.status, x.enquadramento, x.processo])));
   ajustarKpis();
