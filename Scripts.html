@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.60.0';
+const VERSAO_PAINEL = '2.61.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -1068,7 +1068,8 @@ function iniciar(dados) {
   ESTADO.usuario = dados.usuario || {}; ESTADO.admin = !!(dados.usuario && dados.usuario.admin);
   txt('meta-usuario', (primeiroNome(ESTADO.usuario.nome) || ESTADO.usuario.email || '') + (ESTADO.usuario.lotacao ? ' • ' + ESTADO.usuario.lotacao : '') + (ESTADO.admin ? ' • administrador' : ''));
   txt('meta-atualizado', 'Dados de ' + dados.meta.atualizadoEm + (dados.meta.doCache ? ' (cache)' : '') +
-    (dados.meta.pgfAtualizado ? ' • PGF de ' + dados.meta.pgfAtualizado : '') + ' • v' + VERSAO_PAINEL);
+    (dados.meta.pgfAtualizado ? ' • PGF de ' + dados.meta.pgfAtualizado : '') +
+    (dados.meta.fipeAtualizado ? ' • FIPE de ' + dados.meta.fipeAtualizado : '') + ' • v' + VERSAO_PAINEL);
   document.querySelectorAll('.so-admin').forEach(e => e.classList.toggle('oculto', !ESTADO.admin));
   indexarPdfs(dados.pdfsOS || []);
   if (!ESTADO.colunasVisiveis) ESTADO.colunasVisiveis = new Set(COLUNAS.filter(c => c.on).map(c => c.k));
@@ -5166,6 +5167,41 @@ function abrirSinistro(linha) {
       e => { btn.disabled = false; btn.textContent = 'Salvar'; toast('Erro: ' + (e && e.message ? e.message : e), true); });
     if (run) run.salvarSinistro(ESTADO.token, linha || 0, dadosEnvio);
   });
+}
+
+
+/** Compara o gasto de 12 meses com metade do valor venal, na ficha da viatura. */
+function carregarLimiteReparo(placa) {
+  const caixa = el('fipe-' + placa); if (!caixa) return;
+  const run = servidor('situacaoReparoViatura',
+    r => {
+      if (!r || !r.ok) { caixa.textContent = (r && r.erro) || 'não consegui consultar'; return; }
+      const s = r.situacao;
+      if (!s.temFipe) {
+        caixa.innerHTML = 'Sem valor FIPE cadastrado para esta viatura. Preencha o código FIPE na ConsultaBD (coluna BL) para o painel calcular o limite de reparo.';
+        return;
+      }
+      const cor = s.estourou ? 'var(--vermelho)' : s.percentual > 35 ? 'var(--ambar)' : 'var(--verde)';
+      caixa.innerHTML = `
+        <div style="display:flex; flex-wrap:wrap; gap:14px; align-items:center">
+          <div><div class="k" style="font-size:10.5px; color:var(--tinta-suave)">VALOR FIPE</div>
+            <div style="font-weight:800">${fmtMoeda(s.valorFipe)}</div>
+            ${s.consultaEm ? `<div class="vinculo">consultado em ${esc(s.consultaEm)}</div>` : ''}</div>
+          <div><div class="k" style="font-size:10.5px; color:var(--tinta-suave)">GASTO EM 12 MESES</div>
+            <div style="font-weight:800; color:${cor}">${fmtMoeda(s.gasto12m)}</div>
+            <div class="vinculo">${fmtDec(s.percentual)}% do valor venal</div></div>
+          <div><div class="k" style="font-size:10.5px; color:var(--tinta-suave)">LIMITE (50%)</div>
+            <div style="font-weight:800">${fmtMoeda(s.limite)}</div>
+            <div class="vinculo">${s.estourou ? 'limite ultrapassado' : 'margem de ' + fmtMoeda(s.limite - s.gasto12m)}</div></div>
+        </div>
+        <div style="margin-top:8px; height:8px; background:#EEF1F6; border-radius:4px; overflow:hidden">
+          <div style="width:${Math.min(100, s.percentual)}%; height:100%; background:${cor}"></div>
+        </div>
+        ${s.estourou ? '<div style="margin-top:8px; color:var(--vermelho); font-weight:700">Novo reparo exige justificativa: o gasto dos últimos 12 meses já passou de metade do valor venal.</div>' : ''}
+        <div style="margin-top:6px; font-size:11px; color:var(--tinta-suave)">Reparos de acidente não entram neste percentual (art. 32, II).</div>`;
+    },
+    () => { caixa.textContent = 'não consegui consultar'; });
+  if (run) run.situacaoReparoViatura(ESTADO.token, placa);
 }
 
 </script>

@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.60.0';
+const CODIGO_VERSAO = '2.61.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -319,7 +319,8 @@ function carregarDados(token, forcarAtualizacao) {
         atualizadoEm: Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm'),
         statusOcultosPadrao: CONFIG.STATUS_OCULTOS_PADRAO,
         versaoCodigo: CODIGO_VERSAO,
-        pgfAtualizado: _pgfAtualizado_()
+        pgfAtualizado: _pgfAtualizado_(),
+        fipeAtualizado: _fipeAtualizado_()
       }
     };
     if (CONFIG.CACHE_SEG > 0) _cacheGravar_(chave, payload, CONFIG.CACHE_SEG);
@@ -329,6 +330,7 @@ function carregarDados(token, forcarAtualizacao) {
   payload.usuario = { email: sessao.email, nome: sessao.nome || '', lotacao: sessao.lotacao || '', admin: !!sessao.admin };
   payload.meta.versaoCodigo = CODIGO_VERSAO;   // mesmo vindo do cache, informa a versão em execução
   payload.meta.pgfAtualizado = _pgfAtualizado_();
+  payload.meta.fipeAtualizado = _fipeAtualizado_();
   if (!sessao.admin) { payload.solicitacoes = []; payload.edicao = null; }
   else {
     try {
@@ -5653,6 +5655,213 @@ function migrarResumoGlosaGravar() { return migrarResumoGlosa(true); }
 function ajustarTabelasModelosPagamentoAplicar() { return ajustarTabelasModelosPagamento(true); }
 
 
+
+
+/* ============================================================
+   TABELA FIPE — valor venal das viaturas
+   A ConsultaBD já traz o código FIPE (coluna BL). A partir dele o
+   painel consulta o valor mensalmente pela API pública e guarda o
+   histórico, porque a IN PRF 40/2021 (art. 32) exige a consulta no
+   mesmo período da manutenção — não vale o valor de hoje para
+   justificar uma decisão de meses atrás.
+   ============================================================ */
+
+const FIPE = {
+  base: 'https://parallelum.com.br/fipe/api/v2',     // API pública, sem chave
+  abaHistorico: 'HistoricoFIPE',
+  colunas: { valor: 'Valor FIPE', consultaEm: 'FIPE em', refMes: 'FIPE referência' },
+  limiteReparo: 0.5                                   // art. 32 e art. 49
+};
+
+/** Colunas de apoio da FIPE na ConsultaBD, criadas à direita se faltarem. */
+function prepararColunasFipe() {
+  const aba = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_BASE);
+  const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0].map(c => _normCab_(c));
+  let prox = aba.getLastColumn() + 1;
+  const criadas = [];
+  Object.keys(FIPE.colunas).forEach(k => {
+    if (cab.indexOf(_normCab_(FIPE.colunas[k])) >= 0) return;
+    aba.getRange(1, prox).setValue(FIPE.colunas[k]).setFontWeight('bold');
+    criadas.push(FIPE.colunas[k]); prox++;
+  });
+  SpreadsheetApp.flush(); limparCache();
+  Logger.log(criadas.length ? 'Colunas criadas: ' + criadas.join(', ') : 'As colunas da FIPE já existiam.');
+  return criadas.join(', ');
+}
+
+function _colunaPorNome_(cab, nome) { return cab.map(c => _normCab_(c)).indexOf(_normCab_(nome)); }
+
+/** Consulta um código FIPE. Devolve valor, mês de referência e o nome do modelo. */
+function _consultarFipe_(codigo, ano) {
+  const cod = String(codigo || '').replace(/[^\d-]/g, '');
+  if (!cod) return { ok: false, erro: 'sem código' };
+  const tentativas = [];
+  // o ano do modelo entra como "ano-combustível"; tentamos os combustíveis usuais
+  (ano ? [ano] : []).forEach(a => { [1, 2, 3].forEach(comb => tentativas.push(a + '-' + comb)); });
+  const url = FIPE.base + '/cars/' + cod;             // sem ano: devolve a lista de anos
+
+  try {
+    if (!tentativas.length) return { ok: false, erro: 'sem ano do modelo' };
+    for (let i = 0; i < tentativas.length; i++) {
+      const alvo = FIPE.base + '/cars/' + cod + '/years/' + tentativas[i];
+      const r = UrlFetchApp.fetch(alvo, { muteHttpExceptions: true, followRedirects: true });
+      const cod2 = r.getResponseCode();
+      if (cod2 === 404) continue;                     // combustível errado, tenta o próximo
+      if (cod2 !== 200) return { ok: false, erro: 'HTTP ' + cod2 };
+      const j = JSON.parse(r.getContentText());
+      const valor = _parseNumeroBR_(String(j.price || '').replace(/[R$\s]/g, ''));
+      if (!valor) return { ok: false, erro: 'resposta sem preço' };
+      return { ok: true, valor: valor, referencia: String(j.referenceMonth || '').trim(),
+               modelo: String(j.model || '').trim(), marca: String(j.brand || '').trim() };
+    }
+    return { ok: false, erro: 'ano/combustível não encontrado na FIPE' };
+  } catch (e) { return { ok: false, erro: String(e).substring(0, 120) }; }
+}
+
+/** Grava o valor do mês no histórico (uma linha por placa e competência). */
+function _gravarHistoricoFipe_(ss, registros, competencia) {
+  let aba = ss.getSheetByName(FIPE.abaHistorico);
+  if (!aba) {
+    aba = ss.insertSheet(FIPE.abaHistorico);
+    aba.getRange(1, 1, 1, 5).setValues([['Competência', 'Placa', 'Código FIPE', 'Valor', 'Consultado em']]);
+    aba.setFrozenRows(1);
+    aba.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF');
+  }
+  // remove o que já houver desta competência, para a execução ser repetível
+  const n = aba.getLastRow();
+  if (n > 1) {
+    const valores = aba.getRange(2, 1, n - 1, 2).getValues();
+    for (let i = valores.length - 1; i >= 0; i--) {
+      if (String(valores[i][0]).trim() === competencia) aba.deleteRow(i + 2);
+    }
+  }
+  if (registros.length) aba.getRange(aba.getLastRow() + 1, 1, registros.length, 5).setValues(registros);
+}
+
+/**
+ * Atualiza o valor FIPE de toda a frota. Roda pelo gatilho mensal ou à mão.
+ * Consulta apenas viaturas com código FIPE preenchido; as demais são listadas
+ * no log para você completar o código na coluna BL.
+ */
+function atualizarFipe() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const aba = ss.getSheetByName(CONFIG.ABA_BASE);
+  const nLin = aba.getLastRow(), nCol = aba.getLastColumn();
+  const cab = aba.getRange(1, 1, 1, nCol).getValues()[0];
+  const idx = _mapearCampos_(cab.map(c => String(c || '').trim()));
+  const cValor = _colunaPorNome_(cab, FIPE.colunas.valor);
+  const cData = _colunaPorNome_(cab, FIPE.colunas.consultaEm);
+  const cRef = _colunaPorNome_(cab, FIPE.colunas.refMes);
+  if (cValor < 0) { Logger.log('Rode prepararColunasFipe() antes: faltam as colunas de valor e data.'); return; }
+
+  const valores = aba.getRange(2, 1, nLin - 1, nCol).getValues();
+  const hoje = new Date();
+  const competencia = ('0' + (hoje.getMonth() + 1)).slice(-2) + '/' + hoje.getFullYear();
+  const dataTxt = Utilities.formatDate(hoje, CONFIG.FUSO, 'dd/MM/yyyy');
+
+  let ok = 0, semCodigo = 0, falhas = 0;
+  const historico = [], semCodigoLista = [], erros = [];
+  const cache = {};                                  // mesmo código e ano: uma consulta só
+
+  valores.forEach((l, i) => {
+    const placa = String(l[idx.placa] || '').trim().toUpperCase();
+    if (!placa) return;
+    const codigo = idx.fipe !== undefined ? String(l[idx.fipe] || '').trim() : '';
+    if (!codigo) { semCodigo++; if (semCodigoLista.length < 40) semCodigoLista.push(placa + ' ' + String(l[idx.modelo] || '')); return; }
+    const ano = String(l[idx.anoMod] || l[idx.anoFab] || '').replace(/\D/g, '').substring(0, 4);
+    const chave = codigo + '|' + ano;
+    const r = cache[chave] || (cache[chave] = _consultarFipe_(codigo, ano));
+    if (!r.ok) { falhas++; if (erros.length < 25) erros.push(placa + ' (' + codigo + '/' + ano + '): ' + r.erro); return; }
+    aba.getRange(i + 2, cValor + 1).setValue(r.valor);
+    if (cData >= 0) aba.getRange(i + 2, cData + 1).setValue(dataTxt);
+    if (cRef >= 0) aba.getRange(i + 2, cRef + 1).setValue(r.referencia);
+    historico.push([competencia, placa, codigo, r.valor, dataTxt]);
+    ok++;
+    Utilities.sleep(120);                            // respeita o ritmo da API pública
+  });
+
+  _gravarHistoricoFipe_(ss, historico, competencia);
+  SpreadsheetApp.flush();
+  limparCache();
+  PropertiesService.getScriptProperties().setProperty('FIPE_ATUALIZADO', dataTxt);
+
+  Logger.log('=== FIPE — competência ' + competencia + ' ===');
+  Logger.log('Atualizadas: ' + ok + ' | sem código na coluna BL: ' + semCodigo + ' | falhas: ' + falhas);
+  if (semCodigoLista.length) { Logger.log('Sem código FIPE (primeiras):'); semCodigoLista.forEach(x => Logger.log('   ' + x)); }
+  if (erros.length) { Logger.log('Falhas de consulta:'); erros.forEach(x => Logger.log('   ' + x)); }
+  Logger.log('Histórico gravado na aba ' + FIPE.abaHistorico + '.');
+  return ok + ' viatura(s) atualizada(s)';
+}
+
+/** Cria o gatilho mensal (dia 10, de manhã), quando ainda não existir. */
+function instalarGatilhoFipe() {
+  const existentes = ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'atualizarFipe');
+  existentes.forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('atualizarFipe').timeBased().onMonthDay(10).atHour(6).create();
+  Logger.log('Gatilho mensal criado: atualizarFipe, todo dia 10 às 6h. A tabela do mês já está publicada nessa data.');
+}
+
+/** Data da última atualização, para o painel mostrar. */
+function _fipeAtualizado_() {
+  try { return PropertiesService.getScriptProperties().getProperty('FIPE_ATUALIZADO') || ''; } catch (e) { return ''; }
+}
+
+/**
+ * Quanto já foi gasto com a viatura nos últimos 12 meses e como isso se compara
+ * ao valor venal (IN art. 32). Acidentes não entram no percentual (art. 32, II).
+ */
+function _situacaoReparo_(placa, valorFipe) {
+  const saida = { gasto12m: 0, percentual: 0, limite: 0, estourou: false, temFipe: !!valorFipe };
+  if (!valorFipe) return saida;
+  try {
+    const ss = _ssManut_();
+    const aba = ss.getSheetByName(CONFIG.ABA_ORCAMENTOS);
+    if (!aba || aba.getLastRow() < 3) return saida;
+    const valores = aba.getDataRange().getValues();
+    let cab = 0;
+    for (let i = 0; i < Math.min(6, valores.length); i++) {
+      if (valores[i].some(c => /ORDEM\s*SERVI/i.test(String(c)))) { cab = i; break; }
+    }
+    const nomes = valores[cab].map(c => _normCab_(c));
+    const iPlaca = nomes.findIndex(c => /^PLACA$/.test(c));
+    const iTot = nomes.findIndex(c => /TOTAL O ?S|TOTAL OS|^TOTAL/.test(c));
+    const iData = nomes.findIndex(c => /DATA CONCLUS/.test(c));
+    if (iPlaca < 0 || iTot < 0) return saida;
+    const limiteData = new Date(); limiteData.setMonth(limiteData.getMonth() - 12);
+    for (let r = cab + 1; r < valores.length; r++) {
+      if (String(valores[r][iPlaca] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase() !== placa) continue;
+      if (iData >= 0) {
+        const t = _dataTxt_(valores[r][iData]);
+        const m = String(t).match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        if (m && new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])) < limiteData) continue;
+      }
+      saida.gasto12m += _num_(valores[r][iTot]) || 0;
+    }
+  } catch (e) { Logger.log('Situação de reparo: ' + e); }
+  saida.gasto12m = Math.round(saida.gasto12m * 100) / 100;
+  saida.limite = Math.round(valorFipe * FIPE.limiteReparo * 100) / 100;
+  saida.percentual = valorFipe ? Math.round(saida.gasto12m / valorFipe * 1000) / 10 : 0;
+  saida.estourou = saida.gasto12m > saida.limite;
+  return saida;
+}
+
+/** Situação do limite de reparo de uma viatura, para o painel. */
+function situacaoReparoViatura(token, placa) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
+    const alvo = _linhaDaPlaca_(aba, String(placa || '').trim().toUpperCase());
+    if (alvo.linha < 0) return { ok: false, erro: 'Placa não encontrada.' };
+    const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0];
+    const cValor = _colunaPorNome_(cab, FIPE.colunas.valor);
+    const valorFipe = cValor >= 0 ? (_num_(aba.getRange(alvo.linha, cValor + 1).getValue()) || 0) : 0;
+    const cData = _colunaPorNome_(cab, FIPE.colunas.consultaEm);
+    const situacao = _situacaoReparo_(String(placa).toUpperCase(), valorFipe);
+    situacao.valorFipe = valorFipe;
+    situacao.consultaEm = cData >= 0 ? _dataTxt_(aba.getRange(alvo.linha, cData + 1).getValue()) : '';
+    return { ok: true, situacao: situacao };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
 
 /* ============================================================
    SINISTROS — acompanhamento dos processos de dano a viatura
