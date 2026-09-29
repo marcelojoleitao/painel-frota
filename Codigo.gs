@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.57.0';
+const CODIGO_VERSAO = '2.57.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1458,6 +1458,55 @@ function projecaoOS(token) {
       fatiaAceites: fatiaAceites, fatiaAprovadas: fatiaAprovadas, mesesValidos: PROJECAO_MESES_VALIDOS,
       descartados: (cobradas.length - aFaturar.length) };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+
+/**
+ * Lista, no editor, todas as OS que a projeção considera "cobradas e ainda não
+ * faturadas" e diz por que cada uma não casou com o OrçamentosDB. É a forma de
+ * separar faturamento real a vir de simples diferença de número entre as bases.
+ */
+function listarCobradasSemFatura() {
+  const d = _dadosFatura_();
+  const cobradas = d.osPorStatus['Cobradas'] || [];
+  const faturadas = Object.keys(d.faturadas);
+  Logger.log('OS com status "Cobradas" na aba OS: ' + cobradas.length);
+  Logger.log('Números distintos no OrçamentosDB: ' + faturadas.length);
+
+  const hoje = new Date();
+  const limite = new Date(hoje.getFullYear(), hoje.getMonth() - PROJECAO_MESES_VALIDOS, 1);
+  const semFatura = [], comFatura = [];
+  cobradas.forEach(o => (d.faturadas[o.os] ? comFatura : semFatura).push(o));
+  Logger.log('Já faturadas: ' + comFatura.length + ' | sem fatura: ' + semFatura.length);
+  Logger.log('');
+
+  let total = 0, antigas = 0, semValor = 0;
+  semFatura.sort((a, b) => (b.aprovado || 0) - (a.aprovado || 0)).forEach(o => {
+    const m = String(o.data || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    const data = m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])) : null;
+    const antiga = data && data < limite;
+    const entra = !antiga && o.aprovado > 0;
+    if (entra) total += o.aprovado; else if (antiga) antigas++; else semValor++;
+
+    // o número aparece no OrçamentosDB de outra forma? (zeros à esquerda, sufixo)
+    let parecido = '';
+    for (let i = 0; i < faturadas.length; i++) {
+      const f = faturadas[i];
+      if (f !== o.os && (f.indexOf(o.os) >= 0 || o.os.indexOf(f) >= 0)) { parecido = f; break; }
+    }
+    Logger.log((entra ? '→ ENTRA  ' : antiga ? '  antiga ' : '  s/valor') +
+      ' OS ' + o.os + ' | ' + (o.placa || '—') + ' | ' + (o.data || 's/data') +
+      ' | aprovado ' + _moedaBR_(o.aprovado || 0) + ' | orçado ' + _moedaBR_(o.orcado || 0) +
+      (parecido ? '  ⚠ número parecido no OrçamentosDB: ' + parecido : ''));
+  });
+  Logger.log('');
+  Logger.log('TOTAL que entra na projeção: ' + _moedaBR_(total));
+  Logger.log('Descartadas por serem anteriores a ' + Utilities.formatDate(limite, CONFIG.FUSO, 'MM/yyyy') + ': ' + antigas);
+  Logger.log('Descartadas por não terem valor aprovado: ' + semValor);
+  Logger.log('');
+  Logger.log('Se aparecer "número parecido", as duas bases escrevem a OS de formas diferentes');
+  Logger.log('e o cruzamento precisa ser ajustado — me avise que eu corrijo a normalização.');
+  return total;
 }
 
 /** Atalho para rodar a análise no editor. */
