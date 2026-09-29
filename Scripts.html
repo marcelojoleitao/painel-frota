@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.62.0';
+const VERSAO_PAINEL = '2.62.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -5160,13 +5160,6 @@ function abrirSinistro(linha) {
       ${campoExtra('fipe', 'Valor FIPE')}${campoExtra('ressarcimento', 'Ressarcimento')}${campoExtra('conclusao', 'Data de conclusão')}
       <div class="form-campo largo" data-c="observacao"><label>Observação</label><textarea rows="3" data-s>${esc(s2 ? s2.observacao : '')}</textarea></div>
     </div>`) +
-    (placasD.length > 1 ? secao('Viaturas ligadas', `<div class="mini-tabela"><table class="tabela-simples" style="width:100%"><tbody>
-        ${placasD.map(pl => { const vv = viaturaDaMulta(pl); return `<tr>
-          <td style="width:110px"><b style="font-family:var(--fonte-dados)">${esc(pl)}</b></td>
-          <td>${esc(vv ? vv.modelo : 'fora do cadastro')}${vv && vv.unidade ? ' • ' + esc(vv.unidade) : ''}</td>
-          <td style="width:120px">${vv ? `<button class="link-btn" onclick="fecharFicha(); setTimeout(function(){ abrirFicha('${escAttr(vv.placa)}'); }, 120)">abrir ficha</button>` : ''}</td>
-        </tr>`; }).join('')}
-      </tbody></table></div>`) : '') +
     (v ? secao('Viatura', `<div class="grade-dados">
       <div class="dado"><div class="k">Modelo</div><div class="v" style="font-size:14px">${esc(v.modelo)}</div></div>
       <div class="dado"><div class="k">Unidade</div><div class="v" style="font-size:14px">${esc(v.unidade || '—')}</div></div>
