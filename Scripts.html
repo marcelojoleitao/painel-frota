@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.62.1';
+const VERSAO_PAINEL = '2.62.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4724,9 +4724,16 @@ function abrirDemanda(id) {
     secao('Demanda', `<div class="form-grade">
       <div class="form-campo largo"><label>Título</label><input type="text" id="dem-titulo" value="${escAttr(d ? d.titulo : '')}"></div>
       <div class="form-campo largo"><label>Descrição</label><textarea id="dem-desc" rows="3">${esc(d ? d.descricao : '')}</textarea></div>
-      <div class="form-campo largo"><label>Viaturas (separe por vírgula; vazio = geral da frota)</label>
-        <input type="text" id="dem-placa" list="lista-placas-dem" placeholder="PNY1624, POC3545" value="${escAttr(d ? (d.placas || []).join(', ') : '')}" style="text-transform:uppercase">
-        <datalist id="lista-placas-dem">${(ESTADO.veiculos || []).map(x => `<option value="${escAttr(x.placa)}">${esc(x.modeloCurto || x.modelo || '')}</option>`).join('')}</datalist></div>
+      <div class="form-campo largo"><label>Viaturas (vazio = geral da frota)</label>
+        <div class="seletor-vtr" id="dem-vtr">
+          <div class="vtr-chips" id="dem-chips"></div>
+          <div class="vtr-busca">
+            <input type="text" id="dem-busca-vtr" placeholder="digite placa ou modelo para adicionar" autocomplete="off">
+            <div class="vtr-lista oculto" id="dem-lista-vtr"></div>
+          </div>
+        </div>
+        <input type="hidden" id="dem-placa" value="${escAttr(d ? (d.placas || []).join(', ') : '')}">
+      </div>
       <div class="form-campo"><label>Fase</label><select id="dem-fase">
         ${dados.fases.map(x => `<option value="${escAttr(x)}" ${d && d.fase === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div>
       <div class="form-campo"><label>Prioridade</label><select id="dem-prio">
@@ -4764,6 +4771,7 @@ function abrirDemanda(id) {
 
   cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
   document.body.style.overflow = 'hidden';
+  montarSeletorViaturas('dem-placa', 'dem-chips', 'dem-busca-vtr', 'dem-lista-vtr');
 
   ouvir('btn-salvar-dem', 'click', () => {
     const campos = { titulo: val('dem-titulo'), descricao: (el('dem-desc') || {}).value || '',
@@ -4820,7 +4828,7 @@ function novaDemandaDaViatura(placa) {
       setTimeout(() => {
         abrirDemanda(null);
         const campo = el('dem-placa');
-        if (campo) { campo.value = placa; campo.readOnly = false; }
+        if (campo) { campo.value = placa; montarSeletorViaturas('dem-placa', 'dem-chips', 'dem-busca-vtr', 'dem-lista-vtr'); }
         const titulo = el('dem-titulo');
         if (titulo) titulo.focus();
       }, 220);
@@ -5227,6 +5235,72 @@ function carregarLimiteReparo(placa) {
     },
     () => { caixa.textContent = 'não consegui consultar'; });
   if (run) run.situacaoReparoViatura(ESTADO.token, placa);
+}
+
+
+/** Seletor de várias viaturas: etiquetas removíveis e busca por placa ou modelo. */
+function montarSeletorViaturas(idCampo, idChips, idBusca, idLista) {
+  const campo = el(idCampo), chips = el(idChips), busca = el(idBusca), lista = el(idLista);
+  if (!campo || !chips || !busca || !lista) return;
+
+  const selecionadas = () => campo.value.split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+  const gravar = arr => { campo.value = arr.join(', '); desenhar(); };
+
+  const desenhar = () => {
+    const arr = selecionadas();
+    chips.innerHTML = arr.length
+      ? arr.map(pl => {
+          const v = viaturaDaMulta(pl);
+          return `<span class="vtr-chip" title="${escAttr(v ? v.modelo : 'fora do cadastro')}">
+            <b>${esc(pl)}</b>${v ? '<small>' + esc(v.modeloCurto || v.modelo) + '</small>' : ''}
+            <button type="button" data-tira="${escAttr(pl)}">×</button></span>`;
+        }).join('')
+      : '<span class="vtr-vazio">nenhuma viatura — a demanda vale para a frota</span>';
+    chips.querySelectorAll('button[data-tira]').forEach(b => b.addEventListener('click', () => {
+      gravar(selecionadas().filter(x => x !== b.dataset.tira));
+      busca.focus();
+    }));
+  };
+
+  const fechar = () => { lista.classList.add('oculto'); lista.innerHTML = ''; };
+
+  const sugerir = () => {
+    const termo = busca.value.trim().toUpperCase();
+    const jaTem = selecionadas();
+    const achados = (ESTADO.veiculos || [])
+      .filter(v => jaTem.indexOf(v.placa) < 0)
+      .filter(v => !termo || v.placa.indexOf(termo) >= 0 ||
+        String(v.modelo || '').toUpperCase().indexOf(termo) >= 0 ||
+        String(v.unidade || '').toUpperCase().indexOf(termo) >= 0)
+      .slice(0, 12);
+    if (!achados.length) { fechar(); return; }
+    lista.innerHTML = achados.map(v => `<button type="button" class="vtr-opcao" data-add="${escAttr(v.placa)}">
+      <b>${esc(v.placa)}</b> <span>${esc(v.modeloCurto || v.modelo || '')}</span>
+      ${v.unidadeCurta ? `<small>${esc(v.unidadeCurta)}</small>` : ''}</button>`).join('');
+    lista.classList.remove('oculto');
+    lista.querySelectorAll('button[data-add]').forEach(b => b.addEventListener('mousedown', e => {
+      e.preventDefault();
+      gravar(selecionadas().concat([b.dataset.add]));
+      busca.value = ''; busca.focus(); sugerir();
+    }));
+  };
+
+  busca.addEventListener('input', sugerir);
+  busca.addEventListener('focus', sugerir);
+  busca.addEventListener('blur', () => setTimeout(fechar, 150));
+  busca.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const primeira = lista.querySelector('button[data-add]');
+      if (primeira) { gravar(selecionadas().concat([primeira.dataset.add])); busca.value = ''; sugerir(); }
+    }
+    if (e.key === 'Backspace' && !busca.value) {          // apaga a última etiqueta
+      const arr = selecionadas();
+      if (arr.length) gravar(arr.slice(0, -1));
+    }
+    if (e.key === 'Escape') fechar();
+  });
+  desenhar();
 }
 
 </script>
