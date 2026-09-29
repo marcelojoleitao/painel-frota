@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.56.6';
+const CODIGO_VERSAO = '2.57.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1347,6 +1347,15 @@ function _dadosFatura_() {
  */
 const PROJECAO_MESES_VALIDOS = 6;   // registros mais antigos que isto não entram
 
+/** As maiores OS de uma parcela, para a conta poder ser conferida. */
+function _maioresItens_(lista) {
+  return (lista || []).slice()
+    .map(o => ({ os: o.os, placa: o.placa || '', valor: o.aprovado !== undefined && o.aprovado > 0 ? o.aprovado : (o.valor || 0),
+                 data: o.data || o.conclusao || '', status: o.status || '' }))
+    .sort((a, b) => b.valor - a.valor)
+    .slice(0, 10);
+}
+
 function projecaoOS(token) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
   try {
@@ -1423,18 +1432,20 @@ function projecaoOS(token) {
       seguinte: { comp: rot(2), valor: seguinteValor },
       composicao: [
         { rotulo: 'Cobradas ainda não faturadas', qtd: aFaturar.length, valor: soma(aFaturar),
-          noProximo: soma(aFaturar), noSeguinte: 0, nota: 'já viraram cobrança e não constam em nenhuma fatura' },
+          noProximo: soma(aFaturar), noSeguinte: 0, nota: 'já viraram cobrança e não constam em nenhuma fatura',
+          itens: _maioresItens_(aFaturar) },
         { rotulo: 'Aceites pendentes', qtd: aceitesLimpos.length, valor: somaAceites,
           noProximo: Math.round(somaAceites * fatiaAceites * 100) / 100,
           noSeguinte: Math.round(somaAceites * (1 - fatiaAceites) * 100) / 100,
-          nota: 'serviço concluído; falta o aceite e a nota fiscal da oficina' },
+          nota: 'serviço concluído; falta o aceite e a nota fiscal da oficina',
+          itens: _maioresItens_(aceitesLimpos) },
         { rotulo: 'Concluídas e não cobradas', qtd: concluidas.length, valor: soma(concluidas),
           noProximo: Math.round(soma(concluidas) * 0.7 * 100) / 100, noSeguinte: Math.round(soma(concluidas) * 0.3 * 100) / 100,
-          nota: 'da aba OS, sem aceite correspondente' },
+          nota: 'da aba OS, sem aceite correspondente', itens: _maioresItens_(concluidas) },
         { rotulo: 'Aprovadas e não iniciadas', qtd: aprovadas.length, valor: soma(aprovadas),
           noProximo: Math.round(soma(aprovadas) * fatiaAprovadas * 100) / 100,
           noSeguinte: Math.round(soma(aprovadas) * (1 - fatiaAprovadas) * 100) / 100,
-          nota: 'valor aprovado; ainda depende de a oficina executar' }
+          nota: 'valor aprovado; ainda depende de a oficina executar', itens: _maioresItens_(aprovadas) }
       ],
       semPrevisao: { qtd: fora.length,
         valor: Math.round(fora.reduce((s, o) => s + (o.aprovado > 0 ? o.aprovado : 0), 0) * 100) / 100,
