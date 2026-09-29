@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.58.1';
+const VERSAO_PAINEL = '2.58.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -815,12 +815,14 @@ function abrirFicha(placa) {
       const dem = demandasDaViatura(v.placa);
       if (!ESTADO.demandas) return '';
       const abertas = dem.filter(x => !/conclu/i.test(x.fase));
-      return secao('Demandas', dem.length ? dem.map(x => `<div class="os-item ${atrasada(x) ? 'aceite' : ''}">
+      const botao = `<button class="link-btn" onclick="novaDemandaDaViatura('${escAttr(v.placa)}')" style="font-weight:700">+ nova demanda</button>`;
+      return secao('Demandas', (dem.length ? dem.map(x => `<div class="os-item ${atrasada(x) ? 'aceite' : ''}">
         <a class="link-btn" style="font-weight:700" onclick="fecharFicha(); ESTADO.aba='gestao'; mudarAba('gestao'); setTimeout(function(){ abrirDemanda('${escAttr(x.id)}'); }, 200)">${esc(x.titulo)}</a>
         • ${esc(x.fase)}${x.prazo ? ' • prazo ' + esc(x.prazo) : ''}${x.responsavel ? ' • ' + esc(x.responsavel) : ''}
         ${x.descricao ? `<div class="linha2" style="color:var(--tinta-suave)">${esc(x.descricao)}</div>` : ''}</div>`).join('')
-        : '<div class="nao">Nenhuma demanda registrada</div>',
-        abertas.length ? `<span class="badge ${abertas.some(atrasada) ? 'indisponivel' : 'manutencao'}">${abertas.length} aberta(s)</span>` : '');
+        : '<div class="nao">Nenhuma demanda registrada para esta viatura</div>') +
+        `<div class="form-acoes" style="margin-top:6px"><button class="btn claro" onclick="novaDemandaDaViatura('${escAttr(v.placa)}')">+ Nova demanda para ${esc(v.placa)}</button></div>`,
+        (abertas.length ? `<span class="badge ${abertas.some(atrasada) ? 'indisponivel' : 'manutencao'}">${abertas.length} aberta(s)</span> ` : '') + botao);
     })()}
     ${secao('Aceites', aceitesHtml, aceitesV.length ? `<span class="badge ${aceitesV.some(a => { const d = diasAte(a.limiteISO); return d !== null && d <= 3; }) ? 'indisponivel' : 'neutro'}">${aceitesV.length}</span>` : '')}
     ${secao('Gestor de frota da unidade', gestorHtml)}
@@ -4764,6 +4766,34 @@ function abrirDemanda(id) {
       e => toast('Erro: ' + (e && e.message ? e.message : e), true));
     if (run) run.excluirDemanda(ESTADO.token, id);
   });
+}
+
+
+/** Abre o formulário de demanda já vinculado a uma viatura. */
+function novaDemandaDaViatura(placa) {
+  const seguir = () => {
+    fecharFicha();
+    setTimeout(() => {
+      ESTADO.subGestao = 'quadro';
+      mudarAba('gestao');
+      setTimeout(() => {
+        abrirDemanda(null);
+        const campo = el('dem-placa');
+        if (campo) { campo.value = placa; campo.readOnly = false; }
+        const titulo = el('dem-titulo');
+        if (titulo) titulo.focus();
+      }, 220);
+    }, 120);
+  };
+  if (!ESTADO.demandas) {                       // precisa do quadro para abrir o formulário
+    toast('Carregando o quadro…');
+    const run = servidor('lerDemandas',
+      r => { if (r && r.ok) { ESTADO.demandas = r; seguir(); } else toast('Não consegui abrir o quadro.', true); },
+      e => toast('Erro: ' + (e && e.message ? e.message : e), true));
+    if (run) run.lerDemandas(ESTADO.token);
+    return;
+  }
+  seguir();
 }
 
 /** Demandas de uma viatura, para exibir na ficha dela. */
