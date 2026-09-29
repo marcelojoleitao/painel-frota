@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.62.5';
+const VERSAO_PAINEL = '2.63.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -82,7 +82,7 @@ const ESTADO = {
   pdfsPorOS: {}, pdfsPorPlaca: {}, filtroStatusOS: '', filtroStatusAceite: '',
   subAcoes: 'executar', lote: null, fila: null, subDados: 'importar', subOS: 'panorama', nivelOS: 'n2', osEditadas: {},
   subPag: 'panorama', processo: null, compProcesso: {}, tituloEditado: {},
-  subMultas: 'acompanhar', multas: null, projecao: null, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
+  subMultas: 'acompanhar', multas: null, projecao: null, cobranca: null, filtroCobranca: { registro: '', unidade: '', busca: '' }, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
   filtroAceite: '', filtroOS: { unidade: '', oficina: '' }, filtroAceites: { unidade: '', oficina: '' },
   subGestao: 'quadro', demandas: null, notas: null, soComDemanda: false, sinistros: null, filtroSinistro: { status: '', busca: '' },
   filtroGestao: { placa: '', responsavel: '', busca: '' }, filtroNotas: { categoria: '', busca: '' },
@@ -3333,6 +3333,7 @@ function renderMultas() {
     return;
   }
   if (ESTADO.subMultas === 'bases') return renderCadastrosMultas(c);
+  if (ESTADO.subMultas === 'cobranca') return renderMultasCobranca(c);
   if (ESTADO.subMultas === 'analise') return renderAnaliseMultas(c);
   renderAcompanhamentoMultas(c);
 }
@@ -5361,6 +5362,160 @@ function montarSeletorViaturas(idCampo, idChips, idBusca, idLista) {
     if (e.key === 'Escape') fechar();
   });
   desenhar();
+}
+
+
+/* ---------------- multas em cobrança ---------------- */
+function renderMultasCobranca(c) {
+  if (!ESTADO.cobranca) {
+    c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Cruzando as multas da ConsultaBD com a planilha de acompanhamento…</div></div>';
+    const run = servidor('lerMultasEmCobranca',
+      r => {
+        if (!r || !r.ok) { c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha ao ler.') + '</div></div>'; return; }
+        ESTADO.cobranca = r; renderMultasCobranca(c);
+      },
+      e => { c.innerHTML = '<div class="cartao largo"><div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div></div>'; });
+    if (run) run.lerMultasEmCobranca(ESTADO.token);
+    return;
+  }
+  const dados = ESTADO.cobranca;
+  const f = ESTADO.filtroCobranca;
+  const todos = dados.itens.filter(x => {
+    if (f.registro === 'sem' && x.registrada) return false;
+    if (f.registro === 'com' && !x.registrada) return false;
+    if (f.unidade && (x.unidade || '—') !== f.unidade) return false;
+    if (f.busca) {
+      const alvo = (x.ai + ' ' + x.placa + ' ' + x.descricao + ' ' + x.infracao + ' ' + x.unidade + ' ' + x.enquadramento).toLowerCase();
+      if (alvo.indexOf(f.busca.toLowerCase()) < 0) return false;
+    }
+    return true;
+  }).sort((a, b) => (b.aPagar || 0) - (a.aPagar || 0));
+
+  const soma = arr => arr.reduce((t, x) => t + (x.aPagar || 0), 0);
+  const semRegistro = dados.itens.filter(x => !x.registrada);
+  const comRegistro = dados.itens.filter(x => x.registrada);
+  const placas = new Set(dados.itens.map(x => x.placa));
+  const porUnidade = new Map(), porEnquadramento = new Map();
+  dados.itens.forEach(x => {
+    porUnidade.set(x.unidade || '—', (porUnidade.get(x.unidade || '—') || 0) + (x.aPagar || 0));
+    const e = x.enquadramento || x.descricao || 'sem descrição';
+    porEnquadramento.set(e, (porEnquadramento.get(e) || 0) + (x.aPagar || 0));
+  });
+
+  const barras = (mapa, cor, chave) => {
+    const itens = Array.from(mapa.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const maximo = Math.max(1, ...itens.map(i => i[1]));
+    return itens.map(([k, v]) => `<button class="barra ${chave && f[chave] === k ? 'selecionada' : ''}" ${chave ? `data-fc="${chave}" data-valor="${escAttr(k)}"` : 'style="cursor:default"'}>
+      <span class="rotulo">${esc(k)}</span>
+      <span class="trilha"><span class="preench" style="width:${Math.round(v / maximo * 100)}%; background:${cor}"></span></span>
+      <span class="valor">${fmtMoeda(v)}</span></button>`).join('') || '<div class="vazio">Sem dados</div>';
+  };
+  const kpiF = (chave, rotulo, arr, sub, cor) =>
+    `<div class="kpi ${cor || ''} ${f.registro === chave ? 'selecionado' : ''}" ${chave ? `data-fcreg="${chave}"` : ''} style="${chave ? 'cursor:pointer' : ''}">
+      <div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${fmtInt(arr.length)}</div>
+      <div class="kpi-sub">${sub}</div></div>`;
+
+  c.innerHTML = `
+    <div class="kpis">
+      ${kpiF('', 'AIs em cobrança', dados.itens, fmtMoeda(dados.totalAPagar), '')}
+      ${kpi('Valor a pagar', fmtMoeda(soma(todos)), todos.length !== dados.itens.length ? 'na seleção' : 'total cobrado', 'vermelho', null, true)}
+      ${kpiF('sem', 'Sem registro na planilha', semRegistro, fmtMoeda(soma(semRegistro)), semRegistro.length ? 'ambar' : 'verde')}
+      ${kpiF('com', 'Já acompanhadas', comRegistro, fmtMoeda(soma(comRegistro)), 'verde')}
+      ${kpi('Viaturas atingidas', placas.size, 'com multa em aberto', '', null, true)}
+    </div>
+
+    <details class="dobra" ${f.unidade ? 'open' : ''}>
+      <summary>Valor por unidade e por enquadramento${f.unidade ? ' — filtro ativo' : ''}</summary>
+      <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+        <div class="cartao"><div class="cartao-cab"><h3>Por unidade</h3><small>clique para filtrar</small></div>
+          <div class="barras compacto" style="max-height:220px; overflow:auto">${barras(porUnidade, 'var(--azul)', 'unidade')}</div></div>
+        <div class="cartao"><div class="cartao-cab"><h3>Por enquadramento</h3><small>do acompanhamento ou da descrição</small></div>
+          <div class="barras compacto" style="max-height:220px; overflow:auto">${barras(porEnquadramento, 'var(--ambar)', null)}</div></div>
+      </div>
+    </details>
+
+    <div class="cartao largo" style="margin-top:12px">
+      <div class="cartao-cab"><h3>Multas em cobrança</h3>
+        <small>${todos.length} AI(s)${dados.consultaEm ? ' • última consulta ' + esc(dados.consultaEm) : ''}</small></div>
+      <div class="os-barra-acoes">
+        <div class="busca" style="max-width:280px"><input id="cob-busca" type="search" placeholder="AI, placa, infração, unidade…" value="${escAttr(f.busca)}"></div>
+        ${(f.registro || f.unidade || f.busca) ? '<button class="btn claro" id="cob-limpar">Limpar</button>' : ''}
+        <div style="flex:1"></div>
+        <button class="btn claro" id="btn-exportar-cob">⤓ Exportar</button>
+      </div>
+      <div class="tabela-rol os-rol" style="max-height:620px">
+        <table class="tabela-multas tabela-aceites">
+          <colgroup><col style="width:11%"><col style="width:7%"><col style="width:11%"><col style="width:10%"><col style="width:8%">
+            <col style="width:18%"><col style="width:8%"><col style="width:9%"><col></colgroup>
+          <thead><tr><th>AI</th><th>Placa</th><th>Viatura</th><th>Unidade</th><th>Status da VTR</th>
+            <th>Infração</th><th>Vencimento</th><th style="text-align:right">A pagar</th><th>Acompanhamento</th></tr></thead>
+          <tbody>
+          ${todos.slice(0, 400).map(x => {
+            const v = viaturaDaMulta(x.placa);
+            return `<tr class="${x.registrada ? '' : 'cobrada'}">
+              <td><b style="font-family:var(--fonte-dados)">${esc(x.ai || '—')}</b>
+                ${x.consultaEm ? `<div class="vinculo">consulta ${esc(x.consultaEm)}</div>` : ''}</td>
+              <td>${v ? `<a class="link-btn" style="font-family:var(--fonte-dados); font-weight:700" onclick="abrirFicha('${escAttr(v.placa)}')">${esc(x.placa)}</a>` : esc(x.placa)}</td>
+              <td>${esc(v ? (v.modeloCurto || v.modelo) : x.modelo)}</td>
+              <td>${esc(x.unidade || '—')}</td>
+              <td>${esc(x.statusVtr || '—')}${x.uso ? `<div class="vinculo">${esc(x.uso)}</div>` : ''}</td>
+              <td>${esc(x.descricao || '—')}${x.infracao ? `<div class="vinculo">${esc(x.infracao)}</div>` : ''}</td>
+              <td class="data-curta">${esc(x.vencimento || '—')}</td>
+              <td class="num" style="text-align:right"><b>${fmtMoeda(x.aPagar)}</b>
+                ${x.valor && x.valor !== x.aPagar ? `<div class="vinculo">valor ${fmtMoeda(x.valor)}</div>` : ''}</td>
+              <td>${x.registrada
+                ? `<span class="status-chip ${classeStatus(x.status)}" style="${escAttr(estiloStatus(x.status))}">${esc(x.status || 'registrada')}</span>
+                   ${x.enquadramento ? `<div class="vinculo">${esc(x.enquadramento)}</div>` : ''}
+                   ${x.processo ? `<div class="vinculo">${esc(x.processo)}</div>` : ''}`
+                : `<span class="status-chip" style="background:#FDECEA; color:#9A2F24">não registrada</span>
+                   <div><button class="link-btn" data-novacobranca="${escAttr(x.ai)}|${escAttr(x.placa)}">registrar</button></div>`}</td>
+            </tr>`;
+          }).join('') || '<tr><td colspan="9"><div class="vazio">Nenhuma multa nesta seleção</div></td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <div class="cartao-dica">A lista vem das multas registradas na consulta de cada viatura (ConsultaBD). Linhas em amarelo ainda não têm processo aberto na planilha de acompanhamento — são as que exigem providência.</div>
+    </div>`;
+
+  c.querySelectorAll('.kpi[data-fcreg]').forEach(k => k.addEventListener('click', () => {
+    ESTADO.filtroCobranca.registro = ESTADO.filtroCobranca.registro === k.dataset.fcreg ? '' : k.dataset.fcreg;
+    renderMultasCobranca(c);
+  }));
+  c.querySelectorAll('button[data-fc]').forEach(b => b.addEventListener('click', () => {
+    const chave = b.dataset.fc;
+    ESTADO.filtroCobranca[chave] = ESTADO.filtroCobranca[chave] === b.dataset.valor ? '' : b.dataset.valor;
+    renderMultasCobranca(c);
+  }));
+  ouvir('cob-limpar', 'click', () => { ESTADO.filtroCobranca = { registro: '', unidade: '', busca: '' }; renderMultasCobranca(c); });
+  const busca = el('cob-busca');
+  if (busca) busca.addEventListener('input', () => {
+    ESTADO.filtroCobranca.busca = busca.value;
+    clearTimeout(ESTADO._tc);
+    ESTADO._tc = setTimeout(() => { const pos = busca.selectionStart; renderMultasCobranca(c); const n = el('cob-busca'); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} } }, 400);
+  });
+  c.querySelectorAll('button[data-novacobranca]').forEach(b => b.addEventListener('click', () => {
+    const [ai, placa] = b.dataset.novacobranca.split('|');
+    if (!ESTADO.multas) { toast('Carregando as bases de multas…'); const run = servidor('lerMultas', r => { if (r && r.ok) { ESTADO.multas = r; abrirFormMultaCom(ai, placa); } }, () => {}); if (run) run.lerMultas(ESTADO.token); return; }
+    abrirFormMultaCom(ai, placa);
+  }));
+  ouvir('btn-exportar-cob', 'click', () => exportarCsv(
+    'multas_em_cobranca_' + new Date().toISOString().substring(0, 10) + '.csv',
+    ['AI', 'Placa', 'Viatura', 'Unidade', 'Status da VTR', 'Infração', 'Descrição', 'Vencimento', 'Valor', 'A pagar', 'Consulta em', 'Registrada', 'Status', 'Enquadramento', 'Processo'],
+    todos.map(x => [x.ai, x.placa, x.modelo, x.unidade, x.statusVtr, x.infracao, x.descricao, x.vencimento,
+      (x.valor || 0).toFixed(2).replace('.', ','), (x.aPagar || 0).toFixed(2).replace('.', ','),
+      x.consultaEm, x.registrada ? 'sim' : 'não', x.status, x.enquadramento, x.processo])));
+  ajustarKpis();
+}
+
+/** Abre o cadastro de multa já com o AI e a placa vindos da cobrança. */
+function abrirFormMultaCom(ai, placa) {
+  abrirFormMulta(null);
+  setTimeout(() => {
+    const campoAi = document.querySelector('#gaveta-corpo .form-campo[data-campo="ai"] input');
+    if (campoAi) campoAi.value = ai;
+    const campoPlaca = document.querySelector('#gaveta-corpo .form-campo[data-campo="placa"] input');
+    if (campoPlaca) campoPlaca.value = placa;
+  }, 120);
 }
 
 </script>

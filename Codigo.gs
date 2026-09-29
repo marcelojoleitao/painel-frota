@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.62.5';
+const CODIGO_VERSAO = '2.63.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6516,6 +6516,79 @@ function verCoresStatusMultas() {
   if (!cores.length) { Logger.log('Nenhuma formatação condicional reconhecida na aba Multas.'); return; }
   Logger.log(cores.length + ' regra(s) reconhecida(s):');
   cores.forEach(c => Logger.log('   "' + c.texto + '" → fundo ' + (c.fundo || '—') + ', fonte ' + (c.fonte || '—') + (c.contem ? ' (por conter)' : '')));
+}
+
+
+/**
+ * Multas em cobrança: um AI por linha, a partir do texto de multas da
+ * ConsultaBD, cruzado com a planilha de acompanhamento (aba Multas).
+ * É o que a PRF ainda está sendo cobrada, com o que já sabemos de cada AI.
+ */
+function lerMultasEmCobranca(token) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
+    const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0].map(v => String(v || '').trim());
+    const idx = _mapearCampos_(cab);
+    if (idx.multasTxt === undefined) return { ok: false, erro: 'Coluna de multas não encontrada na ConsultaBD.' };
+    const n = aba.getLastRow() - 1;
+    const valores = aba.getRange(2, 1, n, aba.getLastColumn()).getValues();
+
+    // o que já está registrado na planilha de multas, por número do AI
+    const registro = {};
+    try {
+      const ssM = _ssMultas_();
+      const abaM = ssM.getSheetByName(MULTAS.aba);
+      if (abaM && abaM.getLastRow() >= MULTAS.primeiraLinha) {
+        const nCol = Math.max(abaM.getLastColumn(), MULTAS.colLancamento);
+        abaM.getRange(MULTAS.primeiraLinha, 1, abaM.getLastRow() - MULTAS.primeiraLinha + 1, nCol)
+          .getDisplayValues().forEach((l, i) => {
+            const ai = String(l[MULTAS.col.ai - 1] || '').replace(/\D/g, '');
+            if (!ai) return;
+            registro[ai] = { linha: MULTAS.primeiraLinha + i,
+              status: String(l[MULTAS.col.status - 1] || '').trim(),
+              tipo: String(l[MULTAS.col.tipo - 1] || '').trim(),
+              orgao: String(l[MULTAS.col.orgao - 1] || '').trim(),
+              enquadramento: String(l[MULTAS.col.enquadramento - 1] || '').trim(),
+              processo: String(l[MULTAS.col.processo - 1] || '').trim(),
+              protocolo: String(l[MULTAS.col.protocolo - 1] || '').trim(),
+              dataDefesa: _dataBR_(l[MULTAS.col.dataDefesa - 1]) };
+          });
+      }
+    } catch (e) { Logger.log('Planilha de multas: ' + e); }
+
+    const lista = [];
+    valores.forEach(l => {
+      const texto = String(l[idx.multasTxt] || '');
+      if (!texto) return;
+      const placa = String(l[idx.placa] || '').trim().toUpperCase();
+      const m = _parseMultas_(texto);
+      m.itens.forEach(item => {
+        const chave = String(item.ait || '').replace(/\D/g, '');
+        const reg = registro[chave] || null;
+        lista.push({
+          ai: String(item.ait || '').trim(), placa: placa,
+          modelo: idx.modelo !== undefined ? String(l[idx.modelo] || '') : '',
+          unidade: idx.unidade !== undefined ? String(l[idx.unidade] || '') : '',
+          statusVtr: idx.status !== undefined ? String(l[idx.status] || '') : '',
+          uso: idx.uso !== undefined ? String(l[idx.uso] || '') : '',
+          descricao: item.descricao || '', infracao: item.infracao || '',
+          vencimento: item.venc || '', valor: item.valor || 0, aPagar: item.aPagar || item.valor || 0,
+          consultaEm: m.consultaEm || '',
+          registrada: !!reg,
+          status: reg ? reg.status : '', tipo: reg ? reg.tipo : '', orgao: reg ? reg.orgao : '',
+          enquadramento: reg ? reg.enquadramento : '', processo: reg ? reg.processo : '',
+          protocolo: reg ? reg.protocolo : '', dataDefesa: reg ? reg.dataDefesa : '',
+          linhaMulta: reg ? reg.linha : 0
+        });
+      });
+    });
+
+    return { ok: true, itens: lista,
+      consultaEm: lista.length ? lista[0].consultaEm : '',
+      totalAPagar: Math.round(lista.reduce((t, x) => t + (x.aPagar || 0), 0) * 100) / 100,
+      semRegistro: lista.filter(x => !x.registrada).length };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 
 /** Multas cadastradas + vínculos + conferência com as multas da viatura na ConsultaBD. */
