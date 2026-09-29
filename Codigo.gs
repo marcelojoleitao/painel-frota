@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.61.4';
+const CODIGO_VERSAO = '2.62.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6064,6 +6064,14 @@ function _seiLimpo_(v) {
   return t;                                  // formato diferente fica como digitado
 }
 
+/** Placas de uma demanda: uma, várias separadas por vírgula, ou nenhuma. */
+function _placasDaDemanda_(valor) {
+  return String(valor === null || valor === undefined ? '' : valor)
+    .split(/[,;\/\n]+/)
+    .map(x => x.replace(/[^A-Za-z0-9]/g, '').toUpperCase())
+    .filter(x => x.length >= 6);
+}
+
 function _abaDemandas_() {
   const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
   let aba = ss.getSheetByName(DEMANDAS.aba);
@@ -6104,7 +6112,8 @@ function lerDemandas(token) {
           criadaEm: _dataTxt_(l[1]), criadaPor: String(l[2] || ''),
           fase: String(l[3] || DEMANDAS.fases[0]), prioridade: String(l[4] || 'Normal'),
           titulo: String(l[5] || ''), descricao: String(l[6] || ''),
-          placa: String(l[7] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase(),
+          placas: _placasDaDemanda_(l[7]),
+          placa: _placasDaDemanda_(l[7])[0] || '',          // compatibilidade com o que já existia
           responsavel: String(l[8] || ''), prazo: _dataBR_(l[9]),
           atualizadaEm: _dataTxt_(l[10]), concluidaEm: _dataTxt_(l[11]),
           anotacoes: String(l[12] || '').split('\n').filter(x => x.trim()),
@@ -6134,7 +6143,7 @@ function salvarDemanda(token, id, dados) {
       linha = Math.max(aba.getLastRow() + 1, 2);
       aba.getRange(linha, 1, 1, DEMANDAS.cab.length).setValues([[
         novoId, agora, p.sessao.email, dados.fase || DEMANDAS.fases[0], dados.prioridade || 'Normal',
-        titulo, dados.descricao || '', String(dados.placa || '').toUpperCase(),
+        titulo, dados.descricao || '', _placasDaDemanda_(dados.placa).join(', '),
         dados.responsavel || '', _dataBR_(dados.prazo), agora, '',
         agora + ' • ' + p.sessao.email + ': demanda criada', _seiLimpo_(dados.sei)
       ]]);
@@ -6151,7 +6160,7 @@ function salvarDemanda(token, id, dados) {
       const prioridade = campo(4, dados.prioridade || atual[4], 'prioridade');
       const tit = campo(5, titulo, 'título');
       const desc = campo(6, dados.descricao || '', 'descrição');
-      const placa = campo(7, String(dados.placa || '').toUpperCase(), 'placa');
+      const placa = campo(7, _placasDaDemanda_(dados.placa).join(', '), 'placa');
       const resp = campo(8, dados.responsavel || '', 'responsável');
       const prazo = campo(9, _dataBR_(dados.prazo), 'prazo');
       const sei = campo(13, _seiLimpo_(dados.sei), 'processo SEI');
@@ -6164,7 +6173,7 @@ function salvarDemanda(token, id, dados) {
       }
     }
     SpreadsheetApp.flush();
-    _logAcao_(p.ss, p.sessao.email, id ? 'Editar demanda' : 'Criar demanda', String(dados.placa || ''), novoId, titulo);
+    _logAcao_(p.ss, p.sessao.email, id ? 'Editar demanda' : 'Criar demanda', _placasDaDemanda_(dados.placa).join(' '), novoId, titulo);
     return { ok: true, id: novoId, novo: !id };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
 }

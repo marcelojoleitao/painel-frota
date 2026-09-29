@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.61.4';
+const VERSAO_PAINEL = '2.62.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4576,11 +4576,12 @@ function desenharQuadro(c) {
   const dados = ESTADO.demandas;
   const f = ESTADO.filtroGestao;
   const todas = dados.demandas.filter(d => {
-    if (f.placa === '__frota') { if (d.placa) return false; }
-    else if (f.placa && d.placa !== f.placa) return false;
+    const placasD = d.placas && d.placas.length ? d.placas : (d.placa ? [d.placa] : []);
+    if (f.placa === '__frota') { if (placasD.length) return false; }
+    else if (f.placa && placasD.indexOf(f.placa) < 0) return false;
     if (f.responsavel && d.responsavel !== f.responsavel) return false;
     if (f.busca) {
-      const alvo = (d.titulo + ' ' + d.descricao + ' ' + d.placa + ' ' + d.responsavel + ' ' +
+      const alvo = (d.titulo + ' ' + d.descricao + ' ' + placasD.join(' ') + ' ' + d.responsavel + ' ' +
                     (d.sei || '') + ' ' + (d.sei || '').replace(/\D/g, '') + ' ' + d.anotacoes.join(' ')).toLowerCase();
       if (alvo.indexOf(f.busca.toLowerCase()) < 0) return false;
     }
@@ -4592,19 +4593,24 @@ function desenharQuadro(c) {
       ['Urgente', 'Alta', 'Normal'].indexOf(a.prioridade) - ['Urgente', 'Alta', 'Normal'].indexOf(b.prioridade));
 
   const responsaveis = Array.from(new Set(dados.demandas.map(d => d.responsavel).filter(Boolean))).sort();
-  const placas = Array.from(new Set(dados.demandas.map(d => d.placa).filter(Boolean))).sort();
+  const placas = Array.from(new Set([].concat.apply([], dados.demandas.map(d => (d.placas && d.placas.length ? d.placas : (d.placa ? [d.placa] : [])))))).sort();
   const abertas = todas.filter(d => !/conclu/i.test(d.fase));
   const vencidas = abertas.filter(atrasada);
 
   const cartao = d => {
-    const v = viaturaDaMulta(d.placa);
+    const placas = d.placas && d.placas.length ? d.placas : (d.placa ? [d.placa] : []);
+    const unica = placas.length === 1 ? viaturaDaMulta(placas[0]) : null;
     return `<article class="demanda ${d.prioridade === 'Urgente' ? 'urgente' : d.prioridade === 'Alta' ? 'alta' : ''} ${atrasada(d) ? 'atrasada' : ''}"
         draggable="true" data-id="${escAttr(d.id)}">
       <div class="dem-titulo">${esc(d.titulo)}</div>
       <div class="dem-meta">
-        ${d.placa
-          ? `<span class="dem-tag placa" title="${escAttr(v ? v.modelo + (v.unidade ? ' • ' + v.unidade : '') : 'viatura fora do cadastro')}">${esc(d.placa)}</span>
-             ${v ? `<span class="dem-tag modelo">${esc(v.modeloCurto || v.modelo)}</span>` : ''}`
+        ${placas.length
+          ? placas.slice(0, 4).map(pl => {
+              const vv = viaturaDaMulta(pl);
+              return `<span class="dem-tag placa" title="${escAttr(vv ? vv.modelo + (vv.unidade ? ' • ' + vv.unidade : '') : 'viatura fora do cadastro')}">${esc(pl)}</span>`;
+            }).join('') +
+            (placas.length > 4 ? `<span class="dem-tag">+${placas.length - 4}</span>` : '') +
+            (unica ? `<span class="dem-tag modelo">${esc(unica.modeloCurto || unica.modelo)}</span>` : '')
           : '<span class="dem-tag geral">frota</span>'}
         ${d.prioridade !== 'Normal' ? `<span class="dem-tag prio">${esc(d.prioridade)}</span>` : ''}
         ${d.responsavel ? `<span class="dem-tag">${esc(d.responsavel)}</span>` : ''}
@@ -4620,8 +4626,8 @@ function desenharQuadro(c) {
     <div class="kpis">
       ${kpi('Demandas abertas', abertas.length, todas.length + ' no total', abertas.length ? 'ambar' : 'verde', null, true)}
       ${kpi('Com prazo vencido', vencidas.length, 'precisam de atenção', vencidas.length ? 'vermelho' : 'verde', null, true)}
-      ${kpi('Ligadas a viaturas', todas.filter(d => d.placa).length, placas.length + ' viatura(s)', '', null, true)}
-      ${kpi('Gerais da frota', todas.filter(d => !d.placa).length, 'sem viatura específica', '', null, true)}
+      ${kpi('Ligadas a viaturas', todas.filter(d => (d.placas || []).length || d.placa).length, placas.length + ' viatura(s)', '', null, true)}
+      ${kpi('Gerais da frota', todas.filter(d => !((d.placas || []).length || d.placa)).length, 'sem viatura específica', '', null, true)}
       ${kpi('Concluídas', todas.filter(d => /conclu/i.test(d.fase)).length, 'no quadro', 'verde', null, true)}
     </div>
 
@@ -4682,7 +4688,7 @@ function desenharQuadro(c) {
   ouvir('btn-exportar-dem', 'click', () => exportarCsv(
     'demandas_' + new Date().toISOString().substring(0, 10) + '.csv',
     ['ID', 'Fase', 'Prioridade', 'Título', 'Descrição', 'Placa', 'Processo SEI', 'Responsável', 'Prazo', 'Criada em', 'Atualizada em', 'Concluída em', 'Anotações'],
-    todas.map(d => [d.id, d.fase, d.prioridade, d.titulo, d.descricao, d.placa, d.sei || '', d.responsavel, d.prazo,
+    todas.map(d => [d.id, d.fase, d.prioridade, d.titulo, d.descricao, (d.placas || [d.placa]).filter(Boolean).join(' '), d.sei || '', d.responsavel, d.prazo,
       d.criadaEm, d.atualizadaEm, d.concluidaEm, d.anotacoes.join(' | ')])));
   ajustarKpis();
 }
@@ -4707,18 +4713,19 @@ function moverCartao(id, fase) {
 function abrirDemanda(id) {
   const dados = ESTADO.demandas;
   const d = id ? dados.demandas.find(x => x.id === id) : null;
-  const v = d && d.placa ? viaturaDaMulta(d.placa) : null;
+  const placasD = d ? (d.placas && d.placas.length ? d.placas : (d.placa ? [d.placa] : [])) : [];
+  const v = placasD.length === 1 ? viaturaDaMulta(placasD[0]) : null;
 
   htm('gaveta-cab', `<div class="titulo"><h2>${d ? esc(d.titulo) : 'Nova demanda'}</h2>
-    <div class="sub">${d ? esc(d.fase) + (d.placa ? ' • ' + esc(d.placa) : ' • geral da frota') + (d.criadaEm ? ' • criada em ' + esc(d.criadaEm) : '') : 'quadro de gestão da frota'}</div></div>
+    <div class="sub">${d ? esc(d.fase) + (placasD.length ? ' • ' + esc(placasD.join(', ')) : ' • geral da frota') + (d.criadaEm ? ' • criada em ' + esc(d.criadaEm) : '') : 'quadro de gestão da frota'}</div></div>
     <button class="gaveta-fechar" onclick="fecharFicha()">×</button>`);
 
   htm('gaveta-corpo',
     secao('Demanda', `<div class="form-grade">
       <div class="form-campo largo"><label>Título</label><input type="text" id="dem-titulo" value="${escAttr(d ? d.titulo : '')}"></div>
       <div class="form-campo largo"><label>Descrição</label><textarea id="dem-desc" rows="3">${esc(d ? d.descricao : '')}</textarea></div>
-      <div class="form-campo"><label>Viatura (vazio = geral da frota)</label>
-        <input type="text" id="dem-placa" list="lista-placas-dem" value="${escAttr(d ? d.placa : '')}" style="text-transform:uppercase">
+      <div class="form-campo largo"><label>Viaturas (separe por vírgula; vazio = geral da frota)</label>
+        <input type="text" id="dem-placa" list="lista-placas-dem" placeholder="PNY1624, POC3545" value="${escAttr(d ? (d.placas || []).join(', ') : '')}" style="text-transform:uppercase">
         <datalist id="lista-placas-dem">${(ESTADO.veiculos || []).map(x => `<option value="${escAttr(x.placa)}">${esc(x.modeloCurto || x.modelo || '')}</option>`).join('')}</datalist></div>
       <div class="form-campo"><label>Fase</label><select id="dem-fase">
         ${dados.fases.map(x => `<option value="${escAttr(x)}" ${d && d.fase === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div>
@@ -4729,6 +4736,13 @@ function abrirDemanda(id) {
       <div class="form-campo"><label>Processo SEI</label>
         <input type="text" id="dem-sei" placeholder="00000.000000/0000-00" value="${escAttr(d ? d.sei || '' : '')}" style="font-family:var(--fonte-dados)"></div>
     </div>`) +
+    (placasD.length > 1 ? secao('Viaturas ligadas', `<div class="mini-tabela"><table class="tabela-simples" style="width:100%"><tbody>
+        ${placasD.map(pl => { const vv = viaturaDaMulta(pl); return `<tr>
+          <td style="width:110px"><b style="font-family:var(--fonte-dados)">${esc(pl)}</b></td>
+          <td>${esc(vv ? vv.modelo : 'fora do cadastro')}${vv && vv.unidade ? ' • ' + esc(vv.unidade) : ''}</td>
+          <td style="width:120px">${vv ? `<button class="link-btn" onclick="fecharFicha(); setTimeout(function(){ abrirFicha('${escAttr(vv.placa)}'); }, 120)">abrir ficha</button>` : ''}</td>
+        </tr>`; }).join('')}
+      </tbody></table></div>`) : '') +
     (v ? secao('Viatura', `<div class="grade-dados">
         <div class="dado"><div class="k">Placa</div><div class="v" style="font-size:14px">${esc(v.placa)}</div></div>
         <div class="dado"><div class="k">Modelo</div><div class="v" style="font-size:14px">${esc(v.modelo)}</div></div>
@@ -4827,7 +4841,10 @@ function novaDemandaDaViatura(placa) {
 function demandasDaViatura(placa) {
   const d = ESTADO.demandas;
   if (!d || !placa) return [];
-  return d.demandas.filter(x => x.placa === placa);
+  return d.demandas.filter(x => {
+    const lista = x.placas && x.placas.length ? x.placas : (x.placa ? [x.placa] : []);
+    return lista.indexOf(placa) >= 0;
+  });
 }
 
 
@@ -5143,6 +5160,13 @@ function abrirSinistro(linha) {
       ${campoExtra('fipe', 'Valor FIPE')}${campoExtra('ressarcimento', 'Ressarcimento')}${campoExtra('conclusao', 'Data de conclusão')}
       <div class="form-campo largo" data-c="observacao"><label>Observação</label><textarea rows="3" data-s>${esc(s2 ? s2.observacao : '')}</textarea></div>
     </div>`) +
+    (placasD.length > 1 ? secao('Viaturas ligadas', `<div class="mini-tabela"><table class="tabela-simples" style="width:100%"><tbody>
+        ${placasD.map(pl => { const vv = viaturaDaMulta(pl); return `<tr>
+          <td style="width:110px"><b style="font-family:var(--fonte-dados)">${esc(pl)}</b></td>
+          <td>${esc(vv ? vv.modelo : 'fora do cadastro')}${vv && vv.unidade ? ' • ' + esc(vv.unidade) : ''}</td>
+          <td style="width:120px">${vv ? `<button class="link-btn" onclick="fecharFicha(); setTimeout(function(){ abrirFicha('${escAttr(vv.placa)}'); }, 120)">abrir ficha</button>` : ''}</td>
+        </tr>`; }).join('')}
+      </tbody></table></div>`) : '') +
     (v ? secao('Viatura', `<div class="grade-dados">
       <div class="dado"><div class="k">Modelo</div><div class="v" style="font-size:14px">${esc(v.modelo)}</div></div>
       <div class="dado"><div class="k">Unidade</div><div class="v" style="font-size:14px">${esc(v.unidade || '—')}</div></div>
