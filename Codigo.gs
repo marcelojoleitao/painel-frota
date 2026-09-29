@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.58.2';
+const CODIGO_VERSAO = '2.59.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -5656,8 +5656,17 @@ const DEMANDAS = {
   fases: ['Caixa de entrada', 'Em resolução', 'Concluído'],
   prioridades: ['Normal', 'Alta', 'Urgente'],
   cab: ['ID', 'Criada em', 'Criada por', 'Fase', 'Prioridade', 'Título', 'Descrição', 'Placa',
-        'Responsável', 'Prazo', 'Atualizada em', 'Concluída em', 'Anotações']
+        'Responsável', 'Prazo', 'Atualizada em', 'Concluída em', 'Anotações', 'Processo SEI']
 };
+
+/** Número do processo SEI no formato oficial (00000.000000/0000-00). */
+function _seiLimpo_(v) {
+  const t = String(v === null || v === undefined ? '' : v).trim();
+  if (!t) return '';
+  const d = t.replace(/\D/g, '');
+  if (d.length === 17) return d.substring(0, 5) + '.' + d.substring(5, 11) + '/' + d.substring(11, 15) + '-' + d.substring(15);
+  return t;                                  // formato diferente fica como digitado
+}
 
 function _abaDemandas_() {
   const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
@@ -5668,6 +5677,10 @@ function _abaDemandas_() {
     aba.setFrozenRows(1);
     aba.getRange(1, 1, 1, DEMANDAS.cab.length).setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF');
     aba.setColumnWidth(6, 260); aba.setColumnWidth(7, 320); aba.setColumnWidth(13, 420);
+  } else if (String(aba.getRange(1, 14).getValue() || '').trim() === '') {
+    // aba criada antes do campo existir: acrescenta a coluna sem tocar no resto
+    aba.getRange(1, 14).setValue('Processo SEI')
+       .setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF');
   }
   return aba;
 }
@@ -5698,7 +5711,8 @@ function lerDemandas(token) {
           placa: String(l[7] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase(),
           responsavel: String(l[8] || ''), prazo: _dataBR_(l[9]),
           atualizadaEm: _dataTxt_(l[10]), concluidaEm: _dataTxt_(l[11]),
-          anotacoes: String(l[12] || '').split('\n').filter(x => x.trim())
+          anotacoes: String(l[12] || '').split('\n').filter(x => x.trim()),
+          sei: String(l[13] || '').trim()
         });
       });
     }
@@ -5726,7 +5740,7 @@ function salvarDemanda(token, id, dados) {
         novoId, agora, p.sessao.email, dados.fase || DEMANDAS.fases[0], dados.prioridade || 'Normal',
         titulo, dados.descricao || '', String(dados.placa || '').toUpperCase(),
         dados.responsavel || '', _dataBR_(dados.prazo), agora, '',
-        agora + ' • ' + p.sessao.email + ': demanda criada'
+        agora + ' • ' + p.sessao.email + ': demanda criada', _seiLimpo_(dados.sei)
       ]]);
     } else {
       const atual = aba.getRange(linha, 1, 1, DEMANDAS.cab.length).getValues()[0];
@@ -5744,8 +5758,10 @@ function salvarDemanda(token, id, dados) {
       const placa = campo(7, String(dados.placa || '').toUpperCase(), 'placa');
       const resp = campo(8, dados.responsavel || '', 'responsável');
       const prazo = campo(9, _dataBR_(dados.prazo), 'prazo');
+      const sei = campo(13, _seiLimpo_(dados.sei), 'processo SEI');
       const concluida = /conclu/i.test(fase) ? (String(atual[11] || '').trim() || agora) : '';
       aba.getRange(linha, 4, 1, 9).setValues([[fase, prioridade, tit, desc, placa, resp, prazo, agora, concluida]]);
+      aba.getRange(linha, 14).setValue(sei);
       if (mudancas.length) {
         const historico = String(atual[12] || '');
         aba.getRange(linha, 13).setValue((historico ? historico + '\n' : '') + agora + ' • ' + p.sessao.email + ': ' + mudancas.join('; '));

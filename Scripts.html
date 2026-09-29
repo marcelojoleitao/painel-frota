@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.58.2';
+const VERSAO_PAINEL = '2.59.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -818,7 +818,7 @@ function abrirFicha(placa) {
       const botao = `<button class="link-btn" onclick="novaDemandaDaViatura('${escAttr(v.placa)}')" style="font-weight:700">+ nova demanda</button>`;
       return secao('Demandas', (dem.length ? dem.map(x => `<div class="os-item ${atrasada(x) ? 'aceite' : ''}">
         <a class="link-btn" style="font-weight:700" onclick="fecharFicha(); ESTADO.aba='gestao'; mudarAba('gestao'); setTimeout(function(){ abrirDemanda('${escAttr(x.id)}'); }, 200)">${esc(x.titulo)}</a>
-        • ${esc(x.fase)}${x.prazo ? ' • prazo ' + esc(x.prazo) : ''}${x.responsavel ? ' • ' + esc(x.responsavel) : ''}
+        • ${esc(x.fase)}${x.prazo ? ' • prazo ' + esc(x.prazo) : ''}${x.sei ? ' • SEI ' + esc(x.sei) : ''}${x.responsavel ? ' • ' + esc(x.responsavel) : ''}
         ${x.descricao ? `<div class="linha2" style="color:var(--tinta-suave)">${esc(x.descricao)}</div>` : ''}</div>`).join('')
         : '<div class="nao">Nenhuma demanda registrada para esta viatura</div>') +
         `<div class="form-acoes" style="margin-top:6px"><button class="btn claro" onclick="novaDemandaDaViatura('${escAttr(v.placa)}')">+ Nova demanda para ${esc(v.placa)}</button></div>`,
@@ -4560,7 +4560,8 @@ function desenharQuadro(c) {
     else if (f.placa && d.placa !== f.placa) return false;
     if (f.responsavel && d.responsavel !== f.responsavel) return false;
     if (f.busca) {
-      const alvo = (d.titulo + ' ' + d.descricao + ' ' + d.placa + ' ' + d.responsavel + ' ' + d.anotacoes.join(' ')).toLowerCase();
+      const alvo = (d.titulo + ' ' + d.descricao + ' ' + d.placa + ' ' + d.responsavel + ' ' +
+                    (d.sei || '') + ' ' + (d.sei || '').replace(/\D/g, '') + ' ' + d.anotacoes.join(' ')).toLowerCase();
       if (alvo.indexOf(f.busca.toLowerCase()) < 0) return false;
     }
     return true;
@@ -4585,6 +4586,7 @@ function desenharQuadro(c) {
         ${d.prioridade !== 'Normal' ? `<span class="dem-tag prio">${esc(d.prioridade)}</span>` : ''}
         ${d.responsavel ? `<span class="dem-tag">${esc(d.responsavel)}</span>` : ''}
         ${d.prazo ? `<span class="dem-tag ${atrasada(d) ? 'venceu' : 'prazo'}">${esc(d.prazo)}</span>` : ''}
+        ${d.sei ? `<span class="dem-tag sei" title="Processo SEI ${escAttr(d.sei)} — clique para copiar" onclick="event.stopPropagation(); copiarTexto('${escAttr(d.sei)}')">SEI ${esc(d.sei)}</span>` : ''}
       </div>
       ${d.descricao ? `<div class="dem-desc">${esc(d.descricao)}</div>` : ''}
       ${d.anotacoes.length ? `<div class="dem-rodape">${d.anotacoes.length} anotação(ões) • atualizada ${esc(d.atualizadaEm || d.criadaEm)}</div>` : ''}
@@ -4656,8 +4658,8 @@ function desenharQuadro(c) {
   });
   ouvir('btn-exportar-dem', 'click', () => exportarCsv(
     'demandas_' + new Date().toISOString().substring(0, 10) + '.csv',
-    ['ID', 'Fase', 'Prioridade', 'Título', 'Descrição', 'Placa', 'Responsável', 'Prazo', 'Criada em', 'Atualizada em', 'Concluída em', 'Anotações'],
-    todas.map(d => [d.id, d.fase, d.prioridade, d.titulo, d.descricao, d.placa, d.responsavel, d.prazo,
+    ['ID', 'Fase', 'Prioridade', 'Título', 'Descrição', 'Placa', 'Processo SEI', 'Responsável', 'Prazo', 'Criada em', 'Atualizada em', 'Concluída em', 'Anotações'],
+    todas.map(d => [d.id, d.fase, d.prioridade, d.titulo, d.descricao, d.placa, d.sei || '', d.responsavel, d.prazo,
       d.criadaEm, d.atualizadaEm, d.concluidaEm, d.anotacoes.join(' | ')])));
   ajustarKpis();
 }
@@ -4701,6 +4703,8 @@ function abrirDemanda(id) {
         ${dados.prioridades.map(x => `<option value="${escAttr(x)}" ${d && d.prioridade === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div>
       <div class="form-campo"><label>Responsável</label><input type="text" id="dem-resp" value="${escAttr(d ? d.responsavel : '')}"></div>
       <div class="form-campo"><label>Prazo</label><input type="text" id="dem-prazo" placeholder="dd/mm/aaaa" value="${escAttr(d ? d.prazo : '')}"></div>
+      <div class="form-campo"><label>Processo SEI</label>
+        <input type="text" id="dem-sei" placeholder="00000.000000/0000-00" value="${escAttr(d ? d.sei || '' : '')}" style="font-family:var(--fonte-dados)"></div>
     </div>`) +
     (v ? secao('Viatura', `<div class="grade-dados">
         <div class="dado"><div class="k">Placa</div><div class="v" style="font-size:14px">${esc(v.placa)}</div></div>
@@ -4727,7 +4731,7 @@ function abrirDemanda(id) {
   ouvir('btn-salvar-dem', 'click', () => {
     const campos = { titulo: val('dem-titulo'), descricao: (el('dem-desc') || {}).value || '',
       placa: val('dem-placa').toUpperCase(), fase: val('dem-fase'), prioridade: val('dem-prio'),
-      responsavel: val('dem-resp'), prazo: val('dem-prazo') };
+      responsavel: val('dem-resp'), prazo: val('dem-prazo'), sei: val('dem-sei') };
     if (!campos.titulo.trim()) { toast('Informe o título.'); return; }
     const btn = el('btn-salvar-dem'); btn.disabled = true; btn.textContent = 'Gravando…';
     const run = servidor('salvarDemanda',
