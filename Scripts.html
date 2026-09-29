@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.62.2';
+const VERSAO_PAINEL = '2.62.3';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4618,6 +4618,19 @@ function desenharQuadro(c) {
         ${d.sei ? `<span class="dem-tag sei" title="Processo SEI ${escAttr(d.sei)} — clique para copiar" onclick="event.stopPropagation(); copiarTexto('${escAttr(d.sei)}')">SEI ${esc(d.sei)}</span>` : ''}
       </div>
       ${d.descricao ? `<div class="dem-desc">${esc(d.descricao)}</div>` : ''}
+      ${(() => {
+        // última anotação: o histórico vem como "dd/mm/aaaa hh:mm • email: texto"
+        const ultima = d.anotacoes.length ? d.anotacoes[d.anotacoes.length - 1] : '';
+        if (!ultima) return '';
+        const m = ultima.match(/^(\S+ \S+)\s*•\s*([^:]+):\s*([\s\S]*)$/);
+        const quando = m ? m[1] : '';
+        const quem = m ? m[2].split('@')[0] : '';
+        const texto = m ? m[3] : ultima;
+        return `<div class="dem-nota" title="${escAttr(ultima)}">
+          <span class="dem-nota-quem">${esc(quem || 'anotação')}</span>
+          <span class="dem-nota-texto">${esc(texto)}</span>
+          ${quando ? `<span class="dem-nota-quando">${esc(quando.split(' ')[0])}</span>` : ''}</div>`;
+      })()}
       ${d.anotacoes.length ? `<div class="dem-rodape">${d.anotacoes.length} anotação(ões) • atualizada ${esc(d.atualizadaEm || d.criadaEm)}</div>` : ''}
     </article>`;
   };
