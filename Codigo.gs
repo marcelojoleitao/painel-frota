@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.63.2';
+const CODIGO_VERSAO = '2.63.3';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -7248,18 +7248,53 @@ function _lerVeiculos_(ss) {
   return saida;
 }
 
+/**
+ * Posição conhecida de algumas colunas, usada quando o cabeçalho estiver
+ * escrito de outra forma. Índice a partir de zero: BL = 63, BN = 65.
+ */
+const POSICAO_CONHECIDA = { fipe: 63, prop: 65 };
+
 function _mapearCampos_(cab) {
-  const posicoes = {};
-  cab.forEach((nome, i) => { if (!posicoes[nome]) posicoes[nome] = []; posicoes[nome].push(i); });
+  const posicoes = {}, normalizadas = {};
+  cab.forEach((nome, i) => {
+    if (!posicoes[nome]) posicoes[nome] = [];
+    posicoes[nome].push(i);
+    const chave = _normCab_(nome);
+    if (chave && !normalizadas[chave]) normalizadas[chave] = [];
+    if (chave) normalizadas[chave].push(i);
+  });
   const idx = {}, faltando = [];
   Object.keys(CAMPOS).forEach(k => {
     const [nome, oc] = CAMPOS[k];
     const lista = posicoes[nome];
-    if (lista && lista[oc] !== undefined) idx[k] = lista[oc];
-    else faltando.push(nome + (oc ? ' (' + (oc + 1) + 'ª)' : ''));
+    if (lista && lista[oc] !== undefined) { idx[k] = lista[oc]; return; }
+    // mesmo nome, ignorando acentos, caixa e espaços repetidos
+    const alt = normalizadas[_normCab_(nome)];
+    if (alt && alt[oc] !== undefined) { idx[k] = alt[oc]; return; }
+    // reserva: posição conhecida da coluna, quando o cabeçalho não casar
+    if (POSICAO_CONHECIDA[k] !== undefined && POSICAO_CONHECIDA[k] < cab.length) {
+      idx[k] = POSICAO_CONHECIDA[k];
+      Logger.log('Coluna "' + nome + '" não casou pelo nome; usando a posição ' + _letraColuna_(POSICAO_CONHECIDA[k] + 1) +
+        ' (cabeçalho lá: "' + String(cab[POSICAO_CONHECIDA[k]] || '') + '")');
+      return;
+    }
+    faltando.push(nome + (oc ? ' (' + (oc + 1) + 'ª)' : ''));
   });
   if (faltando.length) Logger.log('Colunas não encontradas na ConsultaBD: ' + faltando.join(' | '));
   return idx;
+}
+
+/** Mostra no log onde cada coluna importante foi encontrada. */
+function conferirColunasConsultaBD() {
+  const aba = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_BASE);
+  const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0].map(c => String(c || '').trim());
+  const idx = _mapearCampos_(cab);
+  ['placa', 'modelo', 'unidade', 'uso', 'status', 'prop', 'fipe', 'cnpj', 'multasTxt'].forEach(k => {
+    const i = idx[k];
+    Logger.log('  ' + k.padEnd(10) + (i === undefined ? 'NÃO ENCONTRADA' : _letraColuna_(i + 1) + '  "' + cab[i] + '"'));
+  });
+  Logger.log('Cabeçalho da coluna BN: "' + (cab[65] || '') + '"');
+  return 'ok';
 }
 
 function _normalizar_(campo, valor) {
