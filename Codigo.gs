@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.66.0';
+const CODIGO_VERSAO = '2.67.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6245,6 +6245,244 @@ function salvarExcecaoPreventiva(token, dados) {
     _logAcao_(p.ss, p.sessao.email, 'Exceção de preventiva', placa, item,
       (dados.km || '') + ' km / ' + (dados.meses || '') + ' meses • ' + (dados.motivo || ''));
     return { ok: true };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+
+/**
+ * Cálculo da preventiva.
+ *
+ * A regra nunca fica no código: é lida da aba PreventivaPadrao (e das exceções
+ * por placa) a cada execução. Para não reprocessar 34 mil abastecimentos a
+ * cada abertura, o resultado é guardado em cache — mas a chave do cache inclui
+ * uma assinatura da base de regras. Mudou um intervalo na planilha, a
+ * assinatura muda e o cálculo é refeito sozinho na próxima abertura.
+ */
+
+/** Assinatura das regras: muda sempre que um intervalo ou item for alterado. */
+function _assinaturaPreventiva_(padrao, excecoes) {
+  const texto = padrao.map(r => r.categoria + '|' + r.item + '|' + r.km + '|' + r.meses + '|' + r.chaves).join(';') +
+    '#' + excecoes.map(e => e.placa + '|' + e.item + '|' + e.km + '|' + e.meses).join(';');
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, texto, Utilities.Charset.UTF_8);
+  return bytes.map(b => ((b & 0xFF) + 256).toString(16).slice(1)).join('').substring(0, 12);
+}
+
+/** Categoria de preventiva de uma viatura, a partir do tipo e da espécie. */
+function _categoriaPreventiva_(v) {
+  const t = _normCab_((v.tipo || '') + ' ' + (v.especie || '') + ' ' + (v.modelo || ''));
+  if (/MOTOCICLETA|MOTONETA|CICLOMOTOR|TRICICLO/.test(t)) return 'Motocicleta';
+  if (/CAMINHAO|CAMINHAO TRATOR|TRATOR|REBOQUE/.test(t)) return 'Caminhão';
+  if (/ONIBUS|MICROONIBUS|MICRO-ONIBUS|VAN|FURGAO/.test(t)) return 'Van/Micro-ônibus';
+  if (/CAMIONETA|CAMINHONETE|PICAPE|CABINE DUPLA|4X4|HILUX|S10|RANGER|L200|AMAROK|TRITON/.test(t)) {
+    return /DIESEL|4X4|HILUX|S10|RANGER|L200|AMAROK|TRITON/.test(_normCab_((v.comb || '') + ' ' + (v.modelo || '')))
+      ? 'Caminhonete diesel 4x4' : 'Camionete/SUV';
+  }
+  if (/UTILITARIO|SUV/.test(t)) return 'Camionete/SUV';
+  return 'Automóvel';
+}
+
+/** Hodômetro e ritmo de uso de cada viatura, pela série de abastecimentos. */
+function _odometrosPorPlaca_(ss) {
+  const mapa = {};
+  const tab = _abaTransacoes_(ss, CONFIG.ABA_ABAST, ['PLACA', 'LITROS', 'VALOR EMISSAO']);
+  if (!tab) return mapa;
+  const { valores, cab } = tab;
+  const iData = cab.indexOf('DATA TRANSACAO'), iPlaca = cab.indexOf('PLACA'),
+        iOdo = cab.indexOf('HODOMETRO OU HORIMETRO');
+  if (iPlaca < 0 || iOdo < 0) return mapa;
+
+  valores.forEach(l => {
+    const placa = String(l[iPlaca] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const odo = _num_(l[iOdo]) || 0;
+    if (!placa || odo <= 0) return;
+    const data = _diaISO_(l[iData]);
+    if (!data) return;
+    const m = mapa[placa] || (mapa[placa] = { leituras: [] });
+    m.leituras.push({ data: data, odo: odo });
+  });
+
+  Object.keys(mapa).forEach(placa => {
+    const m = mapa[placa];
+    m.leituras.sort((a, b) => a.data.localeCompare(b.data));
+    // descarta leitura absurda: menor que a anterior ou salto acima de 5.000 km entre abastecimentos
+    const limpas = [];
+    m.leituras.forEach(x => {
+      const ant = limpas[limpas.length - 1];
+      if (!ant) { limpas.push(x); return; }
+      if (x.odo < ant.odo) return;                         // hodômetro andou para trás
+      if (x.odo - ant.odo > 5000) return;                  // salto incompatível com um tanque
+      limpas.push(x);
+    });
+    m.suspeitas = m.leituras.length - limpas.length;
+    m.leituras = limpas;
+    const n = limpas.length;
+    m.odometro = n ? limpas[n - 1].odo : 0;
+    m.ultimaLeitura = n ? limpas[n - 1].data : '';
+    // km por mês, medido nos últimos 12 meses de leituras
+    if (n >= 2) {
+      const fim = limpas[n - 1], ini = limpas[Math.max(0, n - 1 - 40)];
+      const dias = (new Date(fim.data) - new Date(ini.data)) / 86400000;
+      m.kmMes = dias > 20 ? Math.round((fim.odo - ini.odo) / dias * 30) : 0;
+    } else m.kmMes = 0;
+    m.confiavel = n >= 3 && m.kmMes > 0;
+  });
+  return mapa;
+}
+
+/** Última execução de cada item, procurando as palavras-chave nos serviços. */
+function _servicosPorPlaca_(ss, padrao) {
+  const mapa = {};
+  const registrar = (placa, data, odo, texto) => {
+    if (!placa || !texto) return;
+    const alvo = _normCab_(texto);
+    padrao.forEach(regra => {
+      if (!regra.chaves) return;
+      const casa = regra.chaves.split('|').some(k => k.trim() && alvo.indexOf(_normCab_(k)) >= 0);
+      if (!casa) return;
+      const chave = placa + '|' + regra.item;
+      const atual = mapa[chave];
+      if (!atual || data > atual.data) mapa[chave] = { data: data, odo: odo || 0, texto: String(texto).substring(0, 120) };
+    });
+  };
+
+  // 1) detalhamento de itens das OS, que é onde o serviço aparece descrito
+  try {
+    const aba = _ssManut_().getSheetByName(CONFIG.ABA_DETALHAMENTO);
+    if (aba && aba.getLastRow() > 2) {
+      const valores = aba.getDataRange().getValues();
+      let cabIdx = 0;
+      for (let i = 0; i < Math.min(6, valores.length); i++) {
+        if (valores[i].some(c => /DESCRI|ITEM/i.test(String(c)))) { cabIdx = i; break; }
+      }
+      const nomes = valores[cabIdx].map(c => _normCab_(c));
+      const iPlaca = nomes.findIndex(c => /^PLACA$/.test(c));
+      const iDesc = nomes.findIndex(c => /DESCRI/.test(c));
+      const iData = nomes.findIndex(c => /DATA/.test(c));
+      const iOdo = nomes.findIndex(c => /HODOMETRO|ODOMETRO|KM/.test(c));
+      if (iPlaca >= 0 && iDesc >= 0) {
+        for (let r = cabIdx + 1; r < valores.length; r++) {
+          const placa = String(valores[r][iPlaca] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+          registrar(placa, iData >= 0 ? _diaISO_(valores[r][iData]) : '', iOdo >= 0 ? _num_(valores[r][iOdo]) : 0, valores[r][iDesc]);
+        }
+      }
+    }
+  } catch (e) { Logger.log('Detalhamento na preventiva: ' + e); }
+
+  // 2) ManutBD, como reserva para o que não estiver detalhado
+  try {
+    const tab = _abaTransacoes_(SpreadsheetApp.openById(CONFIG.ID_BASE), CONFIG.ABA_MANUT, ['PLACA', 'VALOR EMISSAO']);
+    if (tab) {
+      const { valores, cab } = tab;
+      const iPlaca = cab.indexOf('PLACA'), iData = cab.indexOf('DATA TRANSACAO'),
+            iOdo = cab.indexOf('HODOMETRO OU HORIMETRO'), iServ = cab.indexOf('SERVICO');
+      if (iPlaca >= 0 && iServ >= 0) {
+        valores.forEach(l => {
+          const placa = String(l[iPlaca] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+          registrar(placa, iData >= 0 ? _diaISO_(l[iData]) : '', iOdo >= 0 ? _num_(l[iOdo]) : 0, l[iServ]);
+        });
+      }
+    }
+  } catch (e) { Logger.log('ManutBD na preventiva: ' + e); }
+
+  return mapa;
+}
+
+/**
+ * Situação da preventiva de toda a frota. Sempre com as regras atuais:
+ * se a planilha mudou, a assinatura muda e o cache é descartado.
+ */
+function lerPreventiva(token, forcar) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const base = lerBasePreventiva(token);
+    if (!base.ok) return base;
+    const assinatura = _assinaturaPreventiva_(base.padrao, base.excecoes);
+    const chave = 'painel_preventiva_' + assinatura;      // a regra faz parte da chave
+    if (!forcar) {
+      const guardado = _cacheLer_(chave);
+      if (guardado) { guardado.doCache = true; return guardado; }
+    }
+
+    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    const odometros = _odometrosPorPlaca_(ss);
+    const servicos = _servicosPorPlaca_(ss, base.padrao);
+
+    // exceções por placa e item
+    const excecao = {};
+    base.excecoes.forEach(e => { excecao[e.placa + '|' + e.item] = e; });
+
+    const aba = ss.getSheetByName(CONFIG.ABA_BASE);
+    const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0].map(c => String(c || '').trim());
+    const idx = _mapearCampos_(cab);
+    const linhas = aba.getRange(2, 1, aba.getLastRow() - 1, aba.getLastColumn()).getValues();
+
+    const hoje = new Date();
+    const hojeISO = Utilities.formatDate(hoje, CONFIG.FUSO, 'yyyy-MM-dd');
+    const itens = [];
+
+    linhas.forEach(l => {
+      const placa = String(l[idx.placa] || '').trim().toUpperCase();
+      if (!placa) return;
+      const status = idx.status !== undefined ? String(l[idx.status] || '') : '';
+      if (/DESFAZ|BAIXAD|ALIENAD/i.test(_normCab_(status))) return;      // fora da frota ativa
+
+      const v = { tipo: idx.tipo !== undefined ? l[idx.tipo] : '', especie: idx.especie !== undefined ? l[idx.especie] : '',
+        modelo: idx.modelo !== undefined ? l[idx.modelo] : '', comb: idx.comb !== undefined ? l[idx.comb] : '' };
+      const categoria = _categoriaPreventiva_(v);
+      const odo = odometros[placa] || { odometro: 0, kmMes: 0, confiavel: false, ultimaLeitura: '', suspeitas: 0 };
+
+      base.padrao.filter(r => r.categoria === categoria).forEach(regra => {
+        const exc = excecao[placa + '|' + regra.item];
+        const km = exc && exc.km ? exc.km : regra.km;
+        const meses = exc && exc.meses ? exc.meses : regra.meses;
+        const ultimo = servicos[placa + '|' + regra.item] || null;
+
+        let kmDesde = null, diasDesde = null, vencidoKm = false, vencidoTempo = false, previsao = '';
+        if (ultimo) {
+          if (km && ultimo.odo && odo.odometro) { kmDesde = odo.odometro - ultimo.odo; vencidoKm = kmDesde >= km; }
+          if (meses && ultimo.data) {
+            diasDesde = Math.round((new Date(hojeISO) - new Date(ultimo.data)) / 86400000);
+            vencidoTempo = diasDesde >= meses * 30;
+          }
+          // quando vence por quilometragem, projetando o ritmo atual
+          if (km && kmDesde !== null && odo.kmMes > 0 && !vencidoKm) {
+            const faltam = km - kmDesde;
+            const dias = Math.round(faltam / odo.kmMes * 30);
+            const d = new Date(hoje.getTime() + dias * 86400000);
+            previsao = Utilities.formatDate(d, CONFIG.FUSO, 'dd/MM/yyyy');
+          }
+        }
+        const semHistorico = !ultimo;
+        const vencido = vencidoKm || vencidoTempo;
+        // dias até vencer, para ordenar: negativo = vencido
+        let diasAteVencer = null;
+        if (vencido) diasAteVencer = -1;
+        else if (meses && diasDesde !== null) diasAteVencer = meses * 30 - diasDesde;
+        if (km && kmDesde !== null && odo.kmMes > 0) {
+          const porKm = Math.round((km - kmDesde) / odo.kmMes * 30);
+          diasAteVencer = diasAteVencer === null ? porKm : Math.min(diasAteVencer, porKm);
+        }
+
+        itens.push({ placa: placa, categoria: categoria,
+          modelo: idx.modelo !== undefined ? String(l[idx.modelo] || '') : '',
+          unidade: idx.unidade !== undefined ? String(l[idx.unidade] || '') : '',
+          statusVtr: status, grupo: regra.grupo, item: regra.item, tipo: regra.tipo, critico: regra.critico,
+          intervaloKm: km, intervaloMeses: meses, comExcecao: !!exc, motivoExcecao: exc ? exc.motivo : '',
+          odometro: odo.odometro, kmMes: odo.kmMes, odoConfiavel: odo.confiavel,
+          ultimaData: ultimo ? _dataBR_(ultimo.data) : '', ultimoOdo: ultimo ? ultimo.odo : 0,
+          ultimoTexto: ultimo ? ultimo.texto : '',
+          kmDesde: kmDesde, diasDesde: diasDesde, semHistorico: semHistorico,
+          vencido: vencido, vencidoKm: vencidoKm, vencidoTempo: vencidoTempo,
+          diasAteVencer: diasAteVencer, previsao: previsao });
+      });
+    });
+
+    const saida = { ok: true, itens: itens, assinatura: assinatura,
+      geradoEm: Utilities.formatDate(hoje, CONFIG.FUSO, 'dd/MM/yyyy HH:mm'),
+      placasSemOdometro: Object.keys(odometros).filter(k => !odometros[k].confiavel).length,
+      totalRegras: base.padrao.length, totalExcecoes: base.excecoes.length };
+    _cacheGravar_(chave, saida, CONFIG.CACHE_SEG || 3600);
+    return saida;
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 
