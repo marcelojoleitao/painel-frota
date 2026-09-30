@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.67.0';
+const VERSAO_PAINEL = '2.68.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -85,6 +85,7 @@ const ESTADO = {
   subMultas: 'acompanhar', multas: null, projecao: null, cobranca: null, filtroCobranca: { registro: '', unidade: '', busca: '' }, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
   filtroAceite: '', filtroOS: { unidade: '', oficina: '' }, filtroAceites: { unidade: '', oficina: '' },
   subGestao: 'quadro', demandas: null, notas: null, soComDemanda: false, sinistros: null, filtroSinistro: { status: '', busca: '' },
+  preventiva: null, filtroPrev: { situacao: '', grupo: '', unidade: '', busca: '' },
   filtroGestao: { placa: '', responsavel: '', busca: '' }, filtroNotas: { categoria: '', busca: '' },
   ordemMulta: { campo: 'linha', dir: -1 },
   dados: null,
@@ -4600,6 +4601,7 @@ function renderGestao() {
   const c = el('gestao-conteudo'); if (!c) return;
   if (ESTADO.subGestao === 'notas') return renderNotas(c);
   if (ESTADO.subGestao === 'sinistros') return renderSinistros(c);
+  if (ESTADO.subGestao === 'preventiva') return renderPreventiva(c);
   if (!ESTADO.demandas) {
     c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Carregando o quadro…</div></div>';
     const run = servidor('lerDemandas',
@@ -5587,6 +5589,184 @@ function abrirFormMultaCom(ai, placa) {
     const campoPlaca = document.querySelector('#gaveta-corpo .form-campo[data-campo="placa"] input');
     if (campoPlaca) campoPlaca.value = placa;
   }, 120);
+}
+
+
+/* ============================================================
+   PREVENTIVA — o que está vencido, o que vence e o que nunca foi feito
+   ============================================================ */
+function renderPreventiva(c) {
+  if (!ESTADO.preventiva) {
+    c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Cruzando hodômetros, serviços executados e as regras da planilha…</div></div>';
+    const run = servidor('lerPreventiva',
+      r => {
+        if (!r || !r.ok) { c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha ao calcular.') + '</div></div>'; return; }
+        ESTADO.preventiva = r; renderPreventiva(c);
+      },
+      e => { c.innerHTML = '<div class="cartao largo"><div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div></div>'; });
+    if (run) run.lerPreventiva(ESTADO.token, false);
+    return;
+  }
+
+  const dados = ESTADO.preventiva;
+  const f = ESTADO.filtroPrev;
+  const exib = new Set((ESTADO.filtrado || []).map(v => v.placa));
+  const filtroFrota = Object.values(ESTADO.filtros).some(s => s.size) || ESTADO.busca;
+
+  const todos = dados.itens.filter(x => {
+    if (filtroFrota && !exib.has(x.placa)) return false;
+    if (f.situacao === 'vencidos' && !x.vencido) return false;
+    if (f.situacao === 'proximos' && !(!x.vencido && x.diasAteVencer !== null && x.diasAteVencer <= 30)) return false;
+    if (f.situacao === 'semHistorico' && !x.semHistorico) return false;
+    if (f.situacao === 'criticos' && !(x.critico && (x.vencido || x.semHistorico))) return false;
+    if (f.grupo && x.grupo !== f.grupo) return false;
+    if (f.unidade && (x.unidade || '—') !== f.unidade) return false;
+    if (f.busca) {
+      const alvo = (x.placa + ' ' + x.modelo + ' ' + x.item + ' ' + x.unidade + ' ' + x.grupo).toLowerCase();
+      if (alvo.indexOf(f.busca.toLowerCase()) < 0) return false;
+    }
+    return true;
+  }).sort((a, b) => {
+    const pa = a.vencido ? 0 : a.semHistorico ? 2 : 1;
+    const pb = b.vencido ? 0 : b.semHistorico ? 2 : 1;
+    if (pa !== pb) return pa - pb;
+    const da = a.diasAteVencer === null ? 9999 : a.diasAteVencer;
+    const db = b.diasAteVencer === null ? 9999 : b.diasAteVencer;
+    return da - db || a.placa.localeCompare(b.placa);
+  });
+
+  const base = filtroFrota ? dados.itens.filter(x => exib.has(x.placa)) : dados.itens;
+  const vencidos = base.filter(x => x.vencido);
+  const proximos = base.filter(x => !x.vencido && x.diasAteVencer !== null && x.diasAteVencer <= 30);
+  const semHist = base.filter(x => x.semHistorico);
+  const criticos = base.filter(x => x.critico && (x.vencido || x.semHistorico));
+  const placasVencidas = new Set(vencidos.map(x => x.placa));
+
+  const kpiF = (chave, rotulo, arr, sub, cor) =>
+    `<div class="kpi ${cor || ''} ${f.situacao === chave ? 'selecionado' : ''}" ${chave ? `data-fprev="${chave}"` : ''} style="${chave ? 'cursor:pointer' : ''}">
+      <div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${fmtInt(arr.length)}</div>
+      <div class="kpi-sub">${sub}</div></div>`;
+
+  const porGrupo = new Map(), porUnidade = new Map();
+  base.filter(x => x.vencido || x.semHistorico).forEach(x => {
+    porGrupo.set(x.grupo, (porGrupo.get(x.grupo) || 0) + 1);
+    porUnidade.set(x.unidade || '—', (porUnidade.get(x.unidade || '—') || 0) + 1);
+  });
+  const barras = (mapa, cor, chave) => {
+    const itens = Array.from(mapa.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const maximo = Math.max(1, ...itens.map(i => i[1]));
+    return itens.map(([k, v]) => `<button class="barra ${chave && f[chave] === k ? 'selecionada' : ''}" ${chave ? `data-fprevb="${chave}" data-valor="${escAttr(k)}"` : 'style="cursor:default"'}>
+      <span class="rotulo">${esc(k)}</span>
+      <span class="trilha"><span class="preench" style="width:${Math.round(v / maximo * 100)}%; background:${cor}"></span></span>
+      <span class="valor">${v}</span></button>`).join('') || '<div class="vazio">Sem pendências</div>';
+  };
+
+  c.innerHTML = `
+    <div class="kpis">
+      ${kpiF('vencidos', 'Vencidos', vencidos, placasVencidas.size + ' viatura(s)', vencidos.length ? 'vermelho' : 'verde')}
+      ${kpiF('proximos', 'Vencem em 30 dias', proximos, 'pela projeção de uso', proximos.length ? 'ambar' : 'verde')}
+      ${kpiF('criticos', 'Críticos pendentes', criticos, 'freios, pneus, direção…', criticos.length ? 'vermelho' : 'verde')}
+      ${kpiF('semHistorico', 'Sem histórico', semHist, 'nunca apareceu em OS', '')}
+      ${kpi('Itens acompanhados', base.length, dados.totalRegras + ' regra(s) • ' + dados.totalExcecoes + ' exceção(ões)', '', null, true)}
+    </div>
+
+    <details class="dobra" ${(f.grupo || f.unidade) ? 'open' : ''}>
+      <summary>Pendências por grupo e por unidade${(f.grupo || f.unidade) ? ' — filtro ativo' : ''}</summary>
+      <div class="grade" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+        <div class="cartao"><div class="cartao-cab"><h3>Por grupo</h3><small>clique para filtrar</small></div>
+          <div class="barras compacto" style="max-height:220px; overflow:auto">${barras(porGrupo, 'var(--azul)', 'grupo')}</div></div>
+        <div class="cartao"><div class="cartao-cab"><h3>Por unidade</h3><small>clique para filtrar</small></div>
+          <div class="barras compacto" style="max-height:220px; overflow:auto">${barras(porUnidade, 'var(--ambar)', 'unidade')}</div></div>
+      </div>
+    </details>
+
+    <div class="cartao largo" style="margin-top:12px">
+      <div class="cartao-cab"><h3>Manutenção preventiva</h3>
+        <small>${todos.length} item(ns)${dados.geradoEm ? ' • cálculo de ' + esc(dados.geradoEm) + (dados.doCache ? ' (guardado)' : '') : ''}</small></div>
+      <div class="os-barra-acoes">
+        <div class="busca" style="max-width:280px"><input id="prev-busca" type="search" placeholder="placa, item, unidade…" value="${escAttr(f.busca)}"></div>
+        ${f.grupo ? `<span class="chip-filtro">grupo: ${esc(f.grupo)} <button data-limpaprev="grupo">×</button></span>` : ''}
+        ${f.unidade ? `<span class="chip-filtro">unidade: ${esc(f.unidade)} <button data-limpaprev="unidade">×</button></span>` : ''}
+        ${(f.situacao || f.grupo || f.unidade || f.busca) ? '<button class="btn claro" id="prev-limpar">Limpar</button>' : ''}
+        <div style="flex:1"></div>
+        <button class="btn claro" id="btn-recalc-prev" title="Refaz o cálculo com os dados e as regras de agora">⟳ Recalcular</button>
+        <button class="btn claro" id="btn-exportar-prev">⤓ Exportar</button>
+      </div>
+      <div class="tabela-rol os-rol" style="max-height:620px">
+        <table class="tabela-multas tabela-aceites">
+          <colgroup><col style="width:7%"><col style="width:11%"><col style="width:9%"><col style="width:16%"><col style="width:9%">
+            <col style="width:11%"><col style="width:9%"><col style="width:10%"><col></colgroup>
+          <thead><tr><th>Placa</th><th>Viatura</th><th>Unidade</th><th>Item</th><th>Intervalo</th>
+            <th>Última vez</th><th>Desde então</th><th>Situação</th><th>Observação</th></tr></thead>
+          <tbody>
+          ${todos.slice(0, 800).map(x => {
+            const v = viaturaDaMulta(x.placa);
+            const classe = x.vencido ? 'vencido' : x.semHistorico ? 'atencao' : (x.diasAteVencer !== null && x.diasAteVencer <= 30) ? 'critico' : 'folga';
+            const texto = x.vencido
+              ? (x.vencidoKm && x.vencidoTempo ? 'vencido' : x.vencidoKm ? 'vencido por km' : 'vencido por tempo')
+              : x.semHistorico ? 'sem registro'
+              : x.diasAteVencer !== null ? (x.diasAteVencer <= 30 ? 'vence em ' + x.diasAteVencer + ' dia(s)' : 'em dia') : 'em dia';
+            return `<tr class="${x.vencido && x.critico ? 'cobrada' : ''}">
+              <td>${v ? `<a class="link-btn" style="font-family:var(--fonte-dados); font-weight:700" onclick="abrirFicha('${escAttr(v.placa)}')">${esc(x.placa)}</a>` : esc(x.placa)}</td>
+              <td>${esc(x.modelo)}<div class="vinculo">${esc(x.categoria)}</div></td>
+              <td>${esc(x.unidade || '—')}</td>
+              <td>${esc(x.item)}${x.critico ? ' <span class="dem-tag prio urgente" style="font-size:9.5px">crítico</span>' : ''}
+                <div class="vinculo">${esc(x.grupo)} • ${esc(x.tipo)}</div></td>
+              <td class="data-curta">${x.intervaloKm ? fmtInt(x.intervaloKm) + ' km' : ''}${x.intervaloKm && x.intervaloMeses ? '<br>' : ''}${x.intervaloMeses ? x.intervaloMeses + ' meses' : ''}
+                ${x.comExcecao ? `<div class="vinculo" title="${escAttr(x.motivoExcecao)}" style="color:var(--azul)">exceção</div>` : ''}</td>
+              <td class="data-curta">${x.ultimaData ? esc(x.ultimaData) : '—'}${x.ultimoOdo ? `<div class="vinculo">${fmtInt(x.ultimoOdo)} km</div>` : ''}</td>
+              <td class="data-curta">${x.kmDesde !== null ? fmtInt(x.kmDesde) + ' km' : ''}${x.kmDesde !== null && x.diasDesde !== null ? '<br>' : ''}${x.diasDesde !== null ? x.diasDesde + ' dias' : ''}</td>
+              <td><span class="prazo ${classe}">${esc(texto)}</span>
+                ${x.previsao && !x.vencido ? `<div class="vinculo">previsto ${esc(x.previsao)}</div>` : ''}</td>
+              <td>${x.ultimoTexto ? `<div class="obs-multa" title="${escAttr(x.ultimoTexto)}">${esc(x.ultimoTexto)}</div>` : ''}
+                ${!x.odoConfiavel ? '<div class="vinculo" style="color:var(--ambar)">hodômetro pouco confiável</div>' : ''}</td>
+            </tr>`;
+          }).join('') || '<tr><td colspan="9"><div class="vazio">Nenhum item nesta seleção</div></td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      ${todos.length > 800 ? `<div class="cartao-dica">Exibindo 800 de ${fmtInt(todos.length)} itens. Use os filtros.</div>` : ''}
+      <div class="cartao-dica">Os intervalos vêm da aba <b>PreventivaPadrao</b> e as exceções da <b>PreventivaViatura</b>: alterando lá, o cálculo se refaz sozinho.
+        A última execução de cada item é achada pelas palavras-chave nas OS; quando não há registro, o item aparece como "sem registro" em vez de ser dado como em dia.</div>
+    </div>`;
+
+  c.querySelectorAll('.kpi[data-fprev]').forEach(k => k.addEventListener('click', () => {
+    ESTADO.filtroPrev.situacao = ESTADO.filtroPrev.situacao === k.dataset.fprev ? '' : k.dataset.fprev;
+    renderPreventiva(c);
+  }));
+  c.querySelectorAll('button[data-fprevb]').forEach(b => b.addEventListener('click', () => {
+    const chave = b.dataset.fprevb;
+    ESTADO.filtroPrev[chave] = ESTADO.filtroPrev[chave] === b.dataset.valor ? '' : b.dataset.valor;
+    renderPreventiva(c);
+  }));
+  c.querySelectorAll('button[data-limpaprev]').forEach(b => b.addEventListener('click', () => {
+    ESTADO.filtroPrev[b.dataset.limpaprev] = ''; renderPreventiva(c);
+  }));
+  ouvir('prev-limpar', 'click', () => { ESTADO.filtroPrev = { situacao: '', grupo: '', unidade: '', busca: '' }; renderPreventiva(c); });
+  const busca = el('prev-busca');
+  if (busca) busca.addEventListener('input', () => {
+    ESTADO.filtroPrev.busca = busca.value;
+    clearTimeout(ESTADO._tp);
+    ESTADO._tp = setTimeout(() => { const pos = busca.selectionStart; renderPreventiva(c); const n = el('prev-busca'); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} } }, 400);
+  });
+  ouvir('btn-recalc-prev', 'click', () => {
+    const b = el('btn-recalc-prev'); if (b) { b.disabled = true; b.textContent = 'recalculando…'; }
+    const run = servidor('lerPreventiva',
+      r => { if (r && r.ok) { ESTADO.preventiva = r; renderPreventiva(c); toast('Cálculo refeito com as regras atuais.'); }
+             else { if (b) { b.disabled = false; b.textContent = '⟳ Recalcular'; } toast((r && r.erro) || 'Falha.', true); } },
+      e => { if (b) { b.disabled = false; b.textContent = '⟳ Recalcular'; } toast('Erro: ' + (e && e.message ? e.message : e), true); });
+    if (run) run.lerPreventiva(ESTADO.token, true);
+  });
+  ouvir('btn-exportar-prev', 'click', () => baixarCsv(
+    'preventiva_' + new Date().toISOString().substring(0, 10) + '.csv',
+    ['Placa', 'Viatura', 'Categoria', 'Unidade', 'Grupo', 'Item', 'Tipo', 'Crítico', 'Intervalo km', 'Intervalo meses',
+     'Exceção', 'Odômetro', 'Km/mês', 'Última vez', 'Odômetro na época', 'Km desde', 'Dias desde', 'Situação', 'Previsão'],
+    todos.map(x => [x.placa, x.modelo, x.categoria, x.unidade, x.grupo, x.item, x.tipo, x.critico ? 'sim' : 'não',
+      x.intervaloKm || '', x.intervaloMeses || '', x.comExcecao ? x.motivoExcecao || 'sim' : '',
+      x.odometro || '', x.kmMes || '', x.ultimaData, x.ultimoOdo || '', x.kmDesde === null ? '' : x.kmDesde,
+      x.diasDesde === null ? '' : x.diasDesde,
+      x.vencido ? 'vencido' : x.semHistorico ? 'sem registro' : 'em dia', x.previsao])));
+  ajustarKpis();
 }
 
 </script>
