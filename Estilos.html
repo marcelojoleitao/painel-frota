@@ -278,6 +278,12 @@ table.tabela td.acoes { text-align: right; }
 .icone-doc:hover { background: var(--azul); color: #fff; border-color: var(--azul); }
 .icone-doc svg { width: 15px; height: 15px; }
 .icone-doc.inativo { opacity: .28; pointer-events: none; }
+/* demandas: mesma caixa dos outros ícones, com a contagem no lugar do desenho */
+.icone-doc.demanda-icone { font-size: 12px; font-weight: 800; font-family: var(--fonte-dados);
+  background: #E8EEFA; border-color: var(--azul-claro); color: var(--azul); }
+.icone-doc.demanda-icone:hover { background: var(--azul); color: #fff; border-color: var(--azul); }
+.icone-doc.demanda-icone.vencida { background: #FDECEA; border-color: var(--vermelho); color: #9A2F24; }
+.icone-doc.demanda-icone.vencida:hover { background: var(--vermelho); color: #fff; }
 .seletor-colunas { position: relative; }
 .seletor-colunas .menu {
   position: absolute; right: 0; top: 38px; background: #fff; border: 1px solid var(--borda); border-radius: var(--raio-p);
