@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.65.0';
+const VERSAO_PAINEL = '2.65.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4714,7 +4714,7 @@ function desenharQuadro(c) {
     </div>
 
     <div class="quadro">
-      ${dados.fases.map(fase => `<section class="coluna" data-fase="${escAttr(fase)}">
+      ${dados.fases.map(fase => `<section class="fase" data-fase="${escAttr(fase)}">
         <header><h3>${esc(fase)}</h3><span class="conta">${porFase(fase).length}</span></header>
         <div class="coluna-corpo" data-fase="${escAttr(fase)}">
           ${porFase(fase).map(cartao).join('') || '<div class="vazio-col">arraste um cartão para cá</div>'}
