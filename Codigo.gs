@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.64.10';
+const CODIGO_VERSAO = '2.65.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6572,8 +6572,13 @@ function verTextoMultas(placa) {
  * ConsultaBD, cruzado com a planilha de acompanhamento (aba Multas).
  * É o que a PRF ainda está sendo cobrada, com o que já sabemos de cada AI.
  */
-function lerMultasEmCobranca(token) {
+function lerMultasEmCobranca(token, ignorarCache) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const CHAVE = 'painel_cobranca_v1';
+  if (!ignorarCache) {
+    const guardado = _cacheLer_(CHAVE);
+    if (guardado) { guardado.doCache = true; return guardado; }
+  }
   try {
     const aba = p.ss.getSheetByName(CONFIG.ABA_BASE);
     const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0].map(v => String(v || '').trim());
@@ -6588,8 +6593,10 @@ function lerMultasEmCobranca(token) {
       const ssM = _ssMultas_();
       const abaM = ssM.getSheetByName(MULTAS.aba);
       if (abaM && abaM.getLastRow() >= MULTAS.primeiraLinha) {
-        const nCol = Math.max(abaM.getLastColumn(), MULTAS.colLancamento);
-        abaM.getRange(MULTAS.primeiraLinha, 1, abaM.getLastRow() - MULTAS.primeiraLinha + 1, nCol)
+        // só as colunas necessárias, em uma única leitura
+        const ultimaCol = Math.max(MULTAS.col.ai, MULTAS.col.status, MULTAS.col.tipo, MULTAS.col.orgao,
+          MULTAS.col.enquadramento, MULTAS.col.processo, MULTAS.col.protocolo, MULTAS.col.dataDefesa);
+        abaM.getRange(MULTAS.primeiraLinha, 1, abaM.getLastRow() - MULTAS.primeiraLinha + 1, ultimaCol)
           .getDisplayValues().forEach((l, i) => {
             const ai = _chaveAi_(l[MULTAS.col.ai - 1]);
             if (!ai) return;
@@ -6663,11 +6670,13 @@ function lerMultasEmCobranca(token) {
       });
     });
 
-    return { ok: true, itens: lista,
+    const saida = { ok: true, itens: lista,
       consultaEm: lista.length ? lista[0].consultaEm : '',
       totalAPagar: Math.round(lista.reduce((t, x) => t + (x.aPagar || 0), 0) * 100) / 100,
       semRegistro: lista.filter(x => !x.registrada).length,
-      semDetalhe: semDetalhe };
+      semDetalhe: semDetalhe, geradoEm: Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm') };
+    _cacheGravar_(CHAVE, saida, CONFIG.CACHE_SEG || 3600);
+    return saida;
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 

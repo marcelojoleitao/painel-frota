@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.64.10';
+const VERSAO_PAINEL = '2.65.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4662,7 +4662,7 @@ function desenharQuadro(c) {
             (placas.length > 4 ? `<span class="dem-tag">+${placas.length - 4}</span>` : '') +
             (unica ? `<span class="dem-tag modelo">${esc(unica.modeloCurto || unica.modelo)}</span>` : '')
           : '<span class="dem-tag geral">frota</span>'}
-        ${d.prioridade !== 'Normal' ? `<span class="dem-tag prio">${esc(d.prioridade)}</span>` : ''}
+        ${d.prioridade !== 'Normal' ? `<span class="dem-tag prio ${d.prioridade === 'Urgente' ? 'urgente' : ''}">${esc(d.prioridade)}</span>` : ''}
         ${d.responsavel ? `<span class="dem-tag">${esc(d.responsavel)}</span>` : ''}
         ${d.prazo ? `<span class="dem-tag ${atrasada(d) ? 'venceu' : 'prazo'}">${esc(d.prazo)}</span>` : ''}
         ${d.sei ? `<span class="dem-tag sei" title="Processo SEI ${escAttr(d.sei)} — clique para copiar" onclick="event.stopPropagation(); copiarTexto('${escAttr(d.sei)}')">SEI ${esc(d.sei)}</span>` : ''}
@@ -5478,13 +5478,15 @@ function renderMultasCobranca(c) {
 
     <div class="cartao largo" style="margin-top:12px">
       <div class="cartao-cab"><h3>Multas em cobrança</h3>
-        <small>${todos.length} AI(s)${dados.consultaEm ? ' • última consulta ' + esc(dados.consultaEm) : ''}</small></div>
+        <small>${todos.length} AI(s)${dados.consultaEm ? ' • última consulta ' + esc(dados.consultaEm) : ''}${
+          dados.geradoEm ? ' • cruzamento de ' + esc(dados.geradoEm) + (dados.doCache ? ' (guardado)' : '') : ''}</small></div>
       <div class="os-barra-acoes">
         <div class="busca" style="max-width:280px"><input id="cob-busca" type="search" placeholder="AI, placa, infração, unidade…" value="${escAttr(f.busca)}"></div>
         ${f.unidade ? `<span class="chip-filtro">unidade: ${esc(f.unidade)} <button data-limpacob="unidade">×</button></span>` : ''}
         ${f.propriedade ? `<span class="chip-filtro">propriedade: ${esc(f.propriedade)} <button data-limpacob="propriedade">×</button></span>` : ''}
         ${(f.registro || f.unidade || f.propriedade || f.busca) ? '<button class="btn claro" id="cob-limpar">Limpar</button>' : ''}
         <div style="flex:1"></div>
+        <button class="btn claro" id="btn-refazer-cob" title="Refaz o cruzamento com os dados de agora">⟳ Atualizar</button>
         <button class="btn claro" id="btn-exportar-cob">⤓ Exportar</button>
       </div>
       <div class="tabela-rol os-rol" style="max-height:620px">
@@ -5558,6 +5560,14 @@ function renderMultasCobranca(c) {
     if (!ESTADO.multas) { toast('Carregando as bases de multas…'); const run = servidor('lerMultas', r => { if (r && r.ok) { ESTADO.multas = r; abrirFormMultaCom(ai, placa); } }, () => {}); if (run) run.lerMultas(ESTADO.token); return; }
     abrirFormMultaCom(ai, placa);
   }));
+  ouvir('btn-refazer-cob', 'click', () => {
+    const b = el('btn-refazer-cob'); if (b) { b.disabled = true; b.textContent = 'atualizando…'; }
+    const run = servidor('lerMultasEmCobranca',
+      r => { if (r && r.ok) { ESTADO.cobranca = r; renderMultasCobranca(c); toast('Cruzamento refeito.'); }
+             else { if (b) { b.disabled = false; b.textContent = '⟳ Atualizar'; } toast((r && r.erro) || 'Falha.', true); } },
+      e => { if (b) { b.disabled = false; b.textContent = '⟳ Atualizar'; } toast('Erro: ' + (e && e.message ? e.message : e), true); });
+    if (run) run.lerMultasEmCobranca(ESTADO.token, true);
+  });
   ouvir('btn-exportar-cob', 'click', () => baixarCsv(
     'multas_em_cobranca_' + new Date().toISOString().substring(0, 10) + '.csv',
     ['AI', 'Placa', 'Viatura', 'Unidade', 'Status da VTR', 'Uso', 'Propriedade', 'Exercício', 'Licenciamento vence', 'Abastecimento recente', 'Rodando irregular', 'Infração', 'Descrição', 'Vencimento', 'Valor', 'A pagar', 'Consulta em', 'Registrada', 'Status', 'Enquadramento', 'Processo'],
