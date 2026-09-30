@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.64.8';
+const VERSAO_PAINEL = '2.64.9';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -591,7 +591,7 @@ function celula(v, c) {
       const n = pdfsDaViatura(v).length;
       const dem = demandasAbertas(v.placa);
       const vencida = dem.some(atrasada);
-      return `<td class="acoes">${iconeDoc(v.linkTomb, 'Tombamento (PDF)', icoPdf())}${iconeDoc(v.linkCrlv, 'CRLV', icoDoc())}${iconeDoc(v.temFotos === 'Sim' ? '#' : '', 'Fotos', icoFoto(), true)}${n ? `<span class="icone-doc" title="${n} OS em PDF — abrir ficha" onclick="event.stopPropagation(); abrirFicha(this.closest('tr').dataset.placa)" style="color:var(--ambar)">${icoOs()}</span>` : ''}${dem.length ? `<span class="icone-doc demanda-icone ${vencida ? 'vencida' : ''}" title="${dem.length} demanda(s) aberta(s)${vencida ? ' — alguma com prazo vencido' : ''}: ${escAttr(dem.map(d => d.titulo).join(' • '))}" onclick="event.stopPropagation(); abrirFicha(this.closest('tr').dataset.placa)">⬤<span class="conta-dem">${dem.length}</span></span>` : ''}</td>`;
+      return `<td class="acoes">${iconeDoc(v.linkTomb, 'Tombamento (PDF)', icoPdf())}${iconeDoc(v.linkCrlv, 'CRLV', icoDoc())}${iconeDoc(v.temFotos === 'Sim' ? '#' : '', 'Fotos', icoFoto(), true)}${n ? `<span class="icone-doc" title="${n} OS em PDF — abrir ficha" onclick="event.stopPropagation(); abrirFicha(this.closest('tr').dataset.placa)" style="color:var(--ambar)">${icoOs()}</span>` : ''}${dem.length ? `<span class="icone-doc demanda-icone ${vencida ? 'vencida' : ''}" title="${dem.length} demanda(s) aberta(s)${vencida ? ' — alguma com prazo vencido' : ''}: ${escAttr(dem.map(d => d.titulo).join(' • '))}" onclick="event.stopPropagation(); abrirFicha(this.closest('tr').dataset.placa)">${dem.length}</span>` : ''}</td>`;
     }
     default: return `<td class="${c.cl || ''}" title="${escAttr(x || '')}">${esc(x || '—')}</td>`;
   }
