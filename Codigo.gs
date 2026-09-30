@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.65.1';
+const CODIGO_VERSAO = '2.66.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6038,6 +6038,214 @@ function salvarSinistro(token, linha, dados) {
       String(dados.processo || ''), String(dados.status || '') + ' • ' + _moedaBR_((_parseNumeroBR_(dados.pecas) || 0) + (_parseNumeroBR_(dados.mo) || 0)));
     return { ok: true, linha: alvo, novo: novo };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+
+/* ============================================================
+   MANUTENÇÃO PREVENTIVA — base de referência
+   Duas abas na planilha-mãe:
+     PreventivaPadrao   — intervalos por categoria de veículo e item
+     PreventivaViatura  — exceções por placa (o que o fabricante ou o uso
+                          daquela viatura exige diferente do padrão)
+   Os valores são referência de mercado. O manual do fabricante e as
+   condições de uso prevalecem — por isso a aba de exceções existe.
+   ============================================================ */
+
+const PREVENTIVA = {
+  abaPadrao: 'PreventivaPadrao',
+  abaViatura: 'PreventivaViatura',
+  categorias: ['Automóvel', 'Camionete/SUV', 'Caminhonete diesel 4x4', 'Motocicleta', 'Van/Micro-ônibus', 'Caminhão'],
+  grupos: ['Fluidos', 'Filtros', 'Freios', 'Pneus', 'Suspensão e direção', 'Motor', 'Elétrica', 'Segurança'],
+  cabPadrao: ['Categoria', 'Grupo', 'Item', 'Intervalo (km)', 'Intervalo (meses)', 'Tipo', 'Crítico', 'Palavras-chave', 'Observação'],
+  cabViatura: ['Placa', 'Item', 'Intervalo (km)', 'Intervalo (meses)', 'Motivo', 'Definido em', 'Por']
+};
+
+/**
+ * Tabela de referência. Cada linha:
+ * [grupo, item, km, meses, tipo, crítico, palavras-chave no detalhamento, observação]
+ * "Tipo" separa o que se troca do que se inspeciona: inspeção vencida não
+ * significa peça ruim, significa que ninguém olhou.
+ */
+function _tabelaPreventiva_() {
+  const comum = [
+    ['Fluidos', 'Óleo do motor', 10000, 12, 'Troca', 'Sim', 'OLEO MOTOR|OLEO LUBRIFICANTE|TROCA DE OLEO', 'O que vier primeiro. Uso severo (patrulhamento urbano, marcha lenta prolongada) encurta o intervalo.'],
+    ['Filtros', 'Filtro de óleo', 10000, 12, 'Troca', 'Sim', 'FILTRO DE OLEO|FILTRO OLEO', 'Sempre junto com o óleo do motor.'],
+    ['Filtros', 'Filtro de ar do motor', 20000, 24, 'Troca', 'Não', 'FILTRO DE AR|FILTRO AR MOTOR', 'Metade do intervalo em via de terra ou poeira.'],
+    ['Filtros', 'Filtro de combustível', 20000, 24, 'Troca', 'Sim', 'FILTRO DE COMBUSTIVEL|FILTRO COMBUSTIVEL|FILTRO DE GASOLINA', 'No diesel, pode exigir troca antes por qualidade do combustível.'],
+    ['Filtros', 'Filtro do ar-condicionado', 20000, 12, 'Troca', 'Não', 'FILTRO DE CABINE|FILTRO AR CONDICIONADO|FILTRO ANTIPOLEN', 'Afeta desembaçamento e visibilidade.'],
+    ['Freios', 'Pastilhas de freio', 30000, 24, 'Troca', 'Sim', 'PASTILHA|PASTILHAS DE FREIO', 'Inspecionar a cada 10.000 km. Viatura em ronda urbana gasta bem antes.'],
+    ['Freios', 'Discos de freio', 60000, 48, 'Troca', 'Sim', 'DISCO DE FREIO|DISCOS', 'Trocar quando atingir a espessura mínima, normalmente a cada duas trocas de pastilha.'],
+    ['Freios', 'Fluido de freio', 40000, 24, 'Troca', 'Sim', 'FLUIDO DE FREIO|DOT 4|DOT4', 'Absorve umidade e perde ponto de ebulição: falha em frenagem prolongada, mesmo com pastilha boa.'],
+    ['Freios', 'Lonas e tambores', 40000, 48, 'Inspeção', 'Sim', 'LONA DE FREIO|TAMBOR', 'Onde houver freio traseiro a tambor.'],
+    ['Pneus', 'Rodízio de pneus', 10000, 12, 'Serviço', 'Não', 'RODIZIO|RODIZIO DE PNEUS', 'Iguala o desgaste e estende a vida do jogo.'],
+    ['Pneus', 'Troca de pneus', 50000, 60, 'Troca', 'Sim', 'PNEU|PNEUS', 'Limite legal de sulco é 1,6 mm; o prudente é trocar em 3 mm. Cinco anos de fabricação é limite por idade, mesmo com sulco bom.'],
+    ['Pneus', 'Alinhamento e balanceamento', 10000, 12, 'Serviço', 'Não', 'ALINHAMENTO|BALANCEAMENTO|CAMBAGEM', 'Refazer sempre que trocar pneu ou peça de suspensão.'],
+    ['Suspensão e direção', 'Amortecedores', 70000, 60, 'Troca', 'Sim', 'AMORTECEDOR|KIT AMORTECEDOR', 'Inspecionar a cada 20.000 km: amortecedor ruim aumenta a distância de frenagem.'],
+    ['Suspensão e direção', 'Pivôs, terminais e bieletas', 20000, 12, 'Inspeção', 'Sim', 'PIVO|TERMINAL DE DIRECAO|BIELETA|BANDEJA', 'Folga em direção é causa direta de perda de controle.'],
+    ['Suspensão e direção', 'Coifas e juntas homocinéticas', 20000, 12, 'Inspeção', 'Não', 'COIFA|HOMOCINETICA|TRIZETA', 'Coifa rasgada leva a junta a durar poucos meses.'],
+    ['Motor', 'Correia dentada e tensor', 60000, 48, 'Troca', 'Sim', 'CORREIA DENTADA|KIT CORREIA|TENSOR', 'Onde o motor usa corrente, seguir o manual. O rompimento destrói o motor.'],
+    ['Motor', 'Correia de acessórios', 60000, 48, 'Troca', 'Não', 'CORREIA ALTERNADOR|CORREIA ACESSORIOS|CORREIA POLY V', 'Rompimento para alternador, direção e ar-condicionado.'],
+    ['Motor', 'Velas de ignição', 40000, 36, 'Troca', 'Não', 'VELA DE IGNICAO|VELAS', 'Convencionais aos 30.000 km; irídio ou platina chegam a 80.000.'],
+    ['Fluidos', 'Fluido de arrefecimento', 50000, 36, 'Troca', 'Sim', 'ADITIVO|LIQUIDO DE ARREFECIMENTO|FLUIDO RADIADOR', 'Perde proteção anticorrosão e superaquece o motor.'],
+    ['Fluidos', 'Óleo do câmbio', 80000, 60, 'Troca', 'Não', 'OLEO CAMBIO|FLUIDO TRANSMISSAO|ATF', 'Automáticos costumam exigir antes dos manuais.'],
+    ['Elétrica', 'Bateria', 0, 36, 'Troca', 'Sim', 'BATERIA', 'Testar a cada 6 meses. Viatura com giroflex, rádio e computador em marcha lenta reduz a vida da bateria.'],
+    ['Segurança', 'Palhetas do limpador', 0, 12, 'Troca', 'Não', 'PALHETA|LIMPADOR', 'Item de visibilidade, barato e frequentemente esquecido.'],
+    ['Segurança', 'Extintor de incêndio', 0, 60, 'Inspeção', 'Sim', 'EXTINTOR', 'Conferir validade e carga; obrigatório em veículo oficial.'],
+    ['Segurança', 'Estepe, macaco e chave de roda', 0, 6, 'Inspeção', 'Sim', 'ESTEPE|MACACO|CHAVE DE RODA', 'Estepe calibrado e ferramenta completa — verificar na revisão.'],
+    ['Segurança', 'Iluminação e sinalização', 0, 6, 'Inspeção', 'Sim', 'LAMPADA|FAROL|LANTERNA|GIROFLEX|SIRENE', 'Inclui o sinalizador de emergência, que é equipamento operacional.'],
+    ['Elétrica', 'Ar-condicionado (carga e higienização)', 0, 24, 'Serviço', 'Não', 'AR CONDICIONADO|HIGIENIZACAO|GAS REFRIGERANTE', 'Afeta desembaçamento, e portanto a visibilidade.']
+  ];
+
+  const porCategoria = {};
+  PREVENTIVA.categorias.forEach(cat => { porCategoria[cat] = comum.map(l => l.slice()); });
+
+  // ajustes por categoria: uso severo encurta, diesel pesado alonga
+  const ajustar = (cat, item, km, meses, obs) => {
+    const linha = porCategoria[cat].find(l => l[1] === item);
+    if (!linha) return;
+    if (km !== null) linha[2] = km;
+    if (meses !== null) linha[3] = meses;
+    if (obs) linha[8] = obs;
+  };
+
+  // Caminhonete diesel 4x4: óleo mais curto, itens de transmissão a mais
+  ajustar('Caminhonete diesel 4x4', 'Óleo do motor', 10000, 12, 'Diesel com uso severo pede 5.000 km em serviço de patrulhamento em via não pavimentada.');
+  ajustar('Caminhonete diesel 4x4', 'Filtro de combustível', 10000, 12, 'Diesel exige troca mais frequente; trocar antes se houver perda de potência.');
+  porCategoria['Caminhonete diesel 4x4'].push(
+    ['Fluidos', 'Óleo do diferencial', 60000, 48, 'Troca', 'Não', 'OLEO DIFERENCIAL|DIFERENCIAL', 'Antes se houver uso em atoleiro ou travessia de água.'],
+    ['Fluidos', 'Óleo da caixa de transferência', 60000, 48, 'Troca', 'Não', 'CAIXA DE TRANSFERENCIA|TRANSFER', 'Específico das 4x4.'],
+    ['Motor', 'Filtro de partículas / Arla 32', 0, 12, 'Inspeção', 'Não', 'ARLA|SCR|CATALISADOR|DPF', 'Diesel com pós-tratamento de emissões.'],
+    ['Suspensão e direção', 'Rolamentos de roda', 80000, 60, 'Inspeção', 'Sim', 'ROLAMENTO|CUBO DE RODA', 'Ruído em curva é o primeiro sinal.']);
+
+  // Motocicleta: tudo mais curto, e a transmissão por corrente entra como segurança
+  porCategoria['Motocicleta'] = [
+    ['Fluidos', 'Óleo do motor', 5000, 6, 'Troca', 'Sim', 'OLEO MOTOR|TROCA DE OLEO', 'Motor de moto trabalha em rotação alta e com menos óleo: intervalo curto.'],
+    ['Filtros', 'Filtro de óleo', 5000, 6, 'Troca', 'Sim', 'FILTRO DE OLEO', 'Junto com o óleo.'],
+    ['Filtros', 'Filtro de ar', 10000, 12, 'Troca', 'Não', 'FILTRO DE AR', 'Metade em via de terra.'],
+    ['Motor', 'Velas de ignição', 10000, 12, 'Troca', 'Não', 'VELA', ''],
+    ['Freios', 'Pastilhas de freio', 15000, 12, 'Troca', 'Sim', 'PASTILHA', 'Inspecionar a cada 5.000 km.'],
+    ['Freios', 'Discos de freio', 40000, 48, 'Inspeção', 'Sim', 'DISCO DE FREIO', 'Conferir espessura e empenamento.'],
+    ['Freios', 'Fluido de freio', 20000, 24, 'Troca', 'Sim', 'FLUIDO DE FREIO|DOT', 'Mais crítico que no carro: sistema menor, aquece mais rápido.'],
+    ['Pneus', 'Troca de pneus', 20000, 60, 'Troca', 'Sim', 'PNEU', 'Dianteiro e traseiro gastam em ritmos diferentes. Limite de idade: 5 anos.'],
+    ['Suspensão e direção', 'Corrente, coroa e pinhão', 25000, 24, 'Troca', 'Sim', 'CORRENTE|COROA|PINHAO|KIT RELACAO', 'Lubrificar a cada 500 km. Corrente folgada ou travada causa queda.'],
+    ['Suspensão e direção', 'Rolamento da direção e suspensão', 20000, 12, 'Inspeção', 'Sim', 'ROLAMENTO|SUSPENSAO|BENGALA|AMORTECEDOR', 'Folga na direção é perda de controle.'],
+    ['Elétrica', 'Bateria', 0, 24, 'Troca', 'Não', 'BATERIA', 'Moto parada descarrega mais rápido.'],
+    ['Segurança', 'Iluminação e sinalização', 0, 6, 'Inspeção', 'Sim', 'LAMPADA|FAROL|LANTERNA|GIROFLEX|SIRENE', '']
+  ];
+
+  // Van, micro-ônibus e caminhão: transporte de pessoas e carga pesada
+  ['Van/Micro-ônibus', 'Caminhão'].forEach(cat => {
+    ajustar(cat, 'Óleo do motor', 15000, 12, 'Motor diesel de maior porte; seguir o manual, que costuma permitir intervalo maior.');
+    ajustar(cat, 'Pastilhas de freio', 40000, 24, 'Inspecionar a cada 10.000 km. Veículo carregado exige mais do freio.');
+    porCategoria[cat].push(
+      ['Freios', 'Sistema de freio a ar e reservatórios', 0, 6, 'Inspeção', 'Sim', 'FREIO A AR|COMPRESSOR|RESERVATORIO DE AR', 'Drenar a água dos reservatórios e conferir vazamentos.'],
+      ['Suspensão e direção', 'Molas e feixes', 60000, 48, 'Inspeção', 'Sim', 'MOLA|FEIXE DE MOLA|GRAMPO', ''],
+      ['Segurança', 'Cintos e saídas de emergência', 0, 6, 'Inspeção', 'Sim', 'CINTO|SAIDA DE EMERGENCIA', 'Obrigatório em transporte de pessoas.']);
+  });
+
+  const linhas = [];
+  PREVENTIVA.categorias.forEach(cat => {
+    porCategoria[cat].forEach(l => linhas.push([cat, l[0], l[1], l[2] || '', l[3] || '', l[4], l[5], l[6], l[7] || '']));
+  });
+  return linhas;
+}
+
+/** Cria (ou recria) a base de referência da preventiva. */
+function criarBasePreventiva() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+
+  let aba = ss.getSheetByName(PREVENTIVA.abaPadrao);
+  if (aba) {
+    const resposta = aba.getLastRow();
+    Logger.log('A aba ' + PREVENTIVA.abaPadrao + ' já existe com ' + resposta + ' linha(s). Nada foi alterado.');
+    Logger.log('Para recriar do zero, apague a aba e rode de novo.');
+  } else {
+    aba = ss.insertSheet(PREVENTIVA.abaPadrao);
+    const linhas = _tabelaPreventiva_();
+    aba.getRange(1, 1, 1, PREVENTIVA.cabPadrao.length).setValues([PREVENTIVA.cabPadrao]);
+    aba.getRange(2, 1, linhas.length, PREVENTIVA.cabPadrao.length).setValues(
+      linhas.map(l => [l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[7], l[8]]));
+    aba.setFrozenRows(1);
+    aba.getRange(1, 1, 1, PREVENTIVA.cabPadrao.length).setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF');
+    aba.setColumnWidth(3, 230); aba.setColumnWidth(8, 260); aba.setColumnWidth(9, 420);
+    Logger.log(linhas.length + ' item(ns) gravado(s) em ' + PREVENTIVA.abaPadrao + '.');
+  }
+
+  let exc = ss.getSheetByName(PREVENTIVA.abaViatura);
+  if (!exc) {
+    exc = ss.insertSheet(PREVENTIVA.abaViatura);
+    exc.getRange(1, 1, 1, PREVENTIVA.cabViatura.length).setValues([PREVENTIVA.cabViatura]);
+    exc.setFrozenRows(1);
+    exc.getRange(1, 1, 1, PREVENTIVA.cabViatura.length).setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF');
+    Logger.log('Aba ' + PREVENTIVA.abaViatura + ' criada para as exceções por placa.');
+  }
+  SpreadsheetApp.flush();
+  limparCache();
+  return 'ok';
+}
+
+/** Lê a base de referência, já pronta para a tela. */
+function lerBasePreventiva(token) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    const aba = ss.getSheetByName(PREVENTIVA.abaPadrao);
+    if (!aba) return { ok: false, erro: 'Rode criarBasePreventiva() no editor para criar a base.' };
+    const padrao = [];
+    if (aba.getLastRow() > 1) {
+      aba.getRange(2, 1, aba.getLastRow() - 1, PREVENTIVA.cabPadrao.length).getValues().forEach(l => {
+        if (!String(l[2] || '').trim()) return;
+        padrao.push({ categoria: String(l[0] || ''), grupo: String(l[1] || ''), item: String(l[2] || ''),
+          km: _num_(l[3]) || 0, meses: _num_(l[4]) || 0, tipo: String(l[5] || ''),
+          critico: /sim/i.test(String(l[6] || '')), chaves: String(l[7] || ''), obs: String(l[8] || '') });
+      });
+    }
+    const excecoes = [];
+    const exc = ss.getSheetByName(PREVENTIVA.abaViatura);
+    if (exc && exc.getLastRow() > 1) {
+      exc.getRange(2, 1, exc.getLastRow() - 1, PREVENTIVA.cabViatura.length).getValues().forEach(l => {
+        const placa = String(l[0] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+        if (!placa) return;
+        excecoes.push({ placa: placa, item: String(l[1] || ''), km: _num_(l[2]) || 0,
+          meses: _num_(l[3]) || 0, motivo: String(l[4] || '') });
+      });
+    }
+    return { ok: true, padrao: padrao, excecoes: excecoes,
+      categorias: PREVENTIVA.categorias, grupos: PREVENTIVA.grupos };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Cria ou atualiza a exceção de uma viatura. */
+function salvarExcecaoPreventiva(token, dados) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (!p.sessao.admin) return { ok: false, erro: 'Apenas o administrador pode definir exceções.' };
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    let aba = ss.getSheetByName(PREVENTIVA.abaViatura);
+    if (!aba) { criarBasePreventiva(); aba = ss.getSheetByName(PREVENTIVA.abaViatura); }
+    const placa = String((dados || {}).placa || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const item = String((dados || {}).item || '').trim();
+    if (!placa || !item) return { ok: false, erro: 'Informe a placa e o item.' };
+    const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm');
+
+    let linha = -1;
+    if (aba.getLastRow() > 1) {
+      const valores = aba.getRange(2, 1, aba.getLastRow() - 1, 2).getValues();
+      for (let i = 0; i < valores.length; i++) {
+        if (String(valores[i][0] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase() === placa &&
+            String(valores[i][1] || '').trim() === item) { linha = i + 2; break; }
+      }
+    }
+    if (linha < 0) linha = aba.getLastRow() + 1;
+    aba.getRange(linha, 1, 1, PREVENTIVA.cabViatura.length).setValues([[placa, item,
+      _parseNumeroBR_(dados.km) || '', _parseNumeroBR_(dados.meses) || '',
+      String(dados.motivo || ''), agora, p.sessao.email]]);
+    SpreadsheetApp.flush();
+    limparCache();
+    _logAcao_(p.ss, p.sessao.email, 'Exceção de preventiva', placa, item,
+      (dados.km || '') + ' km / ' + (dados.meses || '') + ' meses • ' + (dados.motivo || ''));
+    return { ok: true };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 
 /* ============================================================
