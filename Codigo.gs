@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.68.0';
+const CODIGO_VERSAO = '2.68.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6329,62 +6329,109 @@ function _odometrosPorPlaca_(ss) {
   return mapa;
 }
 
-/** Última execução de cada item, procurando as palavras-chave nos serviços. */
-function _servicosPorPlaca_(ss, padrao) {
+/**
+ * Última execução de cada item. Em vez de depender de uma coluna específica,
+ * varre todas as colunas de texto que descrevem serviço, peça ou item — os
+ * nomes variam entre ManutBD e DetalhamentoDB.
+ */
+function _servicosPorPlaca_(ss, padrao, diag) {
   const mapa = {};
-  const registrar = (placa, data, odo, texto) => {
+  const relatorio = diag || { fontes: [], casamentos: {} };
+
+  const registrar = (placa, data, odo, texto, fonte) => {
     if (!placa || !texto) return;
     const alvo = _normCab_(texto);
+    if (alvo.length < 3) return;
     padrao.forEach(regra => {
       if (!regra.chaves) return;
       const casa = regra.chaves.split('|').some(k => k.trim() && alvo.indexOf(_normCab_(k)) >= 0);
       if (!casa) return;
+      relatorio.casamentos[regra.item] = (relatorio.casamentos[regra.item] || 0) + 1;
       const chave = placa + '|' + regra.item;
       const atual = mapa[chave];
-      if (!atual || data > atual.data) mapa[chave] = { data: data, odo: odo || 0, texto: String(texto).substring(0, 120) };
+      if (!atual || (data || '') > (atual.data || '')) {
+        mapa[chave] = { data: data || '', odo: odo || 0, texto: String(texto).substring(0, 120), fonte: fonte };
+      }
     });
   };
 
-  // 1) detalhamento de itens das OS, que é onde o serviço aparece descrito
+  /** Percorre uma tabela qualquer procurando placa, data, hodômetro e textos. */
+  const varrer = (valores, cabIdx, fonte) => {
+    if (!valores || !valores.length) return;
+    const nomes = valores[cabIdx].map(c => _normCab_(c));
+    const iPlaca = nomes.findIndex(c => /^PLACA/.test(c));
+    if (iPlaca < 0) { relatorio.fontes.push(fonte + ': sem coluna de placa'); return; }
+    const iData = nomes.findIndex(c => /^DATA/.test(c));
+    const iOdo = nomes.findIndex(c => /HODOMETRO|ODOMETRO|^KM$/.test(c));
+    // qualquer coluna cujo nome sugira descrição de serviço, peça ou item
+    const textuais = [];
+    nomes.forEach((n, i) => {
+      if (/DESCRI|SERVIC|ITEM|PECA|PRODUTO|MANUTENCAO|OBSERVA|INFORMACAO/.test(n)) textuais.push(i);
+    });
+    if (!textuais.length) { relatorio.fontes.push(fonte + ': nenhuma coluna de descrição'); return; }
+    relatorio.fontes.push(fonte + ': ' + (valores.length - cabIdx - 1) + ' linha(s), descrição em ' +
+      textuais.map(i => valores[cabIdx][i]).join(' | '));
+    for (let r = cabIdx + 1; r < valores.length; r++) {
+      const placa = String(valores[r][iPlaca] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      if (!placa) continue;
+      const data = iData >= 0 ? _diaISO_(valores[r][iData]) : '';
+      const odo = iOdo >= 0 ? (_num_(valores[r][iOdo]) || 0) : 0;
+      textuais.forEach(i => registrar(placa, data, odo, valores[r][i], fonte));
+    }
+  };
+
+  const acharCabecalho = valores => {
+    for (let i = 0; i < Math.min(8, valores.length); i++) {
+      if (valores[i].some(c => /^PLACA/.test(_normCab_(c)))) return i;
+    }
+    return 0;
+  };
+
+  // DetalhamentoDB: item a item das OS
   try {
     const aba = _ssManut_().getSheetByName(CONFIG.ABA_DETALHAMENTO);
-    if (aba && aba.getLastRow() > 2) {
+    if (aba && aba.getLastRow() > 1) {
       const valores = aba.getDataRange().getValues();
-      let cabIdx = 0;
-      for (let i = 0; i < Math.min(6, valores.length); i++) {
-        if (valores[i].some(c => /DESCRI|ITEM/i.test(String(c)))) { cabIdx = i; break; }
-      }
-      const nomes = valores[cabIdx].map(c => _normCab_(c));
-      const iPlaca = nomes.findIndex(c => /^PLACA$/.test(c));
-      const iDesc = nomes.findIndex(c => /DESCRI/.test(c));
-      const iData = nomes.findIndex(c => /DATA/.test(c));
-      const iOdo = nomes.findIndex(c => /HODOMETRO|ODOMETRO|KM/.test(c));
-      if (iPlaca >= 0 && iDesc >= 0) {
-        for (let r = cabIdx + 1; r < valores.length; r++) {
-          const placa = String(valores[r][iPlaca] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-          registrar(placa, iData >= 0 ? _diaISO_(valores[r][iData]) : '', iOdo >= 0 ? _num_(valores[r][iOdo]) : 0, valores[r][iDesc]);
-        }
-      }
-    }
-  } catch (e) { Logger.log('Detalhamento na preventiva: ' + e); }
+      varrer(valores, acharCabecalho(valores), 'DetalhamentoDB');
+    } else relatorio.fontes.push('DetalhamentoDB: aba não encontrada ou vazia');
+  } catch (e) { relatorio.fontes.push('DetalhamentoDB: ' + String(e).substring(0, 80)); }
 
-  // 2) ManutBD, como reserva para o que não estiver detalhado
+  // ManutBD: transações de manutenção
   try {
-    const tab = _abaTransacoes_(SpreadsheetApp.openById(CONFIG.ID_BASE), CONFIG.ABA_MANUT, ['PLACA', 'VALOR EMISSAO']);
-    if (tab) {
-      const { valores, cab } = tab;
-      const iPlaca = cab.indexOf('PLACA'), iData = cab.indexOf('DATA TRANSACAO'),
-            iOdo = cab.indexOf('HODOMETRO OU HORIMETRO'), iServ = cab.indexOf('SERVICO');
-      if (iPlaca >= 0 && iServ >= 0) {
-        valores.forEach(l => {
-          const placa = String(l[iPlaca] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-          registrar(placa, iData >= 0 ? _diaISO_(l[iData]) : '', iOdo >= 0 ? _num_(l[iOdo]) : 0, l[iServ]);
-        });
-      }
-    }
-  } catch (e) { Logger.log('ManutBD na preventiva: ' + e); }
+    const aba = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_MANUT);
+    if (aba && aba.getLastRow() > 1) {
+      const valores = aba.getDataRange().getValues();
+      varrer(valores, acharCabecalho(valores), 'ManutBD');
+    } else relatorio.fontes.push('ManutBD: aba não encontrada ou vazia');
+  } catch (e) { relatorio.fontes.push('ManutBD: ' + String(e).substring(0, 80)); }
 
   return mapa;
+}
+
+/** Mostra no log por que a preventiva encontrou (ou não) os serviços. */
+function diagnosticarPreventiva() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const base = lerBasePreventiva('');
+  const padrao = base.ok ? base.padrao : [];
+  Logger.log('Regras carregadas: ' + padrao.length);
+  const diag = { fontes: [], casamentos: {} };
+  const servicos = _servicosPorPlaca_(ss, padrao, diag);
+  Logger.log('--- fontes lidas ---');
+  diag.fontes.forEach(f => Logger.log('   ' + f));
+  Logger.log('--- itens reconhecidos ---');
+  const chaves = Object.keys(diag.casamentos).sort((a, b) => diag.casamentos[b] - diag.casamentos[a]);
+  if (!chaves.length) Logger.log('   nenhum: as palavras-chave da aba PreventivaPadrao não apareceram nas descrições');
+  chaves.forEach(k => Logger.log('   ' + k + ': ' + diag.casamentos[k] + ' ocorrência(s)'));
+  Logger.log('--- pares placa+item com histórico: ' + Object.keys(servicos).length);
+  Object.keys(servicos).slice(0, 10).forEach(k => {
+    const s = servicos[k];
+    Logger.log('   ' + k + ' → ' + (s.data || 'sem data') + ' | ' + (s.odo || 'sem km') + ' | ' + s.texto);
+  });
+  const odo = _odometrosPorPlaca_(ss);
+  const placas = Object.keys(odo);
+  Logger.log('--- hodômetros: ' + placas.length + ' placa(s); confiáveis: ' + placas.filter(p => odo[p].confiavel).length);
+  placas.slice(0, 5).forEach(p => Logger.log('   ' + p + ': ' + odo[p].odometro + ' km | ' + odo[p].kmMes + ' km/mês | ' + odo[p].leituras.length + ' leitura(s)'));
+  return 'ok';
 }
 
 /**
