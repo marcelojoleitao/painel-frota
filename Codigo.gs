@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.64.4';
+const CODIGO_VERSAO = '2.64.5';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6569,11 +6569,37 @@ function lerMultasEmCobranca(token) {
     } catch (e) { Logger.log('Planilha de multas: ' + e); }
 
     const lista = [];
+    let semDetalhe = 0;
     valores.forEach(l => {
       const texto = String(l[idx.multasTxt] || '');
-      if (!texto) return;
+      const qtd = idx.qtdMultas !== undefined ? (_num_(l[idx.qtdMultas]) || 0) : 0;
+      if (!texto && !qtd) return;
       const placa = String(l[idx.placa] || '').trim().toUpperCase();
       const m = _parseMultas_(texto);
+      // viatura com multa cuja descrição não pôde ser decomposta em autos:
+      // entra assim mesmo, para não sumir da tela
+      if (!m.itens.length) {
+        semDetalhe++;
+        lista.push({
+          ai: '', placa: placa,
+          modelo: idx.modelo !== undefined ? String(l[idx.modelo] || '') : '',
+          unidade: idx.unidade !== undefined ? String(l[idx.unidade] || '') : '',
+          statusVtr: idx.status !== undefined ? String(l[idx.status] || '') : '',
+          uso: idx.uso !== undefined ? String(l[idx.uso] || '') : '',
+          propriedade: _valorEntreColunas_(l, [idx.prop, 65]),
+          anoEx: idx.anoEx !== undefined ? String(l[idx.anoEx] || '').replace(/\D/g, '') : '',
+          vencLic: idx.vencLic !== undefined ? _dataBR_(l[idx.vencLic]) : '',
+          statusLic: idx.statusLic !== undefined ? String(l[idx.statusLic] || '') : '',
+          abastRecente: idx.abast2m !== undefined ? String(l[idx.abast2m] || '').trim() : '',
+          descricao: texto ? texto.replace(/\s+/g, ' ').substring(0, 160) : (qtd + ' multa(s) registrada(s)'),
+          infracao: '', vencimento: '',
+          valor: idx.valorMultas !== undefined ? (_num_(l[idx.valorMultas]) || 0) : 0,
+          aPagar: idx.valorMultas !== undefined ? (_num_(l[idx.valorMultas]) || 0) : 0,
+          consultaEm: m.consultaEm || '', semDetalhe: true, registrada: false,
+          status: '', tipo: '', orgao: '', enquadramento: '', processo: '', protocolo: '', dataDefesa: '', linhaMulta: 0
+        });
+        return;
+      }
       m.itens.forEach(item => {
         const chave = String(item.ait || '').replace(/\D/g, '');
         const reg = registro[chave] || null;
@@ -6603,7 +6629,8 @@ function lerMultasEmCobranca(token) {
     return { ok: true, itens: lista,
       consultaEm: lista.length ? lista[0].consultaEm : '',
       totalAPagar: Math.round(lista.reduce((t, x) => t + (x.aPagar || 0), 0) * 100) / 100,
-      semRegistro: lista.filter(x => !x.registrada).length };
+      semRegistro: lista.filter(x => !x.registrada).length,
+      semDetalhe: semDetalhe };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 

@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.64.4';
+const VERSAO_PAINEL = '2.64.5';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -5497,7 +5497,9 @@ function renderMultasCobranca(c) {
           ${todos.slice(0, 400).map(x => {
             const v = viaturaDaMulta(x.placa);
             return `<tr class="${x.registrada ? '' : 'cobrada'}">
-              <td><b style="font-family:var(--fonte-dados)">${esc(x.ai || '—')}</b>
+              <td>${x.semDetalhe
+                ? '<span class="status-chip andamento">sem nº de AI</span>'
+                : `<b style="font-family:var(--fonte-dados)">${esc(x.ai || '—')}</b>`}
                 ${x.consultaEm ? `<div class="vinculo">consulta ${esc(x.consultaEm)}</div>` : ''}</td>
               <td>${v ? `<a class="link-btn" style="font-family:var(--fonte-dados); font-weight:700" onclick="abrirFicha('${escAttr(v.placa)}')">${esc(x.placa)}</a>` : esc(x.placa)}</td>
               <td>${esc(v ? (v.modeloCurto || v.modelo) : x.modelo)}</td>
@@ -5526,7 +5528,8 @@ function renderMultasCobranca(c) {
           </tbody>
         </table>
       </div>
-      <div class="cartao-dica">A lista vem das multas registradas na consulta de cada viatura (ConsultaBD). Linhas em amarelo ainda não têm processo aberto na planilha de acompanhamento — são as que exigem providência.</div>
+      <div class="cartao-dica">A lista vem das multas registradas na consulta de cada viatura (ConsultaBD). Linhas em amarelo ainda não têm processo aberto na planilha de acompanhamento — são as que exigem providência.${
+        dados.semDetalhe ? ` <b>${dados.semDetalhe} viatura(s)</b> aparecem como "sem nº de AI": a consulta registrou multa mas o texto não traz os autos separados, então o detalhamento vem do que foi consultado.` : ''}</div>
     </div>`;
 
   c.querySelectorAll('.kpi[data-fcreg]').forEach(k => k.addEventListener('click', () => {
