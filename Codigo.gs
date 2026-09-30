@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.64.7';
+const CODIGO_VERSAO = '2.64.8';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6531,6 +6531,11 @@ function _valorEntreColunas_(linha, candidatas) {
 }
 
 
+/** Chave de comparação de um AI: alfanumérica, sem espaços nem pontuação. */
+function _chaveAi_(v) {
+  return String(v === null || v === undefined ? '' : v).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+}
+
 /**
  * Mostra o texto de multas de uma viatura como ele está na ConsultaBD e o que
  * o painel conseguiu extrair. É com isso que o leitor deve ser ajustado.
@@ -6586,7 +6591,7 @@ function lerMultasEmCobranca(token) {
         const nCol = Math.max(abaM.getLastColumn(), MULTAS.colLancamento);
         abaM.getRange(MULTAS.primeiraLinha, 1, abaM.getLastRow() - MULTAS.primeiraLinha + 1, nCol)
           .getDisplayValues().forEach((l, i) => {
-            const ai = String(l[MULTAS.col.ai - 1] || '').replace(/\D/g, '');
+            const ai = _chaveAi_(l[MULTAS.col.ai - 1]);
             if (!ai) return;
             registro[ai] = { linha: MULTAS.primeiraLinha + i,
               status: String(l[MULTAS.col.status - 1] || '').trim(),
@@ -6634,8 +6639,7 @@ function lerMultasEmCobranca(token) {
         return;
       }
       m.itens.forEach(item => {
-        const chave = String(item.ait || '').replace(/\D/g, '');
-        const reg = registro[chave] || null;
+        const reg = registro[_chaveAi_(item.ait)] || null;
         lista.push({
           ai: String(item.ait || '').trim(), placa: placa,
           modelo: idx.modelo !== undefined ? String(l[idx.modelo] || '') : '',

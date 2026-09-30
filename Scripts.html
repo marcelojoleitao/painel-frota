@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.64.7';
+const VERSAO_PAINEL = '2.64.8';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -5418,7 +5418,7 @@ function renderMultasCobranca(c) {
       if (alvo.indexOf(f.busca.toLowerCase()) < 0) return false;
     }
     return true;
-  }).sort((a, b) => (b.aPagar || 0) - (a.aPagar || 0));
+  }).sort((a, b) => a.placa.localeCompare(b.placa) || (b.aPagar || 0) - (a.aPagar || 0));
 
   const soma = arr => arr.reduce((t, x) => t + (x.aPagar || 0), 0);
   const semRegistro = dados.itens.filter(x => !x.registrada);
@@ -5494,7 +5494,7 @@ function renderMultasCobranca(c) {
           <thead><tr><th>AI</th><th>Placa</th><th>Viatura</th><th>Unidade</th><th>Status da VTR</th>
             <th>Propriedade</th><th>Infração</th><th>Vencimento</th><th style="text-align:right">A pagar</th><th>Acompanhamento</th></tr></thead>
           <tbody>
-          ${todos.slice(0, 400).map(x => {
+          ${todos.slice(0, 1500).map(x => {
             const v = viaturaDaMulta(x.placa);
             return `<tr class="${x.registrada ? '' : 'cobrada'}">
               <td>${x.semDetalhe
@@ -5528,6 +5528,7 @@ function renderMultasCobranca(c) {
           </tbody>
         </table>
       </div>
+      ${todos.length > 1500 ? `<div class="cartao-dica" style="border-left:3px solid var(--ambar)">Exibindo 1.500 de ${fmtInt(todos.length)} autos. Use a busca ou os filtros para reduzir a lista.</div>` : ''}
       <div class="cartao-dica">A lista vem das multas registradas na consulta de cada viatura (ConsultaBD). Linhas em amarelo ainda não têm processo aberto na planilha de acompanhamento — são as que exigem providência.${
         dados.semDetalhe ? ` <b>${dados.semDetalhe} viatura(s)</b> aparecem como "sem nº de AI": a consulta registrou multa mas o texto não traz os autos separados, então o detalhamento vem do que foi consultado.` : ''}</div>
     </div>`;
