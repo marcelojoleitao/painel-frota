@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.68.1';
+const CODIGO_VERSAO = '2.69.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6530,6 +6530,141 @@ function lerPreventiva(token, forcar) {
       totalRegras: base.padrao.length, totalExcecoes: base.excecoes.length };
     _cacheGravar_(chave, saida, CONFIG.CACHE_SEG || 3600);
     return saida;
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+
+/**
+ * Cenário real: com que quilometragem e em quanto tempo a frota vem de fato
+ * trocando cada item, por categoria de veículo. Serve para comparar com o
+ * intervalo que definimos — se a prática difere muito, ou o parâmetro está
+ * errado, ou há algo acontecendo com as viaturas.
+ */
+function analisarPreventivaReal(token, forcar) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const base = lerBasePreventiva(token);
+    if (!base.ok) return base;
+    const chave = 'painel_prev_real_' + _assinaturaPreventiva_(base.padrao, base.excecoes);
+    if (!forcar) { const g = _cacheLer_(chave); if (g) { g.doCache = true; return g; } }
+
+    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    const odometros = _odometrosPorPlaca_(ss);
+
+    // categoria de cada placa
+    const aba = ss.getSheetByName(CONFIG.ABA_BASE);
+    const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0].map(c => String(c || '').trim());
+    const idx = _mapearCampos_(cab);
+    const categoria = {}, dadosVtr = {};
+    aba.getRange(2, 1, aba.getLastRow() - 1, aba.getLastColumn()).getValues().forEach(l => {
+      const placa = String(l[idx.placa] || '').trim().toUpperCase();
+      if (!placa) return;
+      const v = { tipo: idx.tipo !== undefined ? l[idx.tipo] : '', especie: idx.especie !== undefined ? l[idx.especie] : '',
+        modelo: idx.modelo !== undefined ? l[idx.modelo] : '', comb: idx.comb !== undefined ? l[idx.comb] : '' };
+      categoria[placa] = _categoriaPreventiva_(v);
+      dadosVtr[placa] = { modelo: String(v.modelo || ''), unidade: idx.unidade !== undefined ? String(l[idx.unidade] || '') : '' };
+    });
+
+    // todas as execuções de cada item (não só a última)
+    const execucoes = [];
+    const registrar = (placa, data, odo, texto) => {
+      if (!placa || !texto) return;
+      const alvo = _normCab_(texto);
+      base.padrao.forEach(regra => {
+        if (!regra.chaves || regra.tipo === 'Inspeção') return;
+        const casa = regra.chaves.split('|').some(k => k.trim() && alvo.indexOf(_normCab_(k)) >= 0);
+        if (casa) execucoes.push({ placa: placa, item: regra.item, grupo: regra.grupo, data: data || '', odo: odo || 0 });
+      });
+    };
+    const varrer = (valores, cabIdx) => {
+      const nomes = valores[cabIdx].map(c => _normCab_(c));
+      const iPlaca = nomes.findIndex(c => /^PLACA/.test(c));
+      if (iPlaca < 0) return;
+      const iData = nomes.findIndex(c => /^DATA/.test(c));
+      const iOdo = nomes.findIndex(c => /HODOMETRO|ODOMETRO|^KM$/.test(c));
+      const textuais = [];
+      nomes.forEach((n, i) => { if (/DESCRI|SERVIC|ITEM|PECA|PRODUTO|MANUTENCAO/.test(n)) textuais.push(i); });
+      for (let r = cabIdx + 1; r < valores.length; r++) {
+        const placa = String(valores[r][iPlaca] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+        if (!placa) continue;
+        const data = iData >= 0 ? _diaISO_(valores[r][iData]) : '';
+        const odo = iOdo >= 0 ? (_num_(valores[r][iOdo]) || 0) : 0;
+        textuais.forEach(i => registrar(placa, data, odo, valores[r][i]));
+      }
+    };
+    const acharCab = valores => { for (let i = 0; i < Math.min(8, valores.length); i++) if (valores[i].some(c => /^PLACA/.test(_normCab_(c)))) return i; return 0; };
+    try { const a = _ssManut_().getSheetByName(CONFIG.ABA_DETALHAMENTO); if (a && a.getLastRow() > 1) { const v = a.getDataRange().getValues(); varrer(v, acharCab(v)); } } catch (e) {}
+    try { const a = ss.getSheetByName(CONFIG.ABA_MANUT); if (a && a.getLastRow() > 1) { const v = a.getDataRange().getValues(); varrer(v, acharCab(v)); } } catch (e) {}
+
+    // intervalos observados: diferença entre execuções consecutivas do mesmo item
+    const porChave = {};
+    execucoes.forEach(e => {
+      const k = e.placa + '|' + e.item;
+      (porChave[k] = porChave[k] || []).push(e);
+    });
+    const amostras = {};   // categoria|item → { km: [], dias: [] }
+    Object.keys(porChave).forEach(k => {
+      const lista = porChave[k].filter(x => x.data).sort((a, b) => a.data.localeCompare(b.data));
+      const placa = lista.length ? lista[0].placa : '';
+      const cat = categoria[placa] || 'Automóvel';
+      const item = lista.length ? lista[0].item : '';
+      const chaveCat = cat + '|' + item;
+      const a = amostras[chaveCat] || (amostras[chaveCat] = { km: [], dias: [], placas: {}, grupo: lista.length ? lista[0].grupo : '' });
+      a.placas[placa] = true;
+      for (let i = 1; i < lista.length; i++) {
+        const ant = lista[i - 1], atual = lista[i];
+        const dias = Math.round((new Date(atual.data) - new Date(ant.data)) / 86400000);
+        if (dias > 20 && dias < 2000) a.dias.push(dias);        // ignora lançamentos do mesmo serviço
+        if (ant.odo > 0 && atual.odo > ant.odo) {
+          const km = atual.odo - ant.odo;
+          if (km > 300 && km < 200000) a.km.push(km);
+        }
+      }
+    });
+
+    const mediana = arr => { if (!arr.length) return 0; const o = arr.slice().sort((x, y) => x - y); return o[Math.floor(o.length / 2)]; };
+    const media = arr => arr.length ? Math.round(arr.reduce((s, x) => s + x, 0) / arr.length) : 0;
+
+    const comparativo = [];
+    base.padrao.filter(r => r.tipo !== 'Inspeção').forEach(regra => {
+      const a = amostras[regra.categoria + '|' + regra.item];
+      if (!a || (!a.km.length && !a.dias.length)) return;
+      const kmReal = mediana(a.km), diasReal = mediana(a.dias);
+      const desvioKm = regra.km && kmReal ? Math.round((kmReal / regra.km - 1) * 100) : null;
+      const desvioTempo = regra.meses && diasReal ? Math.round((diasReal / (regra.meses * 30) - 1) * 100) : null;
+      comparativo.push({ categoria: regra.categoria, grupo: regra.grupo, item: regra.item, critico: regra.critico,
+        previstoKm: regra.km, previstoMeses: regra.meses,
+        realKm: kmReal, realKmMedia: media(a.km), realDias: diasReal, realMeses: diasReal ? Math.round(diasReal / 30 * 10) / 10 : 0,
+        amostrasKm: a.km.length, amostrasTempo: a.dias.length, viaturas: Object.keys(a.placas).length,
+        desvioKm: desvioKm, desvioTempo: desvioTempo });
+    });
+    comparativo.sort((a, b) => Math.abs(b.desvioKm === null ? 0 : b.desvioKm) - Math.abs(a.desvioKm === null ? 0 : a.desvioKm));
+
+    const saida = { ok: true, comparativo: comparativo, execucoes: execucoes.length,
+      geradoEm: Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm') };
+    _cacheGravar_(chave, saida, CONFIG.CACHE_SEG || 3600);
+    return saida;
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Resumo da preventiva de uma viatura, para a ficha. */
+function preventivaDaViatura(token, placa) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const tudo = lerPreventiva(token, false);
+    if (!tudo.ok) return tudo;
+    const alvo = String(placa || '').trim().toUpperCase();
+    const itens = tudo.itens.filter(x => x.placa === alvo)
+      .sort((a, b) => {
+        const pa = a.vencido ? 0 : a.semHistorico ? 2 : 1, pb = b.vencido ? 0 : b.semHistorico ? 2 : 1;
+        if (pa !== pb) return pa - pb;
+        return (a.diasAteVencer === null ? 9999 : a.diasAteVencer) - (b.diasAteVencer === null ? 9999 : b.diasAteVencer);
+      });
+    return { ok: true, itens: itens,
+      vencidos: itens.filter(x => x.vencido).length,
+      proximos: itens.filter(x => !x.vencido && x.diasAteVencer !== null && x.diasAteVencer <= 30).length,
+      criticos: itens.filter(x => x.critico && (x.vencido || x.semHistorico)).length,
+      odometro: itens.length ? itens[0].odometro : 0, kmMes: itens.length ? itens[0].kmMes : 0 };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 
