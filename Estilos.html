@@ -279,6 +279,32 @@ table.tabela td.acoes { text-align: right; }
 .icone-doc svg { width: 15px; height: 15px; }
 .icone-doc.inativo { opacity: .28; pointer-events: none; }
 /* demandas: mesma caixa dos outros ícones, com a contagem no lugar do desenho */
+.icone-doc.preventiva-icone { background: #FFF6E5; border-color: var(--ambar); font-size: 13px; }
+.icone-doc.preventiva-icone.grave { background: #FDECEA; border-color: var(--vermelho); }
+.icone-doc.preventiva-icone:hover { background: var(--ambar); }
+
+/* preventiva: lista por viatura */
+.prev-lista { display: flex; flex-direction: column; gap: 8px; max-height: 620px; overflow: auto; padding: 2px; }
+.prev-vtr { border: 1px solid var(--borda); border-radius: var(--raio-p); background: #fff; overflow: hidden; }
+.prev-vtr.alerta { border-left: 3px solid var(--ambar); }
+.prev-vtr.grave { border-left: 3px solid var(--vermelho); }
+.prev-cab { display: grid; grid-template-columns: 90px 1.6fr 1fr 1.4fr 24px; align-items: center; gap: 10px;
+  width: 100%; border: 0; background: none; padding: 9px 12px; cursor: pointer; text-align: left; font-family: inherit; }
+.prev-cab:hover { background: #F6F8FC; }
+.prev-placa { font-family: var(--fonte-dados); font-weight: 800; color: var(--azul); }
+.prev-modelo { font-size: 12.5px; }
+.prev-modelo small, .prev-odo small { display: block; font-size: 10.5px; color: var(--tinta-suave); }
+.prev-odo { font-size: 12px; font-family: var(--fonte-dados); }
+.prev-marcas { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.prev-marcas .prazo { font-size: 10.5px; padding: 2px 6px; }
+.prev-seta { color: var(--tinta-suave); text-align: right; }
+.prev-itens { padding: 0 12px 12px; border-top: 1px solid var(--borda); background: #FAFBFD; }
+.alternador { display: inline-flex; border: 1px solid var(--borda); border-radius: var(--raio-p); overflow: hidden; }
+.alternador button { border: 0; background: #fff; padding: 6px 12px; cursor: pointer; font-size: 12.5px;
+  font-family: inherit; color: var(--tinta-suave); border-right: 1px solid var(--borda); }
+.alternador button:last-child { border-right: 0; }
+.alternador button.ativo { background: var(--azul); color: #fff; font-weight: 700; }
+
 .icone-doc.demanda-icone { font-size: 12px; font-weight: 800; font-family: var(--fonte-dados);
   background: #E8EEFA; border-color: var(--azul-claro); color: var(--azul); }
 .icone-doc.demanda-icone:hover { background: var(--azul); color: #fff; border-color: var(--azul); }
