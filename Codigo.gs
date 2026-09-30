@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.64.6';
+const CODIGO_VERSAO = '2.64.7';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6528,6 +6528,38 @@ function _valorEntreColunas_(linha, candidatas) {
     if (v) return v;
   }
   return '';
+}
+
+
+/**
+ * Mostra o texto de multas de uma viatura como ele está na ConsultaBD e o que
+ * o painel conseguiu extrair. É com isso que o leitor deve ser ajustado.
+ *     verTextoMultas('POC3545')
+ */
+function verTextoMultas(placa) {
+  placa = String(placa || '').trim().toUpperCase();
+  const aba = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_BASE);
+  const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0].map(c => String(c || '').trim());
+  const idx = _mapearCampos_(cab);
+  if (idx.multasTxt === undefined) { Logger.log('Coluna de multas não encontrada.'); return; }
+  const n = aba.getLastRow() - 1;
+  const placas = aba.getRange(2, idx.placa + 1, n, 1).getValues().map(l => String(l[0] || '').trim().toUpperCase());
+
+  const alvos = placa ? [placas.indexOf(placa)] : placas.map((p, i) => i).slice(0, 5);
+  if (placa && alvos[0] < 0) { Logger.log('Placa não encontrada.'); return; }
+
+  alvos.forEach(i => {
+    if (i < 0) return;
+    const texto = String(aba.getRange(i + 2, idx.multasTxt + 1).getValue() || '');
+    Logger.log('=== ' + placas[i] + ' ===');
+    Logger.log('Texto na coluna de multas (' + texto.length + ' caracteres):');
+    texto.split(/\r?\n/).forEach((l, k) => Logger.log('  ' + (k + 1) + ': ' + l));
+    const m = _parseMultas_(texto);
+    Logger.log('O painel extraiu: ' + m.itens.length + ' auto(s) | qtd ' + m.qtd + ' | total ' + _moedaBR_(m.total || 0) +
+      (m.consultaEm ? ' | consulta ' + m.consultaEm : ''));
+    m.itens.forEach(it => Logger.log('   AI ' + it.ait + ' | ' + (it.descricao || '') + ' | ' + _moedaBR_(it.aPagar || it.valor || 0)));
+  });
+  return 'ok';
 }
 
 /**
