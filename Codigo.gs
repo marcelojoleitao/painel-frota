@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.64.5';
+const CODIGO_VERSAO = '2.64.6';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6572,10 +6572,11 @@ function lerMultasEmCobranca(token) {
     let semDetalhe = 0;
     valores.forEach(l => {
       const texto = String(l[idx.multasTxt] || '');
-      const qtd = idx.qtdMultas !== undefined ? (_num_(l[idx.qtdMultas]) || 0) : 0;
-      if (!texto && !qtd) return;
+      if (!texto.trim()) return;
       const placa = String(l[idx.placa] || '').trim().toUpperCase();
       const m = _parseMultas_(texto);
+      // texto que só diz "sem multas" não é pendência
+      if (!m.itens.length && !m.qtd && /SEM MULTA|NADA CONSTA|NENHUMA/i.test(_normCab_(texto))) return;
       // viatura com multa cuja descrição não pôde ser decomposta em autos:
       // entra assim mesmo, para não sumir da tela
       if (!m.itens.length) {
@@ -6591,10 +6592,10 @@ function lerMultasEmCobranca(token) {
           vencLic: idx.vencLic !== undefined ? _dataBR_(l[idx.vencLic]) : '',
           statusLic: idx.statusLic !== undefined ? String(l[idx.statusLic] || '') : '',
           abastRecente: idx.abast2m !== undefined ? String(l[idx.abast2m] || '').trim() : '',
-          descricao: texto ? texto.replace(/\s+/g, ' ').substring(0, 160) : (qtd + ' multa(s) registrada(s)'),
-          infracao: '', vencimento: '',
-          valor: idx.valorMultas !== undefined ? (_num_(l[idx.valorMultas]) || 0) : 0,
-          aPagar: idx.valorMultas !== undefined ? (_num_(l[idx.valorMultas]) || 0) : 0,
+          descricao: texto.replace(/\s+/g, ' ').substring(0, 160),
+          infracao: m.qtd ? m.qtd + ' auto(s) na consulta' : '',
+          vencimento: '',
+          valor: m.total || 0, aPagar: m.total || 0,
           consultaEm: m.consultaEm || '', semDetalhe: true, registrada: false,
           status: '', tipo: '', orgao: '', enquadramento: '', processo: '', protocolo: '', dataDefesa: '', linhaMulta: 0
         });
