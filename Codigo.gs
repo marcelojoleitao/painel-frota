@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.70.0';
+const CODIGO_VERSAO = '2.70.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6187,6 +6187,11 @@ function criarBasePreventiva() {
 /** Lê a base de referência, já pronta para a tela. */
 function lerBasePreventiva(token) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  return _basePreventiva_();
+}
+
+/** Mesma leitura, sem exigir sessão: usada pelo cálculo e pelo diagnóstico. */
+function _basePreventiva_() {
   try {
     const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
     const aba = ss.getSheetByName(PREVENTIVA.abaPadrao);
@@ -6329,6 +6334,21 @@ function _odometrosPorPlaca_(ss) {
   return mapa;
 }
 
+/** Aba de detalhamento de itens das OS, procurada por nome aproximado. */
+function _abaDetalhamento_() {
+  const procurar = ss => {
+    if (!ss) return null;
+    const exata = ss.getSheetByName(CONFIG.ABA_DETALHAMENTO);
+    if (exata) return exata;
+    const achada = ss.getSheets().find(a => /DETALHAMENTO/.test(_normCab_(a.getName())));
+    return achada || null;
+  };
+  let aba = null;
+  try { aba = procurar(_ssManut_()); } catch (e) {}
+  if (!aba) { try { aba = procurar(SpreadsheetApp.openById(CONFIG.ID_BASE)); } catch (e) {} }
+  return aba;
+}
+
 /**
  * Última execução de cada item. Em vez de depender de uma coluna específica,
  * varre todas as colunas de texto que descrevem serviço, peça ou item — os
@@ -6366,7 +6386,7 @@ function _servicosPorPlaca_(ss, padrao, diag) {
     // qualquer coluna cujo nome sugira descrição de serviço, peça ou item
     const textuais = [];
     nomes.forEach((n, i) => {
-      if (/DESCRI|SERVIC|ITEM|PECA|PRODUTO|MANUTENCAO|OBSERVA|INFORMACAO/.test(n)) textuais.push(i);
+      if (/DESCRI|SERVIC|ITEM|PECA|PECAS|PRODUTO|MANUTENCAO|OBSERVA|INFORMACAO/.test(n)) textuais.push(i);
     });
     if (!textuais.length) { relatorio.fontes.push(fonte + ': nenhuma coluna de descrição'); return; }
     relatorio.fontes.push(fonte + ': ' + (valores.length - cabIdx - 1) + ' linha(s), descrição em ' +
@@ -6387,14 +6407,14 @@ function _servicosPorPlaca_(ss, padrao, diag) {
     return 0;
   };
 
-  // DetalhamentoDB: item a item das OS
+  // DetalhamentoDB: item a item das OS (o nome da aba varia entre planilhas)
   try {
-    const aba = _ssManut_().getSheetByName(CONFIG.ABA_DETALHAMENTO);
+    const aba = _abaDetalhamento_();
     if (aba && aba.getLastRow() > 1) {
       const valores = aba.getDataRange().getValues();
-      varrer(valores, acharCabecalho(valores), 'DetalhamentoDB');
-    } else relatorio.fontes.push('DetalhamentoDB: aba não encontrada ou vazia');
-  } catch (e) { relatorio.fontes.push('DetalhamentoDB: ' + String(e).substring(0, 80)); }
+      varrer(valores, acharCabecalho(valores), 'Detalhamento (' + aba.getName() + ')');
+    } else relatorio.fontes.push('Detalhamento: aba não encontrada ou vazia');
+  } catch (e) { relatorio.fontes.push('Detalhamento: ' + String(e).substring(0, 80)); }
 
   // ManutBD: transações de manutenção
   try {
@@ -6411,9 +6431,12 @@ function _servicosPorPlaca_(ss, padrao, diag) {
 /** Mostra no log por que a preventiva encontrou (ou não) os serviços. */
 function diagnosticarPreventiva() {
   const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
-  const base = lerBasePreventiva('');
+  const base = _basePreventiva_();
   const padrao = base.ok ? base.padrao : [];
-  Logger.log('Regras carregadas: ' + padrao.length);
+  Logger.log('Regras carregadas: ' + padrao.length + (base.ok ? '' : ' — ' + base.erro));
+  if (padrao.length) {
+    Logger.log('   exemplo de regra: ' + padrao[0].categoria + ' / ' + padrao[0].item + ' / chaves: ' + padrao[0].chaves);
+  }
   const diag = { fontes: [], casamentos: {} };
   const servicos = _servicosPorPlaca_(ss, padrao, diag);
   Logger.log('--- fontes lidas ---');
@@ -6441,7 +6464,7 @@ function diagnosticarPreventiva() {
 function lerPreventiva(token, forcar) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
   try {
-    const base = lerBasePreventiva(token);
+    const base = _basePreventiva_();
     if (!base.ok) return base;
     const assinatura = _assinaturaPreventiva_(base.padrao, base.excecoes);
     const chave = 'painel_preventiva_' + assinatura;      // a regra faz parte da chave
@@ -6543,7 +6566,7 @@ function lerPreventiva(token, forcar) {
 function analisarPreventivaReal(token, forcar) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
   try {
-    const base = lerBasePreventiva(token);
+    const base = _basePreventiva_();
     if (!base.ok) return base;
     const chave = 'painel_prev_real_' + _assinaturaPreventiva_(base.padrao, base.excecoes);
     if (!forcar) { const g = _cacheLer_(chave); if (g) { g.doCache = true; return g; } }
@@ -6583,7 +6606,7 @@ function analisarPreventivaReal(token, forcar) {
       const iData = nomes.findIndex(c => /^DATA/.test(c));
       const iOdo = nomes.findIndex(c => /HODOMETRO|ODOMETRO|^KM$/.test(c));
       const textuais = [];
-      nomes.forEach((n, i) => { if (/DESCRI|SERVIC|ITEM|PECA|PRODUTO|MANUTENCAO/.test(n)) textuais.push(i); });
+      nomes.forEach((n, i) => { if (/DESCRI|SERVIC|ITEM|PECA|PECAS|PRODUTO|MANUTENCAO/.test(n)) textuais.push(i); });
       for (let r = cabIdx + 1; r < valores.length; r++) {
         const placa = String(valores[r][iPlaca] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
         if (!placa) continue;
@@ -6593,7 +6616,7 @@ function analisarPreventivaReal(token, forcar) {
       }
     };
     const acharCab = valores => { for (let i = 0; i < Math.min(8, valores.length); i++) if (valores[i].some(c => /^PLACA/.test(_normCab_(c)))) return i; return 0; };
-    try { const a = _ssManut_().getSheetByName(CONFIG.ABA_DETALHAMENTO); if (a && a.getLastRow() > 1) { const v = a.getDataRange().getValues(); varrer(v, acharCab(v)); } } catch (e) {}
+    try { const a = _abaDetalhamento_(); if (a && a.getLastRow() > 1) { const v = a.getDataRange().getValues(); varrer(v, acharCab(v)); } } catch (e) {}
     try { const a = ss.getSheetByName(CONFIG.ABA_MANUT); if (a && a.getLastRow() > 1) { const v = a.getDataRange().getValues(); varrer(v, acharCab(v)); } } catch (e) {}
 
     // intervalos observados: diferença entre execuções consecutivas do mesmo item
