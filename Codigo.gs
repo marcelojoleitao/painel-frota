@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.70.1';
+const CODIGO_VERSAO = '2.70.2';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6369,9 +6369,10 @@ function _servicosPorPlaca_(ss, padrao, diag) {
       relatorio.casamentos[regra.item] = (relatorio.casamentos[regra.item] || 0) + 1;
       const chave = placa + '|' + regra.item;
       const atual = mapa[chave];
-      if (!atual || (data || '') > (atual.data || '')) {
-        mapa[chave] = { data: data || '', odo: odo || 0, texto: String(texto).substring(0, 120), fonte: fonte };
-      }
+      // prefere sempre o registro com data; entre dois com data, o mais recente
+      const melhor = !atual || (data && !atual.data) || (data && atual.data && data > atual.data) ||
+                     (!data && !atual.data && (odo || 0) > (atual.odo || 0));
+      if (melhor) mapa[chave] = { data: data || '', odo: odo || 0, texto: String(texto).substring(0, 120), fonte: fonte };
     });
   };
 
@@ -6381,16 +6382,19 @@ function _servicosPorPlaca_(ss, padrao, diag) {
     const nomes = valores[cabIdx].map(c => _normCab_(c));
     const iPlaca = nomes.findIndex(c => /^PLACA/.test(c));
     if (iPlaca < 0) { relatorio.fontes.push(fonte + ': sem coluna de placa'); return; }
-    const iData = nomes.findIndex(c => /^DATA/.test(c));
-    const iOdo = nomes.findIndex(c => /HODOMETRO|ODOMETRO|^KM$/.test(c));
+    // a data pode se chamar DATA TRANSACAO, Conclusão do Serviço, Emissão...
+    const iData = nomes.findIndex(c => /^DATA|CONCLUSAO|EMISSAO|^DT /.test(c));
+    const iOdo = nomes.findIndex(c => /HODOMETRO|ODOMETRO|\bKM\b|QUILOMETR/.test(c));
     // qualquer coluna cujo nome sugira descrição de serviço, peça ou item
     const textuais = [];
     nomes.forEach((n, i) => {
       if (/DESCRI|SERVIC|ITEM|PECA|PECAS|PRODUTO|MANUTENCAO|OBSERVA|INFORMACAO/.test(n)) textuais.push(i);
     });
     if (!textuais.length) { relatorio.fontes.push(fonte + ': nenhuma coluna de descrição'); return; }
-    relatorio.fontes.push(fonte + ': ' + (valores.length - cabIdx - 1) + ' linha(s), descrição em ' +
-      textuais.map(i => valores[cabIdx][i]).join(' | '));
+    relatorio.fontes.push(fonte + ': ' + (valores.length - cabIdx - 1) + ' linha(s)' +
+      ' | data: ' + (iData >= 0 ? valores[cabIdx][iData] : 'NÃO ACHOU') +
+      ' | hodômetro: ' + (iOdo >= 0 ? valores[cabIdx][iOdo] : 'não há') +
+      ' | descrição: ' + textuais.map(i => valores[cabIdx][i]).join(', '));
     for (let r = cabIdx + 1; r < valores.length; r++) {
       const placa = String(valores[r][iPlaca] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
       if (!placa) continue;
@@ -6603,8 +6607,8 @@ function analisarPreventivaReal(token, forcar) {
       const nomes = valores[cabIdx].map(c => _normCab_(c));
       const iPlaca = nomes.findIndex(c => /^PLACA/.test(c));
       if (iPlaca < 0) return;
-      const iData = nomes.findIndex(c => /^DATA/.test(c));
-      const iOdo = nomes.findIndex(c => /HODOMETRO|ODOMETRO|^KM$/.test(c));
+      const iData = nomes.findIndex(c => /^DATA|CONCLUSAO|EMISSAO|^DT /.test(c));
+      const iOdo = nomes.findIndex(c => /HODOMETRO|ODOMETRO|\bKM\b|QUILOMETR/.test(c));
       const textuais = [];
       nomes.forEach((n, i) => { if (/DESCRI|SERVIC|ITEM|PECA|PECAS|PRODUTO|MANUTENCAO/.test(n)) textuais.push(i); });
       for (let r = cabIdx + 1; r < valores.length; r++) {
