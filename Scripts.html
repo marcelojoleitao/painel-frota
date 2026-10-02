@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.73.1';
+const VERSAO_PAINEL = '2.74.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -5730,7 +5730,7 @@ function renderPreventiva(c) {
                 ${x.comExcecao ? `<div class="vinculo" title="${escAttr(x.motivoExcecao)}" style="color:var(--azul)">exceção</div>` : ''}</td>
               <td class="data-curta">${x.ultimaData ? esc(x.ultimaData) : '—'}
                 ${x.ultimoOdo ? `<div class="vinculo">${x.odoEstimado ? '≈ ' : ''}${fmtInt(x.ultimoOdo)} km</div>` : ''}
-                ${x.ultimaOs ? `<div class="vinculo">OS ${esc(x.ultimaOs)}</div>` : ''}</td>
+                ${x.ultimaOs ? `<div class="vinculo"><button class="link-btn" onclick="abrirDetalheOS('${escAttr(x.ultimaOs)}')">OS ${esc(x.ultimaOs)}</button></div>` : ''}</td>
               <td class="data-curta">${x.kmDesde !== null ? fmtInt(x.kmDesde) + ' km' : ''}${x.kmDesde !== null && x.diasDesde !== null ? '<br>' : ''}${x.diasDesde !== null ? x.diasDesde + ' dias' : ''}</td>
               <td><span class="prazo ${classe}">${esc(texto)}</span>
                 ${x.previsao && !x.vencido ? `<div class="vinculo">previsto ${esc(x.previsao)}</div>` : ''}</td>
@@ -5856,7 +5856,7 @@ function tabelaPrevPorViatura(itens) {
               <td>${x.intervaloKm ? fmtInt(x.intervaloKm) + ' km' : ''}${x.intervaloKm && x.intervaloMeses ? ' / ' : ''}${x.intervaloMeses ? x.intervaloMeses + ' m' : ''}${x.comExcecao ? ' <b style="color:var(--azul)">*</b>' : ''}</td>
               <td>${x.ultimaData || '—'}
                 ${x.ultimoOdo ? `<div class="vinculo">${x.odoEstimado ? '≈ ' : ''}${fmtInt(x.ultimoOdo)} km${x.odoEstimado ? ' estimado' : ''}</div>` : '<div class="vinculo">km não registrado</div>'}
-                ${x.ultimaOs ? `<div class="vinculo">OS ${esc(x.ultimaOs)} ${pdfLinkHtml(x.ultimaOs)}</div>` : ''}
+                ${x.ultimaOs ? `<div class="vinculo"><button class="link-btn" onclick="abrirDetalheOS('${escAttr(x.ultimaOs)}')">OS ${esc(x.ultimaOs)}</button> ${pdfLinkHtml(x.ultimaOs)}</div>` : ''}
                 ${x.ultimoTexto ? `<div class="vinculo" title="${escAttr((x.ultimaFonte || '') + (x.ultimaColuna ? ' • coluna ' + x.ultimaColuna : ''))}" style="font-style:italic">${esc(x.ultimoTexto.substring(0, 60))}</div>` : ''}</td>
               <td>${x.kmDesde !== null ? fmtInt(x.kmDesde) + ' km' : ''}${x.diasDesde !== null ? `<div class="vinculo">${x.diasDesde} dias</div>` : ''}</td>
               <td><span class="prazo ${classe}">${esc(texto)}</span>${x.previsao && !x.vencido ? `<div class="vinculo">previsto ${esc(x.previsao)}</div>` : ''}</td></tr>`;
@@ -5960,7 +5960,7 @@ function carregarPreventivaFicha(placa) {
             : x.semHistorico ? 'sem registro' : x.diasAteVencer !== null && x.diasAteVencer <= 30 ? 'vence em ' + x.diasAteVencer + ' dia(s)' : 'em dia';
           return `<tr><td>${esc(x.item)}${x.critico ? ' <span class="dem-tag prio urgente" style="font-size:9px">crítico</span>' : ''}</td>
             <td style="width:190px">${x.ultimaData ? esc(x.ultimaData) + (x.ultimoOdo ? ' • ' + (x.odoEstimado ? '≈' : '') + fmtInt(x.ultimoOdo) + ' km' : '') : 'sem registro'}
-              ${x.ultimaOs ? `<div class="vinculo">OS ${esc(x.ultimaOs)}</div>` : ''}</td>
+              ${x.ultimaOs ? `<div class="vinculo"><button class="link-btn" onclick="abrirDetalheOS('${escAttr(x.ultimaOs)}')">OS ${esc(x.ultimaOs)}</button></div>` : ''}</td>
             <td style="width:150px"><span class="prazo ${classe}">${esc(texto)}</span></td></tr>`;
         }).join('')}
       </tbody></table>
@@ -5984,6 +5984,47 @@ function dataDoArquivo(link) {
   const id = m ? (m[1] || m[2]) : '';
   if (!id) return '';
   return (ESTADO.dados.datasFotos || {})[id] || '';
+}
+
+
+/** Abre os itens registrados numa OS, numa janela sobre a tela atual. */
+function abrirDetalheOS(os) {
+  const caixa = el('modal-os') || (() => {
+    const d = document.createElement('div');
+    d.id = 'modal-os'; d.className = 'modal-os oculto';
+    d.innerHTML = '<div class="modal-os-corpo"><button class="gaveta-fechar" onclick="fecharDetalheOS()">×</button><div id="modal-os-conteudo"></div></div>';
+    d.addEventListener('click', e => { if (e.target === d) fecharDetalheOS(); });
+    document.body.appendChild(d);
+    return d;
+  })();
+  caixa.classList.remove('oculto');
+  htm('modal-os-conteudo', '<div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Buscando os itens da OS ' + esc(os) + '…</div>');
+  const run = servidor('detalharOS',
+    r => {
+      if (!r || !r.ok) { htm('modal-os-conteudo', '<div class="vazio">' + esc((r && r.erro) || 'Falha ao ler a OS.') + '</div>'); return; }
+      const colunas = (r.colunas || []).filter(c => c);
+      const resumo = r.resumo || {};
+      const chavesResumo = Object.keys(resumo).filter(k => String(resumo[k]).trim());
+      htm('modal-os-conteudo', `
+        <h2 style="margin:0 0 4px; font-size:17px; color:var(--azul)">Ordem de serviço ${esc(r.os)}</h2>
+        ${r.pdf ? `<a class="pdf-link" href="${escAttr(r.pdf)}" target="_blank" rel="noopener">${icoPdf()} abrir o PDF da OS</a>` : '<div class="foto-data">sem PDF indexado</div>'}
+        ${chavesResumo.length ? `<div class="grade-dados" style="margin-top:10px">
+          ${chavesResumo.slice(0, 12).map(k => `<div class="dado"><div class="k">${esc(k)}</div><div class="v" style="font-size:13.5px">${esc(resumo[k])}</div></div>`).join('')}
+        </div>` : ''}
+        <div class="grupo-titulo" style="margin-top:12px">Itens registrados (${r.itens.length})</div>
+        ${r.itens.length ? `<div class="tabela-rol" style="max-height:340px"><table class="tabela-simples" style="width:100%">
+            <thead><tr>${colunas.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+            <tbody>${r.itens.map(i => `<tr>${colunas.map(c => `<td>${esc(i[c] || '')}</td>`).join('')}</tr>`).join('')}</tbody>
+          </table></div>`
+        : '<div class="cartao-dica">Nenhum item detalhado para esta OS na base de detalhamento.</div>'}`);
+    },
+    e => htm('modal-os-conteudo', '<div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div>'));
+  if (run) run.detalharOS(ESTADO.token, os);
+}
+
+function fecharDetalheOS() {
+  const caixa = el('modal-os');
+  if (caixa) caixa.classList.add('oculto');
 }
 
 </script>

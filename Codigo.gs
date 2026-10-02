@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.73.1';
+const CODIGO_VERSAO = '2.74.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6748,6 +6748,71 @@ function analisarPreventivaReal(token, forcar) {
       geradoEm: Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm') };
     _cacheGravar_(chave, saida, CONFIG.CACHE_SEG || 3600);
     return saida;
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+
+/** Itens registrados numa OS, para conferir o que foi feito. */
+function detalharOS(token, os) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const alvo = String(os || '').replace(/\D/g, '');
+  if (!alvo) return { ok: false, erro: 'Informe o número da OS.' };
+  try {
+    const itens = [];
+    let cabecalho = [];
+    const aba = _abaDetalhamento_();
+    if (aba && aba.getLastRow() > 1) {
+      const valores = aba.getDataRange().getValues();
+      let cabIdx = 0;
+      for (let i = 0; i < Math.min(8, valores.length); i++) {
+        if (valores[i].some(c => /^PLACA/.test(_normCab_(c)))) { cabIdx = i; break; }
+      }
+      const nomes = valores[cabIdx].map(c => String(c || '').trim());
+      const norm = nomes.map(c => _normCab_(c));
+      const iOs = norm.findIndex(c => /ORDEM DE SERVICO|ORDEM SERVICO|^OS$/.test(c));
+      if (iOs >= 0) {
+        cabecalho = nomes;
+        for (let r = cabIdx + 1; r < valores.length; r++) {
+          if (String(valores[r][iOs] || '').replace(/\D/g, '') !== alvo) continue;
+          const linha = {};
+          nomes.forEach((nome, i) => {
+            if (!nome) return;
+            const v = valores[r][i];
+            linha[nome] = (v instanceof Date) ? _dataBR_(v) : String(v === null || v === undefined ? '' : v).trim();
+          });
+          itens.push(linha);
+        }
+      }
+    }
+    // resumo da OS, pelo OrçamentosDB
+    let resumo = null;
+    try {
+      const abaOrc = _ssManut_().getSheetByName(CONFIG.ABA_ORCAMENTOS);
+      if (abaOrc && abaOrc.getLastRow() > 2) {
+        const valores = abaOrc.getDataRange().getValues();
+        let cab = 0;
+        for (let i = 0; i < Math.min(6, valores.length); i++) {
+          if (valores[i].some(c => /ORDEM\s*SERVI/i.test(String(c)))) { cab = i; break; }
+        }
+        const nomes = valores[cab].map(c => _normCab_(c));
+        const iOs = nomes.findIndex(c => /ORDEM SERVICO|^OS$/.test(c));
+        if (iOs >= 0) {
+          for (let r = cab + 1; r < valores.length; r++) {
+            if (String(valores[r][iOs] || '').replace(/\D/g, '') !== alvo) continue;
+            resumo = {};
+            valores[cab].forEach((nome, i) => {
+              if (!String(nome || '').trim()) return;
+              const v = valores[r][i];
+              resumo[String(nome).trim()] = (v instanceof Date) ? _dataBR_(v) : String(v === null || v === undefined ? '' : v).trim();
+            });
+            break;
+          }
+        }
+      }
+    } catch (e) { Logger.log('Resumo da OS: ' + e); }
+
+    return { ok: true, os: alvo, itens: itens, colunas: cabecalho, resumo: resumo,
+      pdf: (_indexarPdfsOS_() || []).filter(x => String(x.os || '').replace(/\D/g, '') === alvo).map(x => x.url)[0] || '' };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 
