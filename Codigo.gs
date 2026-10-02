@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.73.0';
+const CODIGO_VERSAO = '2.73.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6392,19 +6392,27 @@ function _odoNaData_(serie, dataISO) {
   return { valor: depois ? depois.odo : 0, estimado: true };
 }
 
-/** Aba de detalhamento de itens das OS, procurada por nome aproximado. */
+/**
+ * Aba de detalhamento de itens das OS. Procura, nesta ordem, na planilha de
+ * manutenção em uso, na planilha-mãe e na planilha antiga — enquanto a
+ * migração dessa aba não acontecer, os dados ainda estão lá.
+ */
 function _abaDetalhamento_() {
   const procurar = ss => {
     if (!ss) return null;
     const exata = ss.getSheetByName(CONFIG.ABA_DETALHAMENTO);
     if (exata) return exata;
-    const achada = ss.getSheets().find(a => /DETALHAMENTO/.test(_normCab_(a.getName())));
-    return achada || null;
+    return ss.getSheets().find(a => /DETALHAMENTO/.test(_normCab_(a.getName()))) || null;
   };
-  let aba = null;
-  try { aba = procurar(_ssManut_()); } catch (e) {}
-  if (!aba) { try { aba = procurar(SpreadsheetApp.openById(CONFIG.ID_BASE)); } catch (e) {} }
-  return aba;
+  const candidatas = [];
+  try { candidatas.push(_ssManut_()); } catch (e) {}
+  try { candidatas.push(SpreadsheetApp.openById(CONFIG.ID_BASE)); } catch (e) {}
+  if (CONFIG.ID_MANUT_ANTIGA) { try { candidatas.push(SpreadsheetApp.openById(CONFIG.ID_MANUT_ANTIGA)); } catch (e) {} }
+  for (let i = 0; i < candidatas.length; i++) {
+    const aba = procurar(candidatas[i]);
+    if (aba && aba.getLastRow() > 1) return aba;
+  }
+  return null;
 }
 
 /**
@@ -6477,7 +6485,7 @@ function _servicosPorPlaca_(ss, padrao, diag) {
     const aba = _abaDetalhamento_();
     if (aba && aba.getLastRow() > 1) {
       const valores = aba.getDataRange().getValues();
-      varrer(valores, acharCabecalho(valores), 'Detalhamento (' + aba.getName() + ')');
+      varrer(valores, acharCabecalho(valores), 'Detalhamento: ' + aba.getParent().getName() + ' / ' + aba.getName());
     } else relatorio.fontes.push('Detalhamento: aba não encontrada ou vazia');
   } catch (e) { relatorio.fontes.push('Detalhamento: ' + String(e).substring(0, 80)); }
 
