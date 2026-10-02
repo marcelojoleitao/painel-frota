@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.75.0';
+const VERSAO_PAINEL = '2.76.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -86,7 +86,7 @@ const ESTADO = {
   filtroAceite: '', filtroOS: { unidade: '', oficina: '' }, filtroAceites: { unidade: '', oficina: '' },
   subGestao: 'quadro', demandas: null, notas: null, soComDemanda: false, sinistros: null, filtroSinistro: { status: '', busca: '' },
   preventiva: null, prevReal: null, prevVisao: 'viatura', prevAberta: {},
-  filtroPrev: { situacao: '', grupo: '', unidade: '', busca: '' },
+  filtroPrev: { situacao: '', grupo: '', unidade: '', busca: '', detalhe: '' },
   filtroGestao: { placa: '', responsavel: '', busca: '' }, filtroNotas: { categoria: '', busca: '' },
   ordemMulta: { campo: 'linha', dir: -1 },
   dados: null,
@@ -5651,6 +5651,15 @@ function renderPreventiva(c) {
     if (f.situacao === 'proximos' && !(!x.vencido && x.diasAteVencer !== null && x.diasAteVencer <= 30)) return false;
     if (f.situacao === 'semHistorico' && !(x.semHistorico && !x.semRegistroEmDia)) return false;
     if (f.situacao === 'criticos' && !(x.critico && (x.vencido || (x.semHistorico && !x.semRegistroEmDia)))) return false;
+    if (f.detalhe) {
+      const sit = situacaoPrev(x);
+      if (f.detalhe === 'km' && !(x.vencido && x.vencidoKm)) return false;
+      if (f.detalhe === 'tempo' && !(x.vencido && x.vencidoTempo && !x.vencidoKm)) return false;
+      if (f.detalhe === 'emdia' && sit.classe !== 'folga') return false;
+      if (f.detalhe === 'semreg' && !(x.semHistorico && !x.semRegistroEmDia)) return false;
+      if (f.detalhe === 'proximo' && sit.classe !== 'critico') return false;
+      if (f.detalhe === 'cartao' && !x.viaCartao) return false;
+    }
     if (f.grupo && x.grupo !== f.grupo) return false;
     if (f.unidade && (x.unidade || '—') !== f.unidade) return false;
     if (f.busca) {
@@ -5722,10 +5731,19 @@ function renderPreventiva(c) {
           <button class="${ESTADO.prevVisao === 'item' ? 'ativo' : ''}" data-visao="item">Por item</button>
           <button class="${ESTADO.prevVisao === 'real' ? 'ativo' : ''}" data-visao="real">Praticado × previsto</button>
         </div>
-        <div class="busca" style="max-width:260px"><input id="prev-busca" type="search" placeholder="placa, item, unidade…" value="${escAttr(f.busca)}"></div>
+        <div class="busca" style="max-width:240px"><input id="prev-busca" type="search" placeholder="placa, item, unidade…" value="${escAttr(f.busca)}"></div>
+        <select id="prev-situacao" style="max-width:210px" title="Filtrar pela situação do item">
+          <option value="">Todas as situações</option>
+          <option value="km" ${f.detalhe === 'km' ? 'selected' : ''}>Vencido por quilometragem</option>
+          <option value="tempo" ${f.detalhe === 'tempo' ? 'selected' : ''}>Vencido por tempo</option>
+          <option value="proximo" ${f.detalhe === 'proximo' ? 'selected' : ''}>Vence em até 30 dias</option>
+          <option value="emdia" ${f.detalhe === 'emdia' ? 'selected' : ''}>Em dia</option>
+          <option value="semreg" ${f.detalhe === 'semreg' ? 'selected' : ''}>Sem registro</option>
+          <option value="cartao" ${f.detalhe === 'cartao' ? 'selected' : ''}>Feito pelo cartão</option>
+        </select>
         ${f.grupo ? `<span class="chip-filtro">grupo: ${esc(f.grupo)} <button data-limpaprev="grupo">×</button></span>` : ''}
         ${f.unidade ? `<span class="chip-filtro">unidade: ${esc(f.unidade)} <button data-limpaprev="unidade">×</button></span>` : ''}
-        ${(f.situacao || f.grupo || f.unidade || f.busca) ? '<button class="btn claro" id="prev-limpar">Limpar</button>' : ''}
+        ${(f.situacao || f.grupo || f.unidade || f.busca || f.detalhe) ? '<button class="btn claro" id="prev-limpar">Limpar</button>' : ''}
         <div style="flex:1"></div>
         <button class="btn claro" id="btn-recalc-prev" title="Refaz o cálculo com os dados e as regras de agora">⟳ Recalcular</button>
         <button class="btn claro" id="btn-exportar-prev">⤓ Exportar</button>
@@ -5793,7 +5811,8 @@ function renderPreventiva(c) {
     renderPreventiva(c);
   }));
   if (ESTADO.prevVisao === 'real') desenharPrevReal();
-  ouvir('prev-limpar', 'click', () => { ESTADO.filtroPrev = { situacao: '', grupo: '', unidade: '', busca: '' }; renderPreventiva(c); });
+  ouvir('prev-situacao', 'change', () => { ESTADO.filtroPrev.detalhe = val('prev-situacao'); renderPreventiva(c); });
+  ouvir('prev-limpar', 'click', () => { ESTADO.filtroPrev = { situacao: '', grupo: '', unidade: '', busca: '', detalhe: '' }; renderPreventiva(c); });
   const busca = el('prev-busca');
   if (busca) busca.addEventListener('input', () => {
     ESTADO.filtroPrev.busca = busca.value;
@@ -5879,7 +5898,8 @@ function tabelaPrevPorViatura(itens) {
               <td>${x.intervaloKm ? fmtInt(x.intervaloKm) + ' km' : ''}${x.intervaloKm && x.intervaloMeses ? ' / ' : ''}${x.intervaloMeses ? x.intervaloMeses + ' m' : ''}${x.comExcecao ? ' <b style="color:var(--azul)">*</b>' : ''}</td>
               <td>${x.ultimaData || '—'}
                 ${x.ultimoOdo ? `<div class="vinculo">${x.odoEstimado ? '≈ ' : ''}${fmtInt(x.ultimoOdo)} km${x.odoEstimado ? ' estimado' : ''}</div>` : '<div class="vinculo">km não registrado</div>'}
-                ${x.ultimaOs ? `<div class="vinculo"><button class="link-btn" onclick="abrirDetalheOS('${escAttr(x.ultimaOs)}')">OS ${esc(x.ultimaOs)}</button> ${pdfLinkHtml(x.ultimaOs)}</div>` : ''}
+                ${x.ultimaOs ? `<div class="vinculo"><button class="link-btn" onclick="abrirDetalheOS('${escAttr(x.ultimaOs)}')">OS ${esc(x.ultimaOs)}</button> ${pdfLinkHtml(x.ultimaOs)}</div>`
+                  : x.viaCartao ? '<div class="vinculo"><span class="dem-tag" style="font-size:9.5px">via cartão de abastecimento</span></div>' : ''}
                 ${x.ultimoTexto ? `<div class="vinculo" title="${escAttr((x.ultimaFonte || '') + (x.ultimaColuna ? ' • coluna ' + x.ultimaColuna : ''))}" style="font-style:italic">${esc(x.ultimoTexto.substring(0, 60))}</div>` : ''}</td>
               <td>${esc(desdePrev(x))}</td>
               <td><span class="prazo ${classe}">${esc(texto)}</span>${x.previsao && !x.vencido ? `<div class="vinculo">previsto ${esc(x.previsao)}</div>` : ''}</td></tr>`;

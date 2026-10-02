@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.75.0';
+const CODIGO_VERSAO = '2.76.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6500,6 +6500,16 @@ function _servicosPorPlaca_(ss, padrao, diag) {
     } else relatorio.fontes.push('ManutBD: aba não encontrada ou vazia');
   } catch (e) { relatorio.fontes.push('ManutBD: ' + String(e).substring(0, 80)); }
 
+  // AbastBD: o contrato permite pequenas despesas no cartão — troca de óleo e
+  // filtros aparecem aqui, sem ordem de serviço
+  try {
+    const aba = SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_ABAST);
+    if (aba && aba.getLastRow() > 1) {
+      const valores = aba.getDataRange().getValues();
+      varrer(valores, acharCabecalho(valores), 'Cartão de abastecimento');
+    } else relatorio.fontes.push('AbastBD: aba não encontrada ou vazia');
+  } catch (e) { relatorio.fontes.push('AbastBD: ' + String(e).substring(0, 80)); }
+
   return mapa;
 }
 
@@ -6635,6 +6645,7 @@ function lerPreventiva(token, forcar) {
           ultimaData: ultimo ? _dataBR_(ultimo.data) : '', ultimoOdo: odoUltimo, odoEstimado: odoEstimado,
           ultimoTexto: ultimo ? ultimo.texto : '',
           ultimaOs: ultimo ? ultimo.os : '', ultimaFonte: ultimo ? ultimo.fonte : '', ultimaColuna: ultimo ? ultimo.coluna : '',
+          viaCartao: ultimo ? /CARTAO/i.test(_normCab_(ultimo.fonte || '')) : false,
           kmDesde: kmDesde === undefined ? null : kmDesde, diasDesde: diasDesde === undefined ? null : diasDesde,
           semHistorico: semHistorico, semRegistroEmDia: semRegistroEmDia,
           diasObservados: odo.primeiraLeitura ? Math.round((new Date(hojeISO) - new Date(odo.primeiraLeitura)) / 86400000) : null,
