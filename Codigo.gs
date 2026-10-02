@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.71.0';
+const CODIGO_VERSAO = '2.71.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -567,15 +567,34 @@ function _varrerPasta_(pasta, caminho, saida, nivel) {
  * Só consulta o Drive para ids ainda não conhecidos; resultado fica 6 h em cache.
  * Chamado com veiculos = null apenas devolve o que já está em cache (carga do usuário nunca espera o Drive).
  */
+/**
+ * Datas de arquivos do Drive (fotos e documentos).
+ * Identificadores terminados em "__" são recusados pelo armazenamento de
+ * propriedades do Apps Script, então ficam de fora do mapa — melhor perder a
+ * data de um arquivo do que derrubar o carregamento do painel.
+ */
+function _idUsavelComoChave_(id) {
+  return !!id && !/__$/.test(id) && /^[\w-]{10,}$/.test(id);
+}
+
 function _datasFotos_(veiculos) {
   const chave = 'painel_fotos_v1';
   const mapa = _cacheLer_(chave) || {};
+  // limpa o que já tiver sido guardado com identificador problemático
+  Object.keys(mapa).forEach(k => { if (!_idUsavelComoChave_(k)) delete mapa[k]; });
   if (!veiculos) return mapa;
   const ids = [];
   veiculos.forEach(v => {
-    ['FD', 'LE', 'TR', 'LD'].forEach(a => { const id = _idDrive_(v.fotos && v.fotos[a]); if (id && mapa[id] === undefined) ids.push(id); });
+    ['FD', 'LE', 'TR', 'LD'].forEach(a => {
+      const id = _idDrive_(v.fotos && v.fotos[a]);
+      if (_idUsavelComoChave_(id) && mapa[id] === undefined) ids.push(id);
+    });
     // documentos também: a data de envio diz desde quando aquele CRLV ou termo está lá
-    [v.linkCrlv, v.linkTomb].forEach(link => { const id = _idDrive_(link); if (id && mapa[id] === undefined) ids.push(id); });
+    [v.linkCrlv, v.linkTomb].forEach(link => {
+      const id = _idDrive_(link);
+      if (_idUsavelComoChave_(id) && mapa[id] === undefined) ids.push(id);
+      else if (id && !_idUsavelComoChave_(id)) Logger.log('Arquivo ignorado no mapa de datas (identificador incompatível): ' + id);
+    });
   });
   if (!ids.length) return mapa;
   const t0 = Date.now(); let ok = 0;
