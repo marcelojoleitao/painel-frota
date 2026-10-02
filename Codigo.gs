@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.72.0';
+const CODIGO_VERSAO = '2.73.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6312,21 +6312,27 @@ function _categoriaPreventiva_(v) {
 /** Hodômetro e ritmo de uso de cada viatura, pela série de abastecimentos. */
 function _odometrosPorPlaca_(ss) {
   const mapa = {};
-  const tab = _abaTransacoes_(ss, CONFIG.ABA_ABAST, ['PLACA', 'LITROS', 'VALOR EMISSAO']);
-  if (!tab) return mapa;
-  const { valores, cab } = tab;
-  const iData = cab.indexOf('DATA TRANSACAO'), iPlaca = cab.indexOf('PLACA'),
-        iOdo = cab.indexOf('HODOMETRO OU HORIMETRO');
-  if (iPlaca < 0 || iOdo < 0) return mapa;
-
-  valores.forEach(l => {
-    const placa = String(l[iPlaca] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-    const odo = _num_(l[iOdo]) || 0;
-    if (!placa || odo <= 0) return;
-    const data = _diaISO_(l[iData]);
-    if (!data) return;
-    const m = mapa[placa] || (mapa[placa] = { leituras: [] });
-    m.leituras.push({ data: data, odo: odo });
+  // as duas bases registram hodômetro; usamos ambas e ficamos com a mais recente
+  const fontes = [
+    { aba: CONFIG.ABA_ABAST, exigidas: ['PLACA', 'LITROS', 'VALOR EMISSAO'], nome: 'abastecimento' },
+    { aba: CONFIG.ABA_MANUT, exigidas: ['PLACA', 'VALOR EMISSAO'], nome: 'manutenção' }
+  ];
+  fontes.forEach(fonte => {
+    const tab = _abaTransacoes_(ss, fonte.aba, fonte.exigidas);
+    if (!tab) return;
+    const { valores, cab } = tab;
+    const iData = cab.indexOf('DATA TRANSACAO'), iPlaca = cab.indexOf('PLACA'),
+          iOdo = cab.indexOf('HODOMETRO OU HORIMETRO');
+    if (iPlaca < 0 || iOdo < 0) return;
+    valores.forEach(l => {
+      const placa = String(l[iPlaca] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      const odo = _num_(l[iOdo]) || 0;
+      if (!placa || odo <= 0) return;
+      const data = _diaISO_(l[iData]);
+      if (!data) return;
+      const m = mapa[placa] || (mapa[placa] = { leituras: [] });
+      m.leituras.push({ data: data, odo: odo, fonte: fonte.nome });
+    });
   });
 
   Object.keys(mapa).forEach(placa => {
@@ -6346,6 +6352,7 @@ function _odometrosPorPlaca_(ss) {
     const n = limpas.length;
     m.odometro = n ? limpas[n - 1].odo : 0;
     m.ultimaLeitura = n ? limpas[n - 1].data : '';
+    m.ultimaFonte = n ? limpas[n - 1].fonte : '';
     // km por mês, medido nos últimos 12 meses de leituras
     if (n >= 2) {
       const fim = limpas[n - 1], ini = limpas[Math.max(0, n - 1 - 40)];
@@ -6409,7 +6416,7 @@ function _servicosPorPlaca_(ss, padrao, diag) {
   const mapa = {};
   const relatorio = diag || { fontes: [], casamentos: {} };
 
-  const registrar = (placa, data, odo, texto, fonte) => {
+  const registrar = (placa, data, odo, texto, fonte, os, coluna) => {
     if (!placa || !texto) return;
     const alvo = _normCab_(texto);
     if (alvo.length < 3) return;
@@ -6423,7 +6430,8 @@ function _servicosPorPlaca_(ss, padrao, diag) {
       // prefere sempre o registro com data; entre dois com data, o mais recente
       const melhor = !atual || (data && !atual.data) || (data && atual.data && data > atual.data) ||
                      (!data && !atual.data && (odo || 0) > (atual.odo || 0));
-      if (melhor) mapa[chave] = { data: data || '', odo: odo || 0, texto: String(texto).substring(0, 120), fonte: fonte };
+      if (melhor) mapa[chave] = { data: data || '', odo: odo || 0, texto: String(texto).substring(0, 120),
+        fonte: fonte, os: os || '', coluna: coluna || '' };
     });
   };
 
@@ -6436,6 +6444,7 @@ function _servicosPorPlaca_(ss, padrao, diag) {
     // a data pode se chamar DATA TRANSACAO, Conclusão do Serviço, Emissão...
     const iData = nomes.findIndex(c => /^DATA|CONCLUSAO|EMISSAO|^DT /.test(c));
     const iOdo = nomes.findIndex(c => /HODOMETRO|ODOMETRO|\bKM\b|QUILOMETR/.test(c));
+    const iOs = nomes.findIndex(c => /ORDEM DE SERVICO|ORDEM SERVICO|^OS$|^N OS/.test(c));
     // qualquer coluna cujo nome sugira descrição de serviço, peça ou item
     const textuais = [];
     nomes.forEach((n, i) => {
@@ -6451,7 +6460,8 @@ function _servicosPorPlaca_(ss, padrao, diag) {
       if (!placa) continue;
       const data = iData >= 0 ? _diaISO_(valores[r][iData]) : '';
       const odo = iOdo >= 0 ? (_num_(valores[r][iOdo]) || 0) : 0;
-      textuais.forEach(i => registrar(placa, data, odo, valores[r][i], fonte));
+      const os = iOs >= 0 ? String(valores[r][iOs] || '').replace(/\D/g, '') : '';
+      textuais.forEach(i => registrar(placa, data, odo, valores[r][i], fonte, os, valores[cabIdx][i]));
     }
   };
 
@@ -6600,8 +6610,10 @@ function lerPreventiva(token, forcar) {
           intervaloKm: km, intervaloMeses: meses, comExcecao: !!exc, motivoExcecao: exc ? exc.motivo : '',
           odometro: odo.odometro, kmMes: odo.kmMes, odoConfiavel: odo.confiavel,
           odoData: odo.ultimaLeitura ? _dataBR_(odo.ultimaLeitura) : '', leiturasQtd: odo.leiturasQtd || 0,
+          odoFonte: odo.ultimaFonte || '',
           ultimaData: ultimo ? _dataBR_(ultimo.data) : '', ultimoOdo: odoUltimo, odoEstimado: odoEstimado,
           ultimoTexto: ultimo ? ultimo.texto : '',
+          ultimaOs: ultimo ? ultimo.os : '', ultimaFonte: ultimo ? ultimo.fonte : '', ultimaColuna: ultimo ? ultimo.coluna : '',
           kmDesde: kmDesde, diasDesde: diasDesde, semHistorico: semHistorico,
           vencido: vencido, vencidoKm: vencidoKm, vencidoTempo: vencidoTempo,
           diasAteVencer: diasAteVencer, previsao: previsao });
