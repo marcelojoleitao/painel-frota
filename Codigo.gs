@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.74.0';
+const CODIGO_VERSAO = '2.75.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6353,6 +6353,8 @@ function _odometrosPorPlaca_(ss) {
     m.odometro = n ? limpas[n - 1].odo : 0;
     m.ultimaLeitura = n ? limpas[n - 1].data : '';
     m.ultimaFonte = n ? limpas[n - 1].fonte : '';
+    m.primeiraLeitura = n ? limpas[0].data : '';
+    m.primeiroOdo = n ? limpas[0].odo : 0;
     // km por mês, medido nos últimos 12 meses de leituras
     if (n >= 2) {
       const fim = limpas[n - 1], ini = limpas[Math.max(0, n - 1 - 40)];
@@ -6601,6 +6603,17 @@ function lerPreventiva(token, forcar) {
           }
         }
         const semHistorico = !ultimo;
+        // Sem registro não significa pendência: se a viatura só é observada há
+        // pouco tempo (ou rodou pouco desde a primeira leitura), o item ainda
+        // não teria vencido de qualquer forma.
+        let semRegistroEmDia = false;
+        if (semHistorico && odo.primeiraLeitura) {
+          const diasObs = Math.round((new Date(hojeISO) - new Date(odo.primeiraLeitura)) / 86400000);
+          const kmObs = odo.odometro && odo.primeiroOdo ? odo.odometro - odo.primeiroOdo : 0;
+          const dentroTempo = !meses || diasObs < meses * 30;
+          const dentroKm = !km || (kmObs && kmObs < km);
+          semRegistroEmDia = dentroTempo && dentroKm;
+        }
         const vencido = vencidoKm || vencidoTempo;
         // dias até vencer, para ordenar: negativo = vencido
         let diasAteVencer = null;
@@ -6622,7 +6635,9 @@ function lerPreventiva(token, forcar) {
           ultimaData: ultimo ? _dataBR_(ultimo.data) : '', ultimoOdo: odoUltimo, odoEstimado: odoEstimado,
           ultimoTexto: ultimo ? ultimo.texto : '',
           ultimaOs: ultimo ? ultimo.os : '', ultimaFonte: ultimo ? ultimo.fonte : '', ultimaColuna: ultimo ? ultimo.coluna : '',
-          kmDesde: kmDesde, diasDesde: diasDesde, semHistorico: semHistorico,
+          kmDesde: kmDesde === undefined ? null : kmDesde, diasDesde: diasDesde === undefined ? null : diasDesde,
+          semHistorico: semHistorico, semRegistroEmDia: semRegistroEmDia,
+          diasObservados: odo.primeiraLeitura ? Math.round((new Date(hojeISO) - new Date(odo.primeiraLeitura)) / 86400000) : null,
           vencido: vencido, vencidoKm: vencidoKm, vencidoTempo: vencidoTempo,
           diasAteVencer: diasAteVencer, previsao: previsao });
       });

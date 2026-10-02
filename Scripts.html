@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.74.0';
+const VERSAO_PAINEL = '2.75.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -5599,6 +5599,31 @@ function abrirFormMultaCom(ai, placa) {
 }
 
 
+
+/** Situação de um item da preventiva, tolerante a dados ausentes. */
+function situacaoPrev(x) {
+  const dias = (x.diasDesde === null || x.diasDesde === undefined) ? null : x.diasDesde;
+  const ate = (x.diasAteVencer === null || x.diasAteVencer === undefined) ? null : x.diasAteVencer;
+  if (x.vencido) {
+    return { classe: 'vencido', texto: x.vencidoKm && x.vencidoTempo ? 'vencido' : x.vencidoKm ? 'vencido por km' : 'vencido por tempo', pendente: true };
+  }
+  if (x.semHistorico) {
+    return x.semRegistroEmDia
+      ? { classe: 'folga', texto: 'em dia • sem registro', pendente: false }
+      : { classe: 'atencao', texto: 'sem registro', pendente: true };
+  }
+  if (ate !== null && ate <= 30) return { classe: 'critico', texto: 'vence em ' + ate + ' dia(s)', pendente: false };
+  return { classe: 'folga', texto: 'em dia', pendente: false };
+}
+
+/** Texto de "desde então", sem mostrar valor ausente. */
+function desdePrev(x) {
+  const partes = [];
+  if (x.kmDesde !== null && x.kmDesde !== undefined) partes.push(fmtInt(x.kmDesde) + ' km');
+  if (x.diasDesde !== null && x.diasDesde !== undefined) partes.push(x.diasDesde + ' dias');
+  return partes.length ? partes.join(' • ') : '—';
+}
+
 /* ============================================================
    PREVENTIVA — o que está vencido, o que vence e o que nunca foi feito
    ============================================================ */
@@ -5624,8 +5649,8 @@ function renderPreventiva(c) {
     if (filtroFrota && !exib.has(x.placa)) return false;
     if (f.situacao === 'vencidos' && !x.vencido) return false;
     if (f.situacao === 'proximos' && !(!x.vencido && x.diasAteVencer !== null && x.diasAteVencer <= 30)) return false;
-    if (f.situacao === 'semHistorico' && !x.semHistorico) return false;
-    if (f.situacao === 'criticos' && !(x.critico && (x.vencido || x.semHistorico))) return false;
+    if (f.situacao === 'semHistorico' && !(x.semHistorico && !x.semRegistroEmDia)) return false;
+    if (f.situacao === 'criticos' && !(x.critico && (x.vencido || (x.semHistorico && !x.semRegistroEmDia)))) return false;
     if (f.grupo && x.grupo !== f.grupo) return false;
     if (f.unidade && (x.unidade || '—') !== f.unidade) return false;
     if (f.busca) {
@@ -5645,8 +5670,8 @@ function renderPreventiva(c) {
   const base = filtroFrota ? dados.itens.filter(x => exib.has(x.placa)) : dados.itens;
   const vencidos = base.filter(x => x.vencido);
   const proximos = base.filter(x => !x.vencido && x.diasAteVencer !== null && x.diasAteVencer <= 30);
-  const semHist = base.filter(x => x.semHistorico);
-  const criticos = base.filter(x => x.critico && (x.vencido || x.semHistorico));
+  const semHist = base.filter(x => x.semHistorico && !x.semRegistroEmDia);
+  const criticos = base.filter(x => x.critico && (x.vencido || (x.semHistorico && !x.semRegistroEmDia)));
   const placasVencidas = new Set(vencidos.map(x => x.placa));
 
   const kpiF = (chave, rotulo, arr, sub, cor) =>
@@ -5690,6 +5715,7 @@ function renderPreventiva(c) {
     <div class="cartao largo" style="margin-top:12px">
       <div class="cartao-cab"><h3>Manutenção preventiva</h3>
         <small>${todos.length} item(ns)${dados.geradoEm ? ' • cálculo de ' + esc(dados.geradoEm) + (dados.doCache ? ' (guardado)' : '') : ''}</small></div>
+      ${(dados.itens[0] && dados.itens[0].odoData === undefined) ? '<div class="cartao-dica" style="border-left:3px solid var(--ambar)">O servidor ainda está numa versão anterior: a quilometragem estimada da última troca e o número da OS só aparecem depois de implantar a Nova versão do Codigo.gs.</div>' : ''}
       <div class="os-barra-acoes">
         <div class="alternador">
           <button class="${ESTADO.prevVisao === 'viatura' ? 'ativo' : ''}" data-visao="viatura">Por viatura</button>
@@ -5714,11 +5740,8 @@ function renderPreventiva(c) {
           <tbody>
           ${todos.slice(0, 800).map(x => {
             const v = viaturaDaMulta(x.placa);
-            const classe = x.vencido ? 'vencido' : x.semHistorico ? 'atencao' : (x.diasAteVencer !== null && x.diasAteVencer <= 30) ? 'critico' : 'folga';
-            const texto = x.vencido
-              ? (x.vencidoKm && x.vencidoTempo ? 'vencido' : x.vencidoKm ? 'vencido por km' : 'vencido por tempo')
-              : x.semHistorico ? 'sem registro'
-              : x.diasAteVencer !== null ? (x.diasAteVencer <= 30 ? 'vence em ' + x.diasAteVencer + ' dia(s)' : 'em dia') : 'em dia';
+            const sit = situacaoPrev(x);
+            const classe = sit.classe, texto = sit.texto;
             return `<tr class="${x.vencido && x.critico ? 'cobrada' : ''}">
               <td>${v ? `<a class="link-btn" style="font-family:var(--fonte-dados); font-weight:700" onclick="abrirFicha('${escAttr(v.placa)}')">${esc(x.placa)}</a>` : esc(x.placa)}</td>
               <td>${esc(x.modelo)}<div class="vinculo">${esc(x.categoria)}</div>
@@ -5731,7 +5754,7 @@ function renderPreventiva(c) {
               <td class="data-curta">${x.ultimaData ? esc(x.ultimaData) : '—'}
                 ${x.ultimoOdo ? `<div class="vinculo">${x.odoEstimado ? '≈ ' : ''}${fmtInt(x.ultimoOdo)} km</div>` : ''}
                 ${x.ultimaOs ? `<div class="vinculo"><button class="link-btn" onclick="abrirDetalheOS('${escAttr(x.ultimaOs)}')">OS ${esc(x.ultimaOs)}</button></div>` : ''}</td>
-              <td class="data-curta">${x.kmDesde !== null ? fmtInt(x.kmDesde) + ' km' : ''}${x.kmDesde !== null && x.diasDesde !== null ? '<br>' : ''}${x.diasDesde !== null ? x.diasDesde + ' dias' : ''}</td>
+              <td class="data-curta">${esc(desdePrev(x))}</td>
               <td><span class="prazo ${classe}">${esc(texto)}</span>
                 ${x.previsao && !x.vencido ? `<div class="vinculo">previsto ${esc(x.previsao)}</div>` : ''}</td>
               <td>${x.ultimoTexto ? `<div class="obs-multa" title="${escAttr(x.ultimoTexto)}">${esc(x.ultimoTexto)}</div>` : ''}
@@ -5814,8 +5837,8 @@ function tabelaPrevPorViatura(itens) {
     g.leiturasQtd = g.itens.length ? g.itens[0].leiturasQtd : 0;
     g.vencidos = g.itens.filter(x => x.vencido).length;
     g.proximos = g.itens.filter(x => !x.vencido && x.diasAteVencer !== null && x.diasAteVencer <= 30).length;
-    g.criticos = g.itens.filter(x => x.critico && (x.vencido || x.semHistorico)).length;
-    g.semHist = g.itens.filter(x => x.semHistorico).length;
+    g.criticos = g.itens.filter(x => x.critico && (x.vencido || (x.semHistorico && !x.semRegistroEmDia))).length;
+    g.semHist = g.itens.filter(x => x.semHistorico && !x.semRegistroEmDia).length;
     return g;
   }).sort((a, b) => b.criticos - a.criticos || b.vencidos - a.vencidos || a.placa.localeCompare(b.placa));
 
@@ -5858,7 +5881,7 @@ function tabelaPrevPorViatura(itens) {
                 ${x.ultimoOdo ? `<div class="vinculo">${x.odoEstimado ? '≈ ' : ''}${fmtInt(x.ultimoOdo)} km${x.odoEstimado ? ' estimado' : ''}</div>` : '<div class="vinculo">km não registrado</div>'}
                 ${x.ultimaOs ? `<div class="vinculo"><button class="link-btn" onclick="abrirDetalheOS('${escAttr(x.ultimaOs)}')">OS ${esc(x.ultimaOs)}</button> ${pdfLinkHtml(x.ultimaOs)}</div>` : ''}
                 ${x.ultimoTexto ? `<div class="vinculo" title="${escAttr((x.ultimaFonte || '') + (x.ultimaColuna ? ' • coluna ' + x.ultimaColuna : ''))}" style="font-style:italic">${esc(x.ultimoTexto.substring(0, 60))}</div>` : ''}</td>
-              <td>${x.kmDesde !== null ? fmtInt(x.kmDesde) + ' km' : ''}${x.diasDesde !== null ? `<div class="vinculo">${x.diasDesde} dias</div>` : ''}</td>
+              <td>${esc(desdePrev(x))}</td>
               <td><span class="prazo ${classe}">${esc(texto)}</span>${x.previsao && !x.vencido ? `<div class="vinculo">previsto ${esc(x.previsao)}</div>` : ''}</td></tr>`;
           }).join('')}</tbody>
         </table>
@@ -5943,7 +5966,7 @@ function carregarPreventivaFicha(placa) {
   const caixa = el('prev-ficha-' + placa); if (!caixa) return;
   const pinta = itens => {
     if (!itens.length) { caixa.innerHTML = 'Sem itens de preventiva para esta categoria de veículo.'; return; }
-    const pend = itens.filter(x => x.vencido || x.semHistorico || (x.diasAteVencer !== null && x.diasAteVencer <= 30));
+    const pend = itens.filter(x => situacaoPrev(x).pendente || (!x.vencido && x.diasAteVencer !== null && x.diasAteVencer <= 30));
     const lista = pend.length ? pend : itens.slice(0, 5);
     const ctx = itens[0] || {};
     caixa.innerHTML = `
@@ -5955,9 +5978,7 @@ function carregarPreventivaFicha(placa) {
         : '<div style="margin-bottom:8px"><b class="ok-txt">Preventiva em dia</b> — mostrando os próximos vencimentos</div>'}
       <table class="tabela-simples" style="width:100%"><tbody>
         ${lista.map(x => {
-          const classe = x.vencido ? 'vencido' : x.semHistorico ? 'atencao' : (x.diasAteVencer !== null && x.diasAteVencer <= 30) ? 'critico' : 'folga';
-          const texto = x.vencido ? (x.vencidoKm && x.vencidoTempo ? 'vencido' : x.vencidoKm ? 'vencido por km' : 'vencido por tempo')
-            : x.semHistorico ? 'sem registro' : x.diasAteVencer !== null && x.diasAteVencer <= 30 ? 'vence em ' + x.diasAteVencer + ' dia(s)' : 'em dia';
+          const sit = situacaoPrev(x); const classe = sit.classe, texto = sit.texto;
           return `<tr><td>${esc(x.item)}${x.critico ? ' <span class="dem-tag prio urgente" style="font-size:9px">crítico</span>' : ''}</td>
             <td style="width:190px">${x.ultimaData ? esc(x.ultimaData) + (x.ultimoOdo ? ' • ' + (x.odoEstimado ? '≈' : '') + fmtInt(x.ultimoOdo) + ' km' : '') : 'sem registro'}
               ${x.ultimaOs ? `<div class="vinculo"><button class="link-btn" onclick="abrirDetalheOS('${escAttr(x.ultimaOs)}')">OS ${esc(x.ultimaOs)}</button></div>` : ''}</td>
