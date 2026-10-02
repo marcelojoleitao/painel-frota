@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.71.1';
+const VERSAO_PAINEL = '2.72.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -5721,13 +5721,14 @@ function renderPreventiva(c) {
               : x.diasAteVencer !== null ? (x.diasAteVencer <= 30 ? 'vence em ' + x.diasAteVencer + ' dia(s)' : 'em dia') : 'em dia';
             return `<tr class="${x.vencido && x.critico ? 'cobrada' : ''}">
               <td>${v ? `<a class="link-btn" style="font-family:var(--fonte-dados); font-weight:700" onclick="abrirFicha('${escAttr(v.placa)}')">${esc(x.placa)}</a>` : esc(x.placa)}</td>
-              <td>${esc(x.modelo)}<div class="vinculo">${esc(x.categoria)}</div></td>
+              <td>${esc(x.modelo)}<div class="vinculo">${esc(x.categoria)}</div>
+                <div class="vinculo">${x.odometro ? fmtInt(x.odometro) + ' km' + (x.odoData ? ' em ' + esc(x.odoData) : '') : 'sem hodômetro'}</div></td>
               <td>${esc(x.unidade || '—')}</td>
               <td>${esc(x.item)}${x.critico ? ' <span class="dem-tag prio urgente" style="font-size:9.5px">crítico</span>' : ''}
                 <div class="vinculo">${esc(x.grupo)} • ${esc(x.tipo)}</div></td>
               <td class="data-curta">${x.intervaloKm ? fmtInt(x.intervaloKm) + ' km' : ''}${x.intervaloKm && x.intervaloMeses ? '<br>' : ''}${x.intervaloMeses ? x.intervaloMeses + ' meses' : ''}
                 ${x.comExcecao ? `<div class="vinculo" title="${escAttr(x.motivoExcecao)}" style="color:var(--azul)">exceção</div>` : ''}</td>
-              <td class="data-curta">${x.ultimaData ? esc(x.ultimaData) : '—'}${x.ultimoOdo ? `<div class="vinculo">${fmtInt(x.ultimoOdo)} km</div>` : ''}</td>
+              <td class="data-curta">${x.ultimaData ? esc(x.ultimaData) : '—'}${x.ultimoOdo ? `<div class="vinculo">${x.odoEstimado ? '≈ ' : ''}${fmtInt(x.ultimoOdo)} km</div>` : ''}</td>
               <td class="data-curta">${x.kmDesde !== null ? fmtInt(x.kmDesde) + ' km' : ''}${x.kmDesde !== null && x.diasDesde !== null ? '<br>' : ''}${x.diasDesde !== null ? x.diasDesde + ' dias' : ''}</td>
               <td><span class="prazo ${classe}">${esc(texto)}</span>
                 ${x.previsao && !x.vencido ? `<div class="vinculo">previsto ${esc(x.previsao)}</div>` : ''}</td>
@@ -5797,11 +5798,14 @@ function tabelaPrevPorViatura(itens) {
   const porPlaca = new Map();
   itens.forEach(x => {
     const g = porPlaca.get(x.placa) || { placa: x.placa, modelo: x.modelo, unidade: x.unidade,
-      categoria: x.categoria, odometro: x.odometro, kmMes: x.kmMes, odoConfiavel: x.odoConfiavel, itens: [] };
+      categoria: x.categoria, odometro: x.odometro, kmMes: x.kmMes, odoConfiavel: x.odoConfiavel,
+      odoData: x.odoData, leiturasQtd: x.leiturasQtd, itens: [] };
     g.itens.push(x);
     porPlaca.set(x.placa, g);
   });
   const grupos = Array.from(porPlaca.values()).map(g => {
+    g.odoData = g.itens.length ? g.itens[0].odoData : '';
+    g.leiturasQtd = g.itens.length ? g.itens[0].leiturasQtd : 0;
     g.vencidos = g.itens.filter(x => x.vencido).length;
     g.proximos = g.itens.filter(x => !x.vencido && x.diasAteVencer !== null && x.diasAteVencer <= 30).length;
     g.criticos = g.itens.filter(x => x.critico && (x.vencido || x.semHistorico)).length;
@@ -5818,7 +5822,7 @@ function tabelaPrevPorViatura(itens) {
         <span class="prev-placa">${esc(g.placa)}</span>
         <span class="prev-modelo">${esc(g.modelo || '')}<small>${esc(g.categoria)}${g.unidade ? ' • ' + esc(g.unidade) : ''}</small></span>
         <span class="prev-odo">${g.odometro ? fmtInt(g.odometro) + ' km' : 'sem hodômetro'}
-          <small>${g.kmMes ? fmtInt(g.kmMes) + ' km/mês' : 'sem ritmo apurado'}</small></span>
+          <small>${g.odoData ? 'leitura de ' + esc(g.odoData) : 'sem leitura'}${g.kmMes ? ' • ' + fmtInt(g.kmMes) + ' km/mês' : ''}</small></span>
         <span class="prev-marcas">
           ${g.vencidos ? `<span class="prazo vencido">${g.vencidos} vencido(s)</span>` : ''}
           ${g.proximos ? `<span class="prazo critico">${g.proximos} em 30 dias</span>` : ''}
@@ -5828,6 +5832,12 @@ function tabelaPrevPorViatura(itens) {
         <span class="prev-seta">${aberta ? '▴' : '▾'}</span>
       </button>
       ${aberta ? `<div class="prev-itens">
+        <div class="prev-contexto">
+          <span><b>${g.odometro ? fmtInt(g.odometro) + ' km' : '—'}</b> no hodômetro${g.odoData ? `, lido em ${esc(g.odoData)}` : ''}</span>
+          <span><b>${g.kmMes ? fmtInt(g.kmMes) + ' km' : '—'}</b> por mês${g.leiturasQtd ? `, ${g.leiturasQtd} abastecimento(s)` : ''}</span>
+          ${!g.odoConfiavel ? '<span style="color:var(--ambar)">hodômetro com poucas leituras ou inconsistente: trate as projeções com reserva</span>' : ''}
+          <a class="link-btn" onclick="abrirFicha('${escAttr(g.placa)}')">abrir ficha da viatura</a>
+        </div>
         <table class="tabela-simples" style="width:100%">
           <thead><tr><th>Item</th><th>Intervalo</th><th>Última vez</th><th>Desde então</th><th>Situação</th></tr></thead>
           <tbody>${g.itens.map(x => {
@@ -5838,7 +5848,7 @@ function tabelaPrevPorViatura(itens) {
             return `<tr><td>${esc(x.item)}${x.critico ? ' <span class="dem-tag prio urgente" style="font-size:9px">crítico</span>' : ''}
                 <div class="vinculo">${esc(x.grupo)}</div></td>
               <td>${x.intervaloKm ? fmtInt(x.intervaloKm) + ' km' : ''}${x.intervaloKm && x.intervaloMeses ? ' / ' : ''}${x.intervaloMeses ? x.intervaloMeses + ' m' : ''}${x.comExcecao ? ' <b style="color:var(--azul)">*</b>' : ''}</td>
-              <td>${x.ultimaData || '—'}${x.ultimoOdo ? `<div class="vinculo">${fmtInt(x.ultimoOdo)} km</div>` : ''}</td>
+              <td>${x.ultimaData || '—'}${x.ultimoOdo ? `<div class="vinculo">${x.odoEstimado ? '≈ ' : ''}${fmtInt(x.ultimoOdo)} km${x.odoEstimado ? ' (estimado)' : ''}</div>` : ''}</td>
               <td>${x.kmDesde !== null ? fmtInt(x.kmDesde) + ' km' : ''}${x.diasDesde !== null ? `<div class="vinculo">${x.diasDesde} dias</div>` : ''}</td>
               <td><span class="prazo ${classe}">${esc(texto)}</span>${x.previsao && !x.vencido ? `<div class="vinculo">previsto ${esc(x.previsao)}</div>` : ''}</td></tr>`;
           }).join('')}</tbody>
@@ -5926,7 +5936,12 @@ function carregarPreventivaFicha(placa) {
     if (!itens.length) { caixa.innerHTML = 'Sem itens de preventiva para esta categoria de veículo.'; return; }
     const pend = itens.filter(x => x.vencido || x.semHistorico || (x.diasAteVencer !== null && x.diasAteVencer <= 30));
     const lista = pend.length ? pend : itens.slice(0, 5);
+    const ctx = itens[0] || {};
     caixa.innerHTML = `
+      <div class="prev-contexto" style="margin-bottom:8px">
+        <span><b>${ctx.odometro ? fmtInt(ctx.odometro) + ' km' : '—'}</b> no hodômetro${ctx.odoData ? `, lido em ${esc(ctx.odoData)}` : ''}</span>
+        <span><b>${ctx.kmMes ? fmtInt(ctx.kmMes) + ' km' : '—'}</b> por mês</span>
+      </div>
       ${pend.length ? `<div style="margin-bottom:8px"><b style="color:${pend.some(x => x.vencido && x.critico) ? 'var(--vermelho)' : 'var(--ambar)'}">${pend.length} item(ns) exigindo atenção</b></div>`
         : '<div style="margin-bottom:8px"><b class="ok-txt">Preventiva em dia</b> — mostrando os próximos vencimentos</div>'}
       <table class="tabela-simples" style="width:100%"><tbody>
@@ -5935,7 +5950,7 @@ function carregarPreventivaFicha(placa) {
           const texto = x.vencido ? (x.vencidoKm && x.vencidoTempo ? 'vencido' : x.vencidoKm ? 'vencido por km' : 'vencido por tempo')
             : x.semHistorico ? 'sem registro' : x.diasAteVencer !== null && x.diasAteVencer <= 30 ? 'vence em ' + x.diasAteVencer + ' dia(s)' : 'em dia';
           return `<tr><td>${esc(x.item)}${x.critico ? ' <span class="dem-tag prio urgente" style="font-size:9px">crítico</span>' : ''}</td>
-            <td style="width:150px">${x.ultimaData ? esc(x.ultimaData) + (x.ultimoOdo ? ' • ' + fmtInt(x.ultimoOdo) + ' km' : '') : 'sem registro'}</td>
+            <td style="width:170px">${x.ultimaData ? esc(x.ultimaData) + (x.ultimoOdo ? ' • ' + (x.odoEstimado ? '≈' : '') + fmtInt(x.ultimoOdo) + ' km' : '') : 'sem registro'}</td>
             <td style="width:150px"><span class="prazo ${classe}">${esc(texto)}</span></td></tr>`;
         }).join('')}
       </tbody></table>

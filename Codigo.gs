@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.71.1';
+const CODIGO_VERSAO = '2.72.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6353,8 +6353,36 @@ function _odometrosPorPlaca_(ss) {
       m.kmMes = dias > 20 ? Math.round((fim.odo - ini.odo) / dias * 30) : 0;
     } else m.kmMes = 0;
     m.confiavel = n >= 3 && m.kmMes > 0;
+    m.leiturasQtd = n;
   });
   return mapa;
+}
+
+/**
+ * Hodômetro aproximado de uma viatura numa data, interpolando entre as duas
+ * leituras de abastecimento mais próximas. Usado quando o registro do serviço
+ * não traz a quilometragem — o que é comum no detalhamento das OS.
+ */
+function _odoNaData_(serie, dataISO) {
+  if (!serie || !serie.leituras || !serie.leituras.length || !dataISO) return { valor: 0, estimado: false };
+  const leituras = serie.leituras;
+  let antes = null, depois = null;
+  for (let i = 0; i < leituras.length; i++) {
+    if (leituras[i].data <= dataISO) antes = leituras[i];
+    if (leituras[i].data >= dataISO && !depois) depois = leituras[i];
+  }
+  if (antes && antes.data === dataISO) return { valor: antes.odo, estimado: false };
+  if (antes && depois && depois.data > antes.data) {
+    const total = (new Date(depois.data) - new Date(antes.data)) / 86400000;
+    const parcial = (new Date(dataISO) - new Date(antes.data)) / 86400000;
+    const valor = Math.round(antes.odo + (depois.odo - antes.odo) * (parcial / total));
+    return { valor: valor, estimado: true };
+  }
+  if (antes) {       // depois da última leitura: projeta pelo ritmo
+    const dias = (new Date(dataISO) - new Date(antes.data)) / 86400000;
+    return { valor: Math.round(antes.odo + (serie.kmMes || 0) * dias / 30), estimado: true };
+  }
+  return { valor: depois ? depois.odo : 0, estimado: true };
 }
 
 /** Aba de detalhamento de itens das OS, procurada por nome aproximado. */
@@ -6535,8 +6563,13 @@ function lerPreventiva(token, forcar) {
         const ultimo = servicos[placa + '|' + regra.item] || null;
 
         let kmDesde = null, diasDesde = null, vencidoKm = false, vencidoTempo = false, previsao = '';
+        let odoUltimo = ultimo ? ultimo.odo : 0, odoEstimado = false;
+        if (ultimo && !odoUltimo && ultimo.data) {
+          const est = _odoNaData_(odo, ultimo.data);
+          odoUltimo = est.valor; odoEstimado = est.estimado && !!est.valor;
+        }
         if (ultimo) {
-          if (km && ultimo.odo && odo.odometro) { kmDesde = odo.odometro - ultimo.odo; vencidoKm = kmDesde >= km; }
+          if (km && odoUltimo && odo.odometro) { kmDesde = odo.odometro - odoUltimo; vencidoKm = kmDesde >= km; }
           if (meses && ultimo.data) {
             diasDesde = Math.round((new Date(hojeISO) - new Date(ultimo.data)) / 86400000);
             vencidoTempo = diasDesde >= meses * 30;
@@ -6566,7 +6599,8 @@ function lerPreventiva(token, forcar) {
           statusVtr: status, grupo: regra.grupo, item: regra.item, tipo: regra.tipo, critico: regra.critico,
           intervaloKm: km, intervaloMeses: meses, comExcecao: !!exc, motivoExcecao: exc ? exc.motivo : '',
           odometro: odo.odometro, kmMes: odo.kmMes, odoConfiavel: odo.confiavel,
-          ultimaData: ultimo ? _dataBR_(ultimo.data) : '', ultimoOdo: ultimo ? ultimo.odo : 0,
+          odoData: odo.ultimaLeitura ? _dataBR_(odo.ultimaLeitura) : '', leiturasQtd: odo.leiturasQtd || 0,
+          ultimaData: ultimo ? _dataBR_(ultimo.data) : '', ultimoOdo: odoUltimo, odoEstimado: odoEstimado,
           ultimoTexto: ultimo ? ultimo.texto : '',
           kmDesde: kmDesde, diasDesde: diasDesde, semHistorico: semHistorico,
           vencido: vencido, vencidoKm: vencidoKm, vencidoTempo: vencidoTempo,
