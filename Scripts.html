@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.70.2';
+const VERSAO_PAINEL = '2.71.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -767,8 +767,8 @@ function abrirFicha(placa) {
 
   htm('gaveta-corpo', `
     <div class="gaveta-acoes">
-      ${v.linkTomb ? `<a class="btn" href="${escAttr(v.linkTomb)}" target="_blank" rel="noopener">${icoPdf()} Termo de tombamento</a>` : `<button class="btn" disabled>${icoPdf()} Sem tombamento</button>`}
-      ${v.linkCrlv ? `<a class="btn" href="${escAttr(v.linkCrlv)}" target="_blank" rel="noopener">${icoDoc()} CRLV</a>` : `<button class="btn" disabled>${icoDoc()} Sem CRLV</button>`}
+      ${v.linkTomb ? `<a class="btn" href="${escAttr(v.linkTomb)}" target="_blank" rel="noopener" title="${escAttr(dataDoArquivo(v.linkTomb) ? 'Arquivo de ' + dataDoArquivo(v.linkTomb) : '')}">${icoPdf()} Termo de tombamento${dataDoArquivo(v.linkTomb) ? ` <small class="btn-data">${esc(dataDoArquivo(v.linkTomb))}</small>` : ''}</a>` : `<button class="btn" disabled>${icoPdf()} Sem tombamento</button>`}
+      ${v.linkCrlv ? `<a class="btn" href="${escAttr(v.linkCrlv)}" target="_blank" rel="noopener" title="${escAttr(dataDoArquivo(v.linkCrlv) ? 'Arquivo de ' + dataDoArquivo(v.linkCrlv) : '')}">${icoDoc()} CRLV${v.anoEx ? ' ' + esc(String(v.anoEx)) : ''}${dataDoArquivo(v.linkCrlv) ? ` <small class="btn-data">${esc(dataDoArquivo(v.linkCrlv))}</small>` : ''}</a>` : `<button class="btn" disabled>${icoDoc()} Sem CRLV</button>`}
       <button class="btn claro" onclick="copiar('${escAttr(v.placa)}')">Copiar placa</button>
       ${v.placaRes ? `<button class="btn claro" onclick="copiar('${escAttr(v.placaRes)}')">Copiar placa reservada</button>` : ''}
       <button class="btn claro" onclick="copiar('${escAttr(v.renavam)}')">Copiar Renavam</button>
@@ -3063,6 +3063,7 @@ function secaoDocumentosEdicao(v, porCampo) {
     const bloqueada = info && !info.editavel;
     return `<div class="doc-slot">
       <div class="doc-cab"><b>${esc(d.rotulo)}</b>${atual ? `<a class="pdf-link" href="${escAttr(atual)}" target="_blank" rel="noopener">${icoPdf()} abrir atual</a>` : '<span class="badge manutencao">sem arquivo</span>'}</div>
+      ${atual ? `<div class="foto-data">${esc(dataDoArquivo(atual) || 'data não disponível')}</div>` : ''}
       <div class="cartao-dica" style="margin:4px 0 8px">${esc(d.dica)}${info && info.motivo && info.motivo.indexOf('liberado') > 0 ? ' <span style="color:var(--ambar)">Coluna preenchida por script — o painel também grava aqui.</span>' : ''}</div>
       ${bloqueada ? `<div class="foto-data" title="${escAttr(info.motivo)}">coluna bloqueada por fórmula</div>` :
         `<div style="display:flex; gap:6px; flex-wrap:wrap">
@@ -5949,6 +5950,15 @@ function carregarPreventivaFicha(placa) {
     r => { if (!r || !r.ok) { caixa.textContent = (r && r.erro) || 'não consegui calcular'; return; } pinta(r.itens || []); },
     () => { caixa.textContent = 'não consegui calcular'; });
   if (run) run.preventivaDaViatura(ESTADO.token, placa);
+}
+
+
+/** Data do arquivo no Drive, pelo mesmo índice usado nas fotos. */
+function dataDoArquivo(link) {
+  const m = String(link || '').match(/[?&]id=([\w-]{10,})|\/d\/([\w-]{10,})/);
+  const id = m ? (m[1] || m[2]) : '';
+  if (!id) return '';
+  return (ESTADO.dados.datasFotos || {})[id] || '';
 }
 
 </script>

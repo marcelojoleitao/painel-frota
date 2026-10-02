@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.70.2';
+const CODIGO_VERSAO = '2.71.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -572,7 +572,11 @@ function _datasFotos_(veiculos) {
   const mapa = _cacheLer_(chave) || {};
   if (!veiculos) return mapa;
   const ids = [];
-  veiculos.forEach(v => ['FD', 'LE', 'TR', 'LD'].forEach(a => { const id = _idDrive_(v.fotos && v.fotos[a]); if (id && mapa[id] === undefined) ids.push(id); }));
+  veiculos.forEach(v => {
+    ['FD', 'LE', 'TR', 'LD'].forEach(a => { const id = _idDrive_(v.fotos && v.fotos[a]); if (id && mapa[id] === undefined) ids.push(id); });
+    // documentos também: a data de envio diz desde quando aquele CRLV ou termo está lá
+    [v.linkCrlv, v.linkTomb].forEach(link => { const id = _idDrive_(link); if (id && mapa[id] === undefined) ids.push(id); });
+  });
   if (!ids.length) return mapa;
   const t0 = Date.now(); let ok = 0;
   const temApi = (typeof Drive !== 'undefined' && Drive.Files && Drive.Files.get);
