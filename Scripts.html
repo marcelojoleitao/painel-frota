@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.81.1';
+const VERSAO_PAINEL = '2.81.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2285,6 +2285,8 @@ function desenharFila(c, r) {
       <div class="mini-tabela" style="max-height:520px"><table class="tabela-simples"><thead><tr><th>Status</th><th>Ação</th><th>Placa</th><th>Pedido em</th><th>Quem</th><th>Resultado</th><th>Detalhe</th></tr></thead><tbody>
       ${r.itens.map(i => `<tr class="linha" data-placa="${escAttr(i.placa)}"><td>${badge(i.status)}</td><td>${esc(i.acao)}</td><td style="font-family:var(--fonte-dados)"><b>${esc(i.placa)}</b></td><td style="white-space:nowrap">${esc(i.criado)}</td><td>${esc((i.quem || '').split('@')[0])}</td><td>${esc(i.resultado)}</td><td title="${escAttr(i.detalhe)}">${esc((i.detalhe || '').substring(0, 90))}</td></tr>`).join('') || '<tr><td colspan="7"><div class="vazio">Fila vazia</div></td></tr>'}</tbody></table></div>
     </div>`;
+
+  carregarAgentes();                  // depois de montar a tela, senão o cartão é apagado
   c.querySelectorAll('tr.linha').forEach(t => t.addEventListener('click', () => t.dataset.placa && abrirFicha(t.dataset.placa)));
   ajustarKpis();
   if (r.pendentes || r.executando) {
