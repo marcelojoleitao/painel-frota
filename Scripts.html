@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.81.0';
+const VERSAO_PAINEL = '2.81.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2246,7 +2246,6 @@ function enviarCrlvManual(placa, arquivo, statusEl) {
 
 /* ---------------- Fila do DETRAN ---------------- */
 function renderFila(c) {
-  setTimeout(carregarAgentes, 300);
   if (!ESTADO.fila) c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Lendo a fila…</div></div>';
   google.script.run
     .withSuccessHandler(r => {
