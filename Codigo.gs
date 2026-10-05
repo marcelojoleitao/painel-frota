@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.81.3';
+const CODIGO_VERSAO = '2.82.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -8455,6 +8455,100 @@ function _abaFila_(ss) {
     aba.setColumnWidth(11, 420);
   }
   return aba;
+}
+
+
+/**
+ * Agrupa os itens com erro da fila pelo motivo, separando o que é dado
+ * faltando (nunca vai funcionar enquanto o cadastro não for completado) do
+ * que é falha de execução (vale reenfileirar).
+ *     diagnosticarErrosFila()
+ */
+function diagnosticarErrosFila() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const aba = ss.getSheetByName(CONFIG.ABA_FILA);
+  if (!aba || aba.getLastRow() < 2) { Logger.log('Fila vazia.'); return; }
+  const valores = aba.getRange(2, 1, aba.getLastRow() - 1, 12).getValues();
+
+  const motivos = {};
+  const placasSemDado = {};
+  let total = 0;
+  valores.forEach(l => {
+    const status = _normCab_(l[8]);
+    if (status.indexOf('ERRO') !== 0) return;
+    total++;
+    const detalhe = String(l[10] || '').trim();
+    const placa = String(l[4] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    let motivo, categoria;
+    if (/sem CRV|CRV\/c[oó]digo|c[oó]digo de seguran/i.test(detalhe)) {
+      motivo = 'Sem CRV ou código de segurança na planilha'; categoria = 'dado';
+    } else if (/sem renavam|renavam/i.test(detalhe)) {
+      motivo = 'Sem Renavam na planilha'; categoria = 'dado';
+    } else if (/placa n[aã]o encontrada|linha da placa/i.test(detalhe)) {
+      motivo = 'Placa não encontrada na ConsultaBD'; categoria = 'dado';
+    } else if (/login|senha|succ|autentic/i.test(detalhe)) {
+      motivo = 'DETRAN recusou o login (placa e renavam não conferem)'; categoria = 'dado';
+    } else if (/timeout|ConnectionError|HTTPError|Max retries|getaddrinfo|SSL/i.test(detalhe)) {
+      motivo = 'Falha de conexão com o DETRAN'; categoria = 'execução';
+    } else if (/PDF|PdfReader|exerc[ií]cio/i.test(detalhe)) {
+      motivo = 'Problema ao ler o PDF do CRLV'; categoria = 'execução';
+    } else {
+      motivo = detalhe ? detalhe.substring(0, 70) : 'sem detalhe registrado'; categoria = 'outro';
+    }
+    const k = categoria + '|' + motivo;
+    if (!motivos[k]) motivos[k] = { categoria: categoria, motivo: motivo, qtd: 0, placas: [] };
+    motivos[k].qtd++;
+    if (motivos[k].placas.length < 40) motivos[k].placas.push(placa);
+    if (categoria === 'dado' && placa) placasSemDado[placa] = motivo;
+  });
+
+  Logger.log('=== ' + total + ' item(ns) com erro na fila ===');
+  const lista = Object.keys(motivos).map(k => motivos[k]).sort((a, b) => b.qtd - a.qtd);
+  ['dado', 'execução', 'outro'].forEach(cat => {
+    const doGrupo = lista.filter(x => x.categoria === cat);
+    if (!doGrupo.length) return;
+    const soma = doGrupo.reduce((t, x) => t + x.qtd, 0);
+    Logger.log('');
+    Logger.log('--- ' + (cat === 'dado' ? 'FALTA DADO NO CADASTRO (reenfileirar não resolve)'
+      : cat === 'execução' ? 'FALHA NA EXECUÇÃO (vale tentar de novo)'
+      : 'OUTROS MOTIVOS') + ': ' + soma + ' item(ns)');
+    doGrupo.forEach(x => {
+      Logger.log('   ' + x.qtd + 'x  ' + x.motivo);
+      Logger.log('        ' + x.placas.join(' '));
+    });
+  });
+
+  // quantas viaturas da frota estão sem CRV, independentemente da fila
+  try {
+    const base = ss.getSheetByName(CONFIG.ABA_BASE);
+    const cab = base.getRange(1, 1, 1, base.getLastColumn()).getValues()[0].map(c => String(c || '').trim());
+    const idx = _mapearCampos_(cab);
+    if (idx.crv !== undefined && idx.codCrv !== undefined) {
+      const linhas = base.getRange(2, 1, base.getLastRow() - 1, base.getLastColumn()).getValues();
+      let semCrv = 0, comCrlv = 0, ativas = 0;
+      const faltando = [];
+      linhas.forEach(l => {
+        const placa = String(l[idx.placa] || '').trim().toUpperCase();
+        if (!placa) return;
+        const status = _normCab_(idx.status !== undefined ? l[idx.status] : '');
+        if (/DESFAZ|BAIXAD|ALIENAD/.test(status)) return;
+        ativas++;
+        const crv = String(l[idx.crv] || '').trim(), cod = String(l[idx.codCrv] || '').trim();
+        if (crv && cod) return;
+        semCrv++;
+        if (idx.linkCrlv !== undefined && String(l[idx.linkCrlv] || '').trim()) comCrlv++;
+        if (faltando.length < 60) faltando.push(placa + (String(l[idx.linkCrlv] || '').trim() ? '*' : ''));
+      });
+      Logger.log('');
+      Logger.log('=== Cadastro da frota ===');
+      Logger.log('Viaturas ativas: ' + ativas + ' | sem CRV ou código: ' + semCrv +
+        ' | destas, com PDF de CRLV no Drive: ' + comCrlv);
+      Logger.log('(* = tem o PDF do CRLV guardado, então o dado pode ser extraído de lá)');
+      Logger.log(faltando.join(' '));
+      if (comCrlv) Logger.log('Dá para preencher ' + comCrlv + ' automaticamente lendo os CRLVs já guardados.');
+    }
+  } catch (e) { Logger.log('Conferência do cadastro: ' + e); }
+  return 'ok';
 }
 
 /** Agentes que executam a fila do DETRAN, com o último sinal de vida. */
