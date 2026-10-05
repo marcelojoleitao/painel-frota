@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.77.1';
+const CODIGO_VERSAO = '2.78.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3208,7 +3208,8 @@ function gerarRelatorioFrota(token, filtros) {
       uso: v.uso || '', familia: _familiaUso_(v.uso), disponibilidade: _disponibilidade_(v.status),
       status: v.status || '', conceito: v.conceito || v.notaFinal || '', nota: _num_(v.notaFinal) || 0,
       anoFab: v.anoFab || '', anoMod: v.anoMod || '', odometro: _num_(v.odometro) || 0,
-      kmAno: _num_(v.kmR) || 0, abastRecente: /SIM|^S$|\d/i.test(String(v.abast2m || '').trim()),
+      kmAno: _num_(v.kmR) || 0, custoManut: _num_(v.manutR) || 0, custoAbast: _num_(v.abastR) || 0,
+      custoKm: _num_(v.manutRsKm) || 0, abastRecente: /SIM|^S$|\d/i.test(String(v.abast2m || '').trim()),
       prop: v.prop || '', anoEx: v.anoEx || '', emDesf: v.emDesf || ''
     }));
 
@@ -3233,6 +3234,10 @@ function gerarRelatorioFrota(token, filtros) {
       if (v.nota) { u.somaNota += v.nota; u.comNota++; }
       if (/^D/i.test(String(v.conceito).trim())) u.conceitoD++;
       u.familias[v.familia] = (u.familias[v.familia] || 0) + 1;
+      u.km = (u.km || 0) + v.kmAno;
+      u.custoManut = (u.custoManut || 0) + v.custoManut;
+      u.custoAbast = (u.custoAbast || 0) + v.custoAbast;
+      u.odoSoma = (u.odoSoma || 0) + v.odometro;
       const ano = parseInt(String(v.anoFab).replace(/\D/g, ''), 10);
       if (ano > 1980) { u.idadeSoma += (new Date().getFullYear() - ano); u.idadeN++; }
     });
@@ -3241,6 +3246,11 @@ function gerarRelatorioFrota(token, filtros) {
       u.notaMedia = u.comNota ? Math.round(u.somaNota / u.comNota * 10) / 10 : 0;
       u.idadeMedia = u.idadeN ? Math.round(u.idadeSoma / u.idadeN * 10) / 10 : 0;
       u.aproveitamento = u.total ? Math.round(u.rodando / u.total * 100) : 0;
+      u.kmPorVtr = u.total ? Math.round(u.km / u.total) : 0;
+      u.odoMedio = u.total ? Math.round(u.odoSoma / u.total) : 0;
+      u.custoPorVtr = u.total ? Math.round(u.custoManut / u.total) : 0;
+      u.custoPorKm = u.km ? Math.round(u.custoManut / u.km * 100) / 100 : 0;
+      u.ociosas = u.disponiveis - u.rodando > 0 ? u.disponiveis - u.rodando : 0;
       return u;
     }).sort((a, b) => b.total - a.total);
 
@@ -3292,6 +3302,65 @@ function gerarRelatorioFrota(token, filtros) {
   } catch (e) {
     return { ok: false, erro: String(e.message || e) };
   }
+}
+
+
+/** Linhas do comparativo entre unidades, com realce do que foge da média. */
+function _linhasComparativo_(r) {
+  const u = r.unidades.slice().sort((a, b) => b.ociosas - a.ociosas || b.total - a.total);
+  const medio = campo => {
+    const vals = u.map(x => x[campo]).filter(v => v > 0);
+    return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : 0;
+  };
+  const mIdade = medio('idadeMedia'), mKm = medio('kmPorVtr'), mCusto = medio('custoPorKm');
+  const marca = (valor, media, maiorEhPior) => {
+    if (!valor || !media) return '';
+    const d = (valor / media - 1) * 100;
+    if (Math.abs(d) < 25) return '';
+    const ruim = maiorEhPior ? d > 0 : d < 0;
+    return '<small class="' + (ruim ? 'alerta' : '') + '">' + (d > 0 ? '+' : '') + Math.round(d) + '% vs média</small>';
+  };
+  return u.map(x =>
+    '<tr>' +
+    '<td class="forte">' + x.unidade + '</td>' +
+    '<td class="num">' + x.total + '</td>' +
+    '<td class="num ' + (x.ociosas >= 3 ? 'destaque' : '') + '">' + x.ociosas +
+      (x.total ? '<small>' + Math.round(x.ociosas / x.total * 100) + '% da unidade</small>' : '') + '</td>' +
+    '<td class="num">' + (x.idadeMedia || '—') + marca(x.idadeMedia, mIdade, true) + '</td>' +
+    '<td class="num">' + (x.odoMedio ? fmtIntServidor(x.odoMedio) : '—') + '</td>' +
+    '<td class="num">' + (x.kmPorVtr ? fmtIntServidor(x.kmPorVtr) : '—') + marca(x.kmPorVtr, mKm, false) + '</td>' +
+    '<td class="num">' + (x.custoManut ? _moedaBR_(x.custoManut) : '—') + '</td>' +
+    '<td class="num">' + (x.custoPorVtr ? _moedaBR_(x.custoPorVtr) : '—') + '</td>' +
+    '<td class="num">' + (x.custoPorKm ? _moedaBR_(x.custoPorKm) : '—') + marca(x.custoPorKm, mCusto, true) + '</td>' +
+    '<td class="num">' + (x.notaMedia || '—') + '</td>' +
+    '</tr>').join('');
+}
+
+/** Extremos que orientam a decisão: frota mais velha, mais rodada, mais cara. */
+function _destaquesComparativo_(r) {
+  const u = r.unidades.filter(x => x.total >= 2);
+  if (u.length < 2) return '';
+  const extremo = (campo, maior) => {
+    const lista = u.filter(x => x[campo] > 0).sort((a, b) => maior ? b[campo] - a[campo] : a[campo] - b[campo]);
+    return lista.length ? lista[0] : null;
+  };
+  const cartao = (titulo, unidade, valor, nota) => {
+    if (!unidade) return '';
+    return '<div class="cartao"><div class="rotulo">' + titulo + '</div>' +
+      '<div class="valor" style="font-size:12px">' + unidade.unidade + '</div>' +
+      '<div class="sub">' + valor + (nota ? ' • ' + nota : '') + '</div></div>';
+  };
+  const velha = extremo('idadeMedia', true), nova = extremo('idadeMedia', false);
+  const rodada = extremo('kmPorVtr', true), parada = extremo('kmPorVtr', false);
+  const cara = extremo('custoPorKm', true), ociosa = extremo('ociosas', true);
+  return '<div class="cartoes" style="margin-top:8px">' +
+    cartao('Frota mais antiga', velha, velha ? velha.idadeMedia + ' anos em média' : '', '') +
+    cartao('Frota mais recente', nova, nova ? nova.idadeMedia + ' anos em média' : '', '') +
+    cartao('Mais rodada', rodada, rodada ? fmtIntServidor(rodada.kmPorVtr) + ' km/ano por viatura' : '', '') +
+    cartao('Menos rodada', parada, parada ? fmtIntServidor(parada.kmPorVtr) + ' km/ano por viatura' : '', '') +
+    cartao('Maior custo por km', cara, cara ? _moedaBR_(cara.custoPorKm) + ' por km' : '', '') +
+    cartao('Mais viaturas ociosas', ociosa, ociosa ? ociosa.ociosas + ' disponíveis sem uso' : '', '') +
+    '</div>';
 }
 
 function _htmlRelatorioFrota_(r, sessao, filtrado) {
@@ -3379,6 +3448,7 @@ function _htmlRelatorioFrota_(r, sessao, filtrado) {
     '.preenche { height: 100%; }' +
     '.tag { display: inline-block; background: #E8EEFA; color: #0B2C5C; border-radius: 3px; padding: 1px 4px; font-size: 8px; margin: 1px 1px 0 0; }' +
     '.familias { font-size: 8.5px; color: #5A6376; }' +
+    '.destaque { background: #FFF6E5 !important; font-weight: bold; }' +
     '.rodape { margin-top: 10px; border-top: 1px solid #E3E8F0; padding-top: 5px; font-size: 8px; color: #5A6376; }' +
     '.quebra { page-break-before: always; }' +
     '</style></head><body>' +
@@ -3397,6 +3467,15 @@ function _htmlRelatorioFrota_(r, sessao, filtrado) {
     '<table><thead><tr><th>Família</th><th class="num">Viaturas</th><th class="num">Disponíveis</th>' +
     '<th class="num">Em uso</th><th class="num">Paradas</th><th class="num">Conceito</th><th>Usos que a compõem</th></tr></thead>' +
     '<tbody>' + linhasFamilias + '</tbody></table>' +
+
+    '<div class="quebra"></div><h2>Comparativo entre unidades — base para redistribuição</h2>' +
+    '<p style="font-size:9px; color:#5A6376; margin:2px 0 4px">Ordenado pelo número de viaturas ociosas: disponíveis que não registram uso recente. ' +
+    'Unidade com muitas ociosas e outra com poucas viaturas disponíveis são o par natural de remanejamento.</p>' +
+    '<table><thead><tr><th>Unidade</th><th class="num">Viaturas</th><th class="num">Ociosas</th>' +
+    '<th class="num">Idade média</th><th class="num">Odômetro médio</th><th class="num">Km/ano por viatura</th>' +
+    '<th class="num">Manutenção 12m</th><th class="num">Por viatura</th><th class="num">Custo por km</th>' +
+    '<th class="num">Conceito</th></tr></thead><tbody>' + _linhasComparativo_(r) + '</tbody></table>' +
+    _destaquesComparativo_(r) +
 
     (r.paradas.length ? '<div class="quebra"></div><h2>Disponíveis sem uso recente (' + r.paradas.length + ')</h2>' +
       '<p style="font-size:9px; color:#5A6376; margin:2px 0 4px">Viaturas em condição de uso que não registram abastecimento nos últimos dois meses — candidatas a remanejamento.</p>' +
