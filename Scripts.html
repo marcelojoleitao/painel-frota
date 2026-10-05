@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.80.0';
+const VERSAO_PAINEL = '2.80.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4676,6 +4676,11 @@ function desenharQuadro(c) {
         ${d.responsavel ? `<span class="dem-tag">${esc(d.responsavel)}</span>` : ''}
         ${d.prazo ? `<span class="dem-tag ${atrasada(d) ? 'venceu' : 'prazo'}">${esc(d.prazo)}</span>` : ''}
         ${d.sei ? `<span class="dem-tag sei" title="Processo SEI ${escAttr(d.sei)} — clique para copiar" onclick="event.stopPropagation(); copiarTexto('${escAttr(d.sei)}')">SEI ${esc(d.sei)}</span>` : ''}
+        ${(d.tarefas || []).length ? (() => {
+          const feitas = d.tarefas.filter(t => t.feita).length;
+          const venc = tarefasVencidas(d).length;
+          return `<span class="dem-tag tarefas ${venc ? 'venceu' : feitas === d.tarefas.length ? 'ok' : ''}" title="${escAttr(d.tarefas.map(t => (t.feita ? '✓ ' : '• ') + t.texto + (t.prazo ? ' (' + t.prazo + ')' : '')).join('\n'))}">☑ ${feitas}/${d.tarefas.length}${venc ? ' • ' + venc + ' vencida(s)' : ''}</span>`;
+        })() : ''}
       </div>
       ${d.descricao ? `<div class="dem-desc">${esc(d.descricao)}</div>` : ''}
       ${(() => {

@@ -805,24 +805,33 @@ table.tabela td.acoes { text-align: right; }
 .vtr-opcao small { margin-left: auto; color: var(--tinta-suave); font-size: 11px; }
 .dem-tag.modelo { background: rgba(20,24,31,.06); color: rgba(20,24,31,.66); font-weight: 600;
   max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dem-tag.tarefas { background: #E8F3EC; color: #1E7A4D; font-weight: 700; }
+.dem-tag.tarefas.ok { background: var(--verde); color: #fff; }
+.dem-tag.tarefas.venceu { background: var(--vermelho); color: #fff; }
 .dem-tag.sei { background: #E3F0F3; color: #14606E; font-family: var(--fonte-dados); cursor: pointer; }
 .dem-tag.sei:hover { background: #14606E; color: #fff; }
 .dem-tag.prazo { background: #E9F7EF; color: #1E7A4D; font-family: var(--fonte-dados); }
 .dem-tag.venceu { background: #FDECEA; color: #9A2F24; font-family: var(--fonte-dados); }
 .dem-desc { font-size: 11.5px; color: var(--tinta-suave); line-height: 1.35; max-height: 46px; overflow: hidden; }
 .tarefas { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
-.tarefa { display: flex; align-items: center; gap: 7px; background: #F6F8FC; border-radius: 6px; padding: 5px 8px; font-size: 12.5px; }
+.tarefa { display: grid; grid-template-columns: 18px 1fr auto auto 22px; align-items: center; gap: 8px;
+  background: #F6F8FC; border-radius: 6px; padding: 6px 8px; font-size: 12.5px; }
+/* o painel estica qualquer input; a caixa de marcação precisa manter o tamanho */
+.tarefa input[type="checkbox"] { width: 16px; height: 16px; min-width: 16px; flex: none; margin: 0; cursor: pointer; }
 .tarefa.feita .tarefa-texto { text-decoration: line-through; color: var(--tinta-suave); }
 .tarefa.atrasada { background: #FDECEA; }
-.tarefa-texto { flex: 1; }
-.tarefa-prazo { font-size: 11px; font-family: var(--fonte-dados); color: var(--tinta-suave); }
+.tarefa-texto { min-width: 0; overflow-wrap: anywhere; }
+.tarefa-prazo { font-size: 11px; font-family: var(--fonte-dados); color: var(--tinta-suave); white-space: nowrap; }
 .tarefa-prazo.venceu { color: var(--vermelho); font-weight: 700; }
-.tarefa-resp { font-size: 11px; color: var(--azul); background: #E8EEFA; border-radius: 8px; padding: 1px 7px; }
+.tarefa-resp { font-size: 11px; color: var(--azul); background: #E8EEFA; border-radius: 8px; padding: 1px 7px; white-space: nowrap; }
 .tarefa-x { border: 0; background: none; color: var(--tinta-suave); cursor: pointer; font-size: 15px; line-height: 1; }
 .tarefa-x:hover { color: var(--vermelho); }
 .tarefa-vazia { font-size: 11.5px; color: var(--tinta-suave); font-style: italic; padding: 4px 0; }
-.tarefa-nova { display: flex; gap: 6px; flex-wrap: wrap; }
-.tarefa-nova input { flex: 1; min-width: 120px; }
+.tarefa-nova { display: grid; grid-template-columns: 1fr 120px 140px auto; gap: 6px; align-items: center; }
+.tarefa-nova input { width: 100%; min-width: 0; }
+@media (max-width: 620px) { .tarefa-nova { grid-template-columns: 1fr; }
+  .tarefa { grid-template-columns: 18px 1fr 22px; }
+  .tarefa-prazo, .tarefa-resp { grid-column: 2; } }
 
 .dem-tarefas { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: 11px; color: var(--tinta-suave); }
 .dem-tarefas.alerta { color: var(--vermelho); font-weight: 600; }

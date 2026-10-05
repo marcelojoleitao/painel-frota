@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.80.0';
+const CODIGO_VERSAO = '2.80.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -7380,7 +7380,10 @@ function _abaDemandas_() {
     aba.getRange(1, 1, 1, DEMANDAS.cab.length).setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF');
     aba.setColumnWidth(6, 260); aba.setColumnWidth(7, 320); aba.setColumnWidth(13, 420);
   } else {
-    // abas criadas antes de um campo existir ganham a coluna, sem tocar no resto
+    // abas criadas antes de um campo existir ganham a coluna. É preciso alargar
+    // a grade primeiro: escrever além da última coluna existente dá erro.
+    const necessarias = DEMANDAS.cab.length;
+    if (aba.getMaxColumns() < necessarias) aba.insertColumnsAfter(aba.getMaxColumns(), necessarias - aba.getMaxColumns());
     [[14, 'Processo SEI'], [15, 'Tarefas']].forEach(c => {
       if (String(aba.getRange(1, c[0]).getValue() || '').trim() === '') {
         aba.getRange(1, c[0]).setValue(c[1])
