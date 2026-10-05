@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.78.0';
+const CODIGO_VERSAO = '2.79.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3210,7 +3210,21 @@ function gerarRelatorioFrota(token, filtros) {
       anoFab: v.anoFab || '', anoMod: v.anoMod || '', odometro: _num_(v.odometro) || 0,
       kmAno: _num_(v.kmR) || 0, custoManut: _num_(v.manutR) || 0, custoAbast: _num_(v.abastR) || 0,
       custoKm: _num_(v.manutRsKm) || 0, abastRecente: /SIM|^S$|\d/i.test(String(v.abast2m || '').trim()),
-      prop: v.prop || '', anoEx: v.anoEx || '', emDesf: v.emDesf || ''
+      prop: v.prop || '', anoEx: v.anoEx || '', emDesf: v.emDesf || '',
+      tipo: v.tipo || 'Não informado', especie: v.especie || '', categoria: v.categoria || '',
+      blindada: /SIM|BLINDAD/i.test(String(v.blind || '')) ? 'Blindada' : 'Não blindada',
+      carac: v.carac || '', comb: v.comb || '', marca: String(v.modelo || '').split(/[\/ ]/)[0] || '—',
+      faixaIdade: (() => {
+        const a = parseInt(String(v.anoFab).replace(/\D/g, ''), 10);
+        if (!a || a < 1980) return 'Sem ano';
+        const idade = new Date().getFullYear() - a;
+        return idade <= 2 ? 'Até 2 anos' : idade <= 5 ? '3 a 5 anos' : idade <= 8 ? '6 a 8 anos' : 'Mais de 8 anos';
+      })(),
+      faixaOdo: (() => {
+        const o = _num_(v.odometro) || 0;
+        if (!o) return 'Sem odômetro';
+        return o < 50000 ? 'Até 50 mil' : o < 100000 ? '50 a 100 mil' : o < 150000 ? '100 a 150 mil' : 'Acima de 150 mil';
+      })()
     }));
 
     const contar = (lista, chave) => {
@@ -3363,6 +3377,92 @@ function _destaquesComparativo_(r) {
     '</div>';
 }
 
+
+/** Quadro analítico de um agrupamento qualquer: conta, disponibilidade, uso e custo. */
+function _quadroAnalitico_(lista, chave, titulo, nota) {
+  const grupos = {};
+  lista.forEach(v => {
+    const k = v[chave] || 'Não informado';
+    const g = grupos[k] || (grupos[k] = { chave: k, total: 0, disponiveis: 0, manutencao: 0, desfazimento: 0,
+      rodando: 0, km: 0, custo: 0, somaNota: 0, comNota: 0, idadeSoma: 0, idadeN: 0, odoSoma: 0, odoN: 0 });
+    g.total++;
+    if (v.disponibilidade === 'Disponível') g.disponiveis++;
+    else if (v.disponibilidade === 'Em manutenção') g.manutencao++;
+    else if (v.disponibilidade === 'Em desfazimento') g.desfazimento++;
+    if (v.abastRecente) g.rodando++;
+    g.km += v.kmAno; g.custo += v.custoManut;
+    if (v.nota) { g.somaNota += v.nota; g.comNota++; }
+    if (v.odometro) { g.odoSoma += v.odometro; g.odoN++; }
+    const ano = parseInt(String(v.anoFab).replace(/\D/g, ''), 10);
+    if (ano > 1980) { g.idadeSoma += (new Date().getFullYear() - ano); g.idadeN++; }
+  });
+  const linhas = Object.keys(grupos).map(k => grupos[k]).sort((a, b) => b.total - a.total);
+  if (!linhas.length) return '';
+  const total = lista.length;
+  const corpo = linhas.map(g => {
+    const aprov = g.total ? Math.round(g.rodando / g.total * 100) : 0;
+    return '<tr>' +
+      '<td class="forte">' + g.chave + '</td>' +
+      '<td class="num">' + g.total + '<small>' + (total ? Math.round(g.total / total * 100) : 0) + '%</small></td>' +
+      '<td class="num">' + g.disponiveis + '</td>' +
+      '<td class="num">' + g.manutencao + '</td>' +
+      '<td class="num">' + g.desfazimento + '</td>' +
+      '<td class="num">' + g.rodando +
+        '<div class="barra"><div class="preenche" style="width:' + aprov + '%; background:' +
+        (aprov >= 70 ? '#1E7A4D' : aprov >= 40 ? '#C58B00' : '#9A2F24') + '"></div></div><small>' + aprov + '% em uso</small></td>' +
+      '<td class="num">' + (g.idadeN ? Math.round(g.idadeSoma / g.idadeN * 10) / 10 : '—') + '</td>' +
+      '<td class="num">' + (g.odoN ? fmtIntServidor(Math.round(g.odoSoma / g.odoN)) : '—') + '</td>' +
+      '<td class="num">' + (g.km ? fmtIntServidor(Math.round(g.km / g.total)) : '—') + '</td>' +
+      '<td class="num">' + (g.custo ? _moedaBR_(g.custo) : '—') + '</td>' +
+      '<td class="num">' + (g.km && g.custo ? _moedaBR_(Math.round(g.custo / g.km * 100) / 100) : '—') + '</td>' +
+      '<td class="num">' + (g.comNota ? Math.round(g.somaNota / g.comNota * 10) / 10 : '—') + '</td>' +
+      '</tr>';
+  }).join('');
+  return '<h2>' + titulo + '</h2>' +
+    (nota ? '<p style="font-size:9px; color:#5A6376; margin:2px 0 4px">' + nota + '</p>' : '') +
+    '<table><thead><tr><th>' + titulo.replace(/^Por /, '') + '</th><th class="num">Viaturas</th><th class="num">Disp.</th>' +
+    '<th class="num">Manut.</th><th class="num">Desfaz.</th><th class="num">Em uso</th><th class="num">Idade</th>' +
+    '<th class="num">Odômetro médio</th><th class="num">Km/ano médio</th><th class="num">Manutenção 12m</th>' +
+    '<th class="num">Custo/km</th><th class="num">Conceito</th></tr></thead><tbody>' + corpo + '</tbody></table>';
+}
+
+/** Detalhamento analítico de cada unidade, com os cortes que a gestão usa. */
+function _analiticoPorUnidade_(dados, unidades) {
+  return unidades.map(u => {
+    const lista = dados.filter(v => v.unidade === u.unidade);
+    if (!lista.length) return '';
+    const blindadas = lista.filter(v => v.blindada === 'Blindada').length;
+    return '<div class="quebra"></div>' +
+      '<h2>' + u.unidade + ' — análise detalhada</h2>' +
+      '<div class="cartoes">' +
+        '<div class="cartao"><div class="rotulo">Viaturas</div><div class="valor">' + u.total + '</div><div class="sub">' + u.disponiveis + ' disponíveis</div></div>' +
+        '<div class="cartao"><div class="rotulo">Em uso recente</div><div class="valor">' + u.rodando + '</div><div class="sub">' + u.aproveitamento + '% da unidade</div></div>' +
+        '<div class="cartao"><div class="rotulo">Ociosas</div><div class="valor">' + u.ociosas + '</div><div class="sub">disponíveis sem uso</div></div>' +
+        '<div class="cartao"><div class="rotulo">Blindadas</div><div class="valor">' + blindadas + '</div><div class="sub">de ' + u.total + '</div></div>' +
+        '<div class="cartao"><div class="rotulo">Idade média</div><div class="valor">' + (u.idadeMedia || '—') + '</div><div class="sub">anos</div></div>' +
+        '<div class="cartao"><div class="rotulo">Custo por km</div><div class="valor" style="font-size:13px">' + (u.custoPorKm ? _moedaBR_(u.custoPorKm) : '—') + '</div><div class="sub">manutenção 12m</div></div>' +
+      '</div>' +
+      _quadroAnalitico_(lista, 'tipo', 'Por tipo de viatura', '') +
+      _quadroAnalitico_(lista, 'familia', 'Por família de uso SIPAC', '') +
+      _quadroAnalitico_(lista, 'blindada', 'Por blindagem', '') +
+      _quadroAnalitico_(lista, 'faixaIdade', 'Por faixa de idade', '') +
+      '<h2>Viaturas da unidade</h2>' +
+      '<table><thead><tr><th>Placa</th><th>Modelo</th><th>Tipo</th><th>Uso SIPAC</th><th>Blindagem</th>' +
+      '<th>Situação</th><th class="num">Ano</th><th class="num">Odômetro</th><th class="num">Km/ano</th>' +
+      '<th class="num">Manut. 12m</th><th class="num">Conceito</th><th>Uso recente</th></tr></thead><tbody>' +
+      lista.sort((a, b) => a.placa.localeCompare(b.placa)).map(v =>
+        '<tr><td class="mono">' + v.placa + '</td><td>' + v.modelo + '</td><td>' + v.tipo + '</td>' +
+        '<td>' + (v.uso || '—') + '</td><td>' + (v.blindada === 'Blindada' ? '<b>Blindada</b>' : '—') + '</td>' +
+        '<td>' + v.disponibilidade + '</td><td class="num">' + (v.anoFab || '—') + '</td>' +
+        '<td class="num">' + (v.odometro ? fmtIntServidor(v.odometro) : '—') + '</td>' +
+        '<td class="num">' + (v.kmAno ? fmtIntServidor(v.kmAno) : '—') + '</td>' +
+        '<td class="num">' + (v.custoManut ? _moedaBR_(v.custoManut) : '—') + '</td>' +
+        '<td class="num">' + (v.conceito || '—') + '</td>' +
+        '<td>' + (v.abastRecente ? 'sim' : '<b class="nao-usa">não</b>') + '</td></tr>').join('') +
+      '</tbody></table>';
+  }).join('');
+}
+
 function _htmlRelatorioFrota_(r, sessao, filtrado) {
   const n = v => fmtIntServidor(v);
   const pct = (parte, total) => total ? Math.round(parte / total * 100) : 0;
@@ -3449,6 +3549,7 @@ function _htmlRelatorioFrota_(r, sessao, filtrado) {
     '.tag { display: inline-block; background: #E8EEFA; color: #0B2C5C; border-radius: 3px; padding: 1px 4px; font-size: 8px; margin: 1px 1px 0 0; }' +
     '.familias { font-size: 8.5px; color: #5A6376; }' +
     '.destaque { background: #FFF6E5 !important; font-weight: bold; }' +
+    '.nao-usa { color: #9A2F24; }' +
     '.rodape { margin-top: 10px; border-top: 1px solid #E3E8F0; padding-top: 5px; font-size: 8px; color: #5A6376; }' +
     '.quebra { page-break-before: always; }' +
     '</style></head><body>' +
@@ -3462,6 +3563,13 @@ function _htmlRelatorioFrota_(r, sessao, filtrado) {
     '<th class="num">Manutenção</th><th class="num">Desfazimento</th><th class="num">Em uso recente</th>' +
     '<th class="num">Conceito</th><th class="num">Idade</th><th>Composição por uso</th></tr></thead>' +
     '<tbody>' + linhasUnidades + '</tbody></table>' +
+
+    '<div class="quebra"></div><h2>Visão analítica da frota</h2>' +
+    _quadroAnalitico_(r.dados, 'tipo', 'Por tipo de viatura', 'Tipo registrado no cadastro — distingue automóvel, camionete, motocicleta, caminhão e demais.') +
+    _quadroAnalitico_(r.dados, 'blindada', 'Por blindagem', 'Viaturas blindadas exigem tratamento próprio de manutenção e têm custo e peso diferentes.') +
+    _quadroAnalitico_(r.dados, 'faixaIdade', 'Por faixa de idade', 'Os limites de 6 anos para leves e 3 anos para motocicletas constam do art. 17 da IN PRF 40/2021.') +
+    _quadroAnalitico_(r.dados, 'faixaOdo', 'Por faixa de quilometragem', 'O art. 17 fixa 150 mil km para passeio, 210 mil para utilitários e 20 mil para motocicletas.') +
+    _quadroAnalitico_(r.dados, 'marca', 'Por marca', '') +
 
     '<h2>Por família de uso SIPAC</h2>' +
     '<table><thead><tr><th>Família</th><th class="num">Viaturas</th><th class="num">Disponíveis</th>' +
@@ -3487,7 +3595,9 @@ function _htmlRelatorioFrota_(r, sessao, filtrado) {
       '<table><thead><tr><th>Placa</th><th>Modelo</th><th>Unidade</th><th>Conceito</th><th class="num">Nota</th>' +
       '<th>Ano</th><th class="num">Odômetro</th></tr></thead><tbody>' + linhasConceito + '</tbody></table>' : '') +
 
-    '<div class="rodape">Fonte: ConsultaBD (cadastro, status e uso SIPAC), aba PGF (conceito e nota) e AbastBD (uso recente). ' +
+    _analiticoPorUnidade_(r.dados, r.unidades) +
+
+    '<div class="rodape">Fonte: ConsultaBD (cadastro, status e uso SIPAC), aba PGF (conceito e nota), AbastBD (uso recente) e ManutBD (custo de manutenção dos últimos 12 meses). ' +
     'Disponibilidade e família de uso são agrupamentos do painel a partir do status e do uso SIPAC registrados.</div>' +
     '</body></html>';
 }
