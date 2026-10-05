@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.82.0';
+const CODIGO_VERSAO = '2.83.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -8458,6 +8458,56 @@ function _abaFila_(ss) {
 }
 
 
+
+/**
+ * Limpa da fila os erros que já não refletem a realidade: linhas antigas cuja
+ * placa hoje tem o dado preenchido, e repetições do mesmo pedido. Mantém o que
+ * ainda é pendência de verdade.
+ */
+function limparErrosResolvidos(token) {
+  const p = _prepararAcao_(token || '');
+  if (token && p.erroPadrao) return p.erroPadrao;
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const aba = ss.getSheetByName(CONFIG.ABA_FILA);
+  if (!aba || aba.getLastRow() < 2) { Logger.log('Fila vazia.'); return { ok: true, removidas: 0 }; }
+
+  // quem hoje tem CRV e código na ConsultaBD
+  const base = ss.getSheetByName(CONFIG.ABA_BASE);
+  const cab = base.getRange(1, 1, 1, base.getLastColumn()).getValues()[0].map(c => String(c || '').trim());
+  const idx = _mapearCampos_(cab);
+  const temDado = {};
+  base.getRange(2, 1, base.getLastRow() - 1, base.getLastColumn()).getValues().forEach(l => {
+    const placa = String(l[idx.placa] || '').trim().toUpperCase();
+    if (!placa) return;
+    const crv = idx.crv !== undefined ? String(l[idx.crv] || '').trim() : '';
+    const cod = idx.codCrv !== undefined ? String(l[idx.codCrv] || '').trim() : '';
+    temDado[placa] = !!(crv && cod);
+  });
+
+  const valores = aba.getRange(2, 1, aba.getLastRow() - 1, 12).getValues();
+  const remover = [];
+  const vistos = {};
+  for (let i = valores.length - 1; i >= 0; i--) {         // de baixo para cima: mantém o mais recente
+    const l = valores[i];
+    const status = _normCab_(l[8]);
+    if (status.indexOf('ERRO') !== 0 && status.indexOf('SEM DADOS') !== 0) continue;
+    const placa = String(l[4] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const acao = String(l[3] || '').trim();
+    const detalhe = String(l[10] || '');
+    const chave = placa + '|' + acao;
+
+    if (/CRV|c[oó]digo de seguran/i.test(detalhe) && temDado[placa]) { remover.push(i + 2); continue; }
+    if (vistos[chave]) { remover.push(i + 2); continue; }   // repetição do mesmo pedido
+    vistos[chave] = true;
+  }
+  remover.sort((a, b) => b - a).forEach(linha => aba.deleteRow(linha));
+  SpreadsheetApp.flush();
+  limparCache();
+  Logger.log(remover.length + ' linha(s) removida(s) da fila: erros já resolvidos ou repetidos.');
+  Logger.log('Permanecem os que ainda refletem pendência real.');
+  return { ok: true, removidas: remover.length };
+}
+
 /**
  * Agrupa os itens com erro da fila pelo motivo, separando o que é dado
  * faltando (nunca vai funcionar enquanto o cadastro não for completado) do
@@ -8581,13 +8631,14 @@ function lerAgentes(token) {
           total: _num_(l[4]) || 0, obs: String(l[5] || '').trim() });
       });
     }
-    const fila = { pendentes: 0, executando: 0, erro: 0, concluidos: 0 };
+    const fila = { pendentes: 0, executando: 0, erro: 0, semDados: 0, concluidos: 0 };
     const abaFila = ss.getSheetByName(CONFIG.ABA_FILA);
     if (abaFila && abaFila.getLastRow() > 1) {
       abaFila.getRange(2, 9, abaFila.getLastRow() - 1, 1).getValues().forEach(l => {
         const st = _normCab_(l[0]);
         if (st.indexOf('PENDENTE') === 0) fila.pendentes++;
         else if (st.indexOf('EXECUTANDO') === 0) fila.executando++;
+        else if (st.indexOf('SEM DADOS') === 0) fila.semDados++;
         else if (st.indexOf('ERRO') === 0) fila.erro++;
         else if (st.indexOf('CONCLU') === 0) fila.concluidos++;
       });

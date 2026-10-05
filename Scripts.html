@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.82.0';
+const VERSAO_PAINEL = '2.83.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2259,7 +2259,8 @@ function renderFila(c) {
 }
 
 function desenharFila(c, r) {
-  const badge = st => st === 'PENDENTE' ? '<span class="badge manutencao">pendente</span>'
+  const badge = st => /SEM DADOS/i.test(st) ? '<span class="badge neutro" title="O cadastro não tem o dado necessário: repetir não resolve">sem dados</span>'
+    : st === 'PENDENTE' ? '<span class="badge manutencao">pendente</span>'
     : st === 'EXECUTANDO' ? '<span class="badge cedido">executando</span>'
     : st === 'ERRO' ? '<span class="badge indisponivel">erro</span>'
     : '<span class="badge disponivel">concluído</span>';
@@ -6201,7 +6202,7 @@ function carregarAgentes() {
         <div class="agentes-linha">
           <span class="agente-farol ${r.algumAtivo ? 'vivo' : 'morto'}"></span>
           <b>${r.algumAtivo ? 'Fila sendo executada' : 'Nenhum agente ativo'}</b>
-          <span class="vinculo">${f.pendentes} pendente(s)${f.executando ? ' • ' + f.executando + ' em execução' : ''}${f.erro ? ' • ' + f.erro + ' com erro' : ''}</span>
+          <span class="vinculo">${f.pendentes} pendente(s)${f.executando ? ' • ' + f.executando + ' em execução' : ''}${f.erro ? ' • ' + f.erro + ' com erro' : ''}${f.semDados ? ' • ' + f.semDados + ' sem dados no cadastro' : ''}</span>
           <button class="link-btn" onclick="carregarAgentes()">atualizar</button>
         </div>
         ${r.agentes.length ? `<div class="agentes-lista">${r.agentes.map(a => `
