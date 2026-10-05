@@ -810,6 +810,29 @@ table.tabela td.acoes { text-align: right; }
 .dem-tag.prazo { background: #E9F7EF; color: #1E7A4D; font-family: var(--fonte-dados); }
 .dem-tag.venceu { background: #FDECEA; color: #9A2F24; font-family: var(--fonte-dados); }
 .dem-desc { font-size: 11.5px; color: var(--tinta-suave); line-height: 1.35; max-height: 46px; overflow: hidden; }
+.tarefas { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+.tarefa { display: flex; align-items: center; gap: 7px; background: #F6F8FC; border-radius: 6px; padding: 5px 8px; font-size: 12.5px; }
+.tarefa.feita .tarefa-texto { text-decoration: line-through; color: var(--tinta-suave); }
+.tarefa.atrasada { background: #FDECEA; }
+.tarefa-texto { flex: 1; }
+.tarefa-prazo { font-size: 11px; font-family: var(--fonte-dados); color: var(--tinta-suave); }
+.tarefa-prazo.venceu { color: var(--vermelho); font-weight: 700; }
+.tarefa-resp { font-size: 11px; color: var(--azul); background: #E8EEFA; border-radius: 8px; padding: 1px 7px; }
+.tarefa-x { border: 0; background: none; color: var(--tinta-suave); cursor: pointer; font-size: 15px; line-height: 1; }
+.tarefa-x:hover { color: var(--vermelho); }
+.tarefa-vazia { font-size: 11.5px; color: var(--tinta-suave); font-style: italic; padding: 4px 0; }
+.tarefa-nova { display: flex; gap: 6px; flex-wrap: wrap; }
+.tarefa-nova input { flex: 1; min-width: 120px; }
+
+.dem-tarefas { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: 11px; color: var(--tinta-suave); }
+.dem-tarefas.alerta { color: var(--vermelho); font-weight: 600; }
+.dem-tar-prog { font-weight: 700; }
+.dem-tar-barra { flex: 1; min-width: 50px; height: 5px; background: #E3E8F0; border-radius: 3px; overflow: hidden; }
+.dem-tar-barra span { display: block; height: 100%; background: var(--verde); }
+.dem-tarefas.alerta .dem-tar-barra span { background: var(--vermelho); }
+.dem-tar-venc { color: var(--vermelho); font-weight: 700; }
+.dem-tar-prox { font-size: 10.5px; }
+
 .dem-nota { margin-top: 6px; padding: 5px 7px; background: rgba(11,44,92,.05); border-left: 2px solid var(--azul-claro);
   border-radius: 0 5px 5px 0; font-size: 11.5px; line-height: 1.35; display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; }
 .dem-nota-quem { font-weight: 700; color: var(--azul); }

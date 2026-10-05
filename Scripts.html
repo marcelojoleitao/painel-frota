@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.79.0';
+const VERSAO_PAINEL = '2.80.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4660,7 +4660,7 @@ function desenharQuadro(c) {
   const cartao = d => {
     const placas = d.placas && d.placas.length ? d.placas : (d.placa ? [d.placa] : []);
     const unica = placas.length === 1 ? viaturaDaMulta(placas[0]) : null;
-    return `<article class="demanda ${d.prioridade === 'Urgente' ? 'urgente' : d.prioridade === 'Alta' ? 'alta' : ''} ${atrasada(d) ? 'atrasada' : ''}"
+    return `<article class="demanda ${d.prioridade === 'Urgente' ? 'urgente' : d.prioridade === 'Alta' ? 'alta' : ''} ${(atrasada(d) || tarefasVencidas(d).length) ? 'atrasada' : ''}"
         draggable="true" data-id="${escAttr(d.id)}">
       <div class="dem-titulo">${esc(d.titulo)}</div>
       <div class="dem-meta">
@@ -4678,6 +4678,20 @@ function desenharQuadro(c) {
         ${d.sei ? `<span class="dem-tag sei" title="Processo SEI ${escAttr(d.sei)} — clique para copiar" onclick="event.stopPropagation(); copiarTexto('${escAttr(d.sei)}')">SEI ${esc(d.sei)}</span>` : ''}
       </div>
       ${d.descricao ? `<div class="dem-desc">${esc(d.descricao)}</div>` : ''}
+      ${(() => {
+        const tar = d.tarefas || [];
+        if (!tar.length) return '';
+        const feitas = tar.filter(t => t.feita).length;
+        const vencidas = tarefasVencidas(d).length;
+        const proxima = tarefasPendentes(d).filter(t => t.prazo).sort((a, b) =>
+          chaveData(a.prazo).localeCompare(chaveData(b.prazo)))[0];
+        return `<div class="dem-tarefas ${vencidas ? 'alerta' : ''}">
+          <span class="dem-tar-prog">${feitas}/${tar.length} tarefa(s)</span>
+          <span class="dem-tar-barra"><span style="width:${Math.round(feitas / tar.length * 100)}%"></span></span>
+          ${vencidas ? `<span class="dem-tar-venc">${vencidas} vencida(s)</span>`
+            : proxima ? `<span class="dem-tar-prox">próxima: ${esc(proxima.texto.substring(0, 28))} • ${esc(proxima.prazo)}</span>` : ''}
+        </div>`;
+      })()}
       ${(() => {
         // última anotação: o histórico vem como "dd/mm/aaaa hh:mm • email: texto"
         const ultima = d.anotacoes.length ? d.anotacoes[d.anotacoes.length - 1] : '';
@@ -4701,6 +4715,12 @@ function desenharQuadro(c) {
       ${kpi('Com prazo vencido', vencidas.length, 'precisam de atenção', vencidas.length ? 'vermelho' : 'verde', null, true)}
       ${kpi('Ligadas a viaturas', todas.filter(d => (d.placas || []).length || d.placa).length, placas.length + ' viatura(s)', '', null, true)}
       ${kpi('Gerais da frota', todas.filter(d => !((d.placas || []).length || d.placa)).length, 'sem viatura específica', '', null, true)}
+      ${(() => {
+        const comTarefa = todas.filter(d => tarefasVencidas(d).length);
+        const pend = todas.reduce((t, d) => t + tarefasPendentes(d).length, 0);
+        return kpi('Tarefas vencidas', comTarefa.reduce((t, d) => t + tarefasVencidas(d).length, 0),
+          pend + ' pendente(s) no total', comTarefa.length ? 'vermelho' : 'verde', null, true);
+      })()}
       ${kpi('Concluídas', todas.filter(d => /conclu/i.test(d.fase)).length, 'no quadro', 'verde', null, true)}
     </div>
 
@@ -4797,6 +4817,15 @@ function abrirDemanda(id) {
     secao('Demanda', `<div class="form-grade">
       <div class="form-campo largo"><label>Título</label><input type="text" id="dem-titulo" value="${escAttr(d ? d.titulo : '')}"></div>
       <div class="form-campo largo"><label>Descrição</label><textarea id="dem-desc" rows="3">${esc(d ? d.descricao : '')}</textarea></div>
+      <div class="form-campo largo"><label>Tarefas</label>
+        <div id="dem-tarefas" class="tarefas"></div>
+        <div class="tarefa-nova">
+          <input type="text" id="tar-texto" placeholder="o que precisa ser feito">
+          <input type="text" id="tar-prazo" placeholder="dd/mm/aaaa" style="max-width:120px">
+          <input type="text" id="tar-resp" placeholder="responsável" style="max-width:140px">
+          <button type="button" class="btn claro" id="tar-add">+ Acrescentar</button>
+        </div>
+      </div>
       <div class="form-campo largo"><label>Viaturas (vazio = geral da frota)</label>
         <div class="seletor-vtr" id="dem-vtr">
           <div class="vtr-chips" id="dem-chips"></div>
@@ -4845,11 +4874,23 @@ function abrirDemanda(id) {
   cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
   document.body.style.overflow = 'hidden';
   montarSeletorViaturas('dem-placa', 'dem-chips', 'dem-busca-vtr', 'dem-lista-vtr');
+  ESTADO.tarefasEdicao = (d && d.tarefas ? d.tarefas.map(t => ({ ...t })) : []);
+  desenharTarefas();
+  ouvir('tar-add', 'click', () => {
+    const texto = val('tar-texto').trim();
+    if (!texto) { toast('Escreva a tarefa.'); return; }
+    ESTADO.tarefasEdicao.push({ feita: false, texto: texto, prazo: val('tar-prazo').trim(), responsavel: val('tar-resp').trim() });
+    ['tar-texto', 'tar-prazo', 'tar-resp'].forEach(id => { const e = el(id); if (e) e.value = ''; });
+    desenharTarefas();
+    const foco = el('tar-texto'); if (foco) foco.focus();
+  });
+  const campoTarefa = el('tar-texto');
+  if (campoTarefa) campoTarefa.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const b = el('tar-add'); if (b) b.click(); } });
 
   ouvir('btn-salvar-dem', 'click', () => {
     const campos = { titulo: val('dem-titulo'), descricao: (el('dem-desc') || {}).value || '',
       placa: val('dem-placa').toUpperCase(), fase: val('dem-fase'), prioridade: val('dem-prio'),
-      responsavel: val('dem-resp'), prazo: val('dem-prazo'), sei: val('dem-sei') };
+      responsavel: val('dem-resp'), prazo: val('dem-prazo'), sei: val('dem-sei'), tarefas: ESTADO.tarefasEdicao || [] };
     if (!campos.titulo.trim()) { toast('Informe o título.'); return; }
     const btn = el('btn-salvar-dem'); btn.disabled = true; btn.textContent = 'Gravando…';
     const run = servidor('salvarDemanda',
@@ -6089,6 +6130,50 @@ function gerarRelatorioFrotaPdf() {
     },
     e => { if (btn) { btn.disabled = false; btn.textContent = '📄 Relatório PDF'; } toast('Erro: ' + (e && e.message ? e.message : e), true); });
   if (run) run.gerarRelatorioFrota(ESTADO.token, parcial ? { placas: selecao } : {});
+}
+
+
+/** Lista de tarefas da demanda em edição. */
+function desenharTarefas() {
+  const caixa = el('dem-tarefas'); if (!caixa) return;
+  const lista = ESTADO.tarefasEdicao || [];
+  if (!lista.length) { caixa.innerHTML = '<div class="tarefa-vazia">Nenhuma tarefa — use o campo abaixo para acrescentar etapas desta demanda.</div>'; return; }
+  caixa.innerHTML = lista.map((t, i) => {
+    const atraso = prazoVencido(t.prazo) && !t.feita;
+    return `<div class="tarefa ${t.feita ? 'feita' : ''} ${atraso ? 'atrasada' : ''}">
+      <input type="checkbox" data-tar="${i}" ${t.feita ? 'checked' : ''} title="marcar como realizada">
+      <span class="tarefa-texto">${esc(t.texto)}</span>
+      ${t.prazo ? `<span class="tarefa-prazo ${atraso ? 'venceu' : ''}">${esc(t.prazo)}${atraso ? ' • vencida' : ''}</span>` : ''}
+      ${t.responsavel ? `<span class="tarefa-resp">${esc(t.responsavel)}</span>` : ''}
+      <button type="button" class="tarefa-x" data-tarx="${i}" title="remover">×</button>
+    </div>`;
+  }).join('');
+  caixa.querySelectorAll('input[data-tar]').forEach(c => c.addEventListener('change', () => {
+    ESTADO.tarefasEdicao[Number(c.dataset.tar)].feita = c.checked;
+    desenharTarefas();
+  }));
+  caixa.querySelectorAll('button[data-tarx]').forEach(b => b.addEventListener('click', () => {
+    ESTADO.tarefasEdicao.splice(Number(b.dataset.tarx), 1);
+    desenharTarefas();
+  }));
+}
+
+/** Prazo em formato dd/mm/aaaa já vencido? */
+function prazoVencido(prazo) {
+  const m = String(prazo || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return false;
+  const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  return d < hoje;
+}
+
+/** Tarefas pendentes de uma demanda, para contadores e alertas. */
+function tarefasPendentes(d) {
+  return (d.tarefas || []).filter(t => !t.feita);
+}
+
+function tarefasVencidas(d) {
+  return tarefasPendentes(d).filter(t => prazoVencido(t.prazo));
 }
 
 </script>

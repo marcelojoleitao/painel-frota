@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.79.0';
+const CODIGO_VERSAO = '2.80.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -7323,7 +7323,7 @@ const DEMANDAS = {
   fases: ['Caixa de entrada', 'Em resolução', 'Concluído'],
   prioridades: ['Normal', 'Alta', 'Urgente'],
   cab: ['ID', 'Criada em', 'Criada por', 'Fase', 'Prioridade', 'Título', 'Descrição', 'Placa',
-        'Responsável', 'Prazo', 'Atualizada em', 'Concluída em', 'Anotações', 'Processo SEI']
+        'Responsável', 'Prazo', 'Atualizada em', 'Concluída em', 'Anotações', 'Processo SEI', 'Tarefas']
 };
 
 /** Número do processo SEI no formato oficial (00000.000000/0000-00). */
@@ -7333,6 +7333,33 @@ function _seiLimpo_(v) {
   const d = t.replace(/\D/g, '');
   if (d.length === 17) return d.substring(0, 5) + '.' + d.substring(5, 11) + '/' + d.substring(11, 15) + '-' + d.substring(15);
   return t;                                  // formato diferente fica como digitado
+}
+
+/**
+ * Tarefas de uma demanda. Guardadas numa única célula, uma por linha, no
+ * formato  [x] texto | prazo | responsável  — legível também na planilha.
+ */
+function _tarefasDeTexto_(valor) {
+  return String(valor === null || valor === undefined ? '' : valor)
+    .split('\n')
+    .map(l => String(l).trim())
+    .filter(l => l)
+    .map(l => {
+      const m = l.match(/^\[([ xX])\]\s*(.*)$/);
+      const feita = !!(m && /[xX]/.test(m[1]));
+      const resto = m ? m[2] : l;
+      const partes = resto.split('|').map(x => x.trim());
+      return { feita: feita, texto: partes[0] || '', prazo: partes[1] || '', responsavel: partes[2] || '' };
+    })
+    .filter(t => t.texto);
+}
+
+function _tarefasParaTexto_(tarefas) {
+  return (tarefas || []).filter(t => t && String(t.texto || '').trim()).map(t =>
+    '[' + (t.feita ? 'x' : ' ') + '] ' + String(t.texto).trim() +
+    (t.prazo ? ' | ' + _dataBR_(t.prazo) : '') +
+    (t.responsavel ? ' | ' + String(t.responsavel).trim() : '')
+  ).join('\n');
 }
 
 /** Placas de uma demanda: uma, várias separadas por vírgula, ou nenhuma. */
@@ -7352,10 +7379,14 @@ function _abaDemandas_() {
     aba.setFrozenRows(1);
     aba.getRange(1, 1, 1, DEMANDAS.cab.length).setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF');
     aba.setColumnWidth(6, 260); aba.setColumnWidth(7, 320); aba.setColumnWidth(13, 420);
-  } else if (String(aba.getRange(1, 14).getValue() || '').trim() === '') {
-    // aba criada antes do campo existir: acrescenta a coluna sem tocar no resto
-    aba.getRange(1, 14).setValue('Processo SEI')
-       .setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF');
+  } else {
+    // abas criadas antes de um campo existir ganham a coluna, sem tocar no resto
+    [[14, 'Processo SEI'], [15, 'Tarefas']].forEach(c => {
+      if (String(aba.getRange(1, c[0]).getValue() || '').trim() === '') {
+        aba.getRange(1, c[0]).setValue(c[1])
+           .setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF');
+      }
+    });
   }
   return aba;
 }
@@ -7388,7 +7419,8 @@ function lerDemandas(token) {
           responsavel: String(l[8] || ''), prazo: _dataBR_(l[9]),
           atualizadaEm: _dataTxt_(l[10]), concluidaEm: _dataTxt_(l[11]),
           anotacoes: String(l[12] || '').split('\n').filter(x => x.trim()),
-          sei: String(l[13] || '').trim()
+          sei: String(l[13] || '').trim(),
+          tarefas: _tarefasDeTexto_(l[14])
         });
       });
     }
@@ -7416,7 +7448,8 @@ function salvarDemanda(token, id, dados) {
         novoId, agora, p.sessao.email, dados.fase || DEMANDAS.fases[0], dados.prioridade || 'Normal',
         titulo, dados.descricao || '', _placasDaDemanda_(dados.placa).join(', '),
         dados.responsavel || '', _dataBR_(dados.prazo), agora, '',
-        agora + ' • ' + p.sessao.email + ': demanda criada', _seiLimpo_(dados.sei)
+        agora + ' • ' + p.sessao.email + ': demanda criada', _seiLimpo_(dados.sei),
+        _tarefasParaTexto_(dados.tarefas)
       ]]);
     } else {
       const atual = aba.getRange(linha, 1, 1, DEMANDAS.cab.length).getValues()[0];
@@ -7435,9 +7468,26 @@ function salvarDemanda(token, id, dados) {
       const resp = campo(8, dados.responsavel || '', 'responsável');
       const prazo = campo(9, _dataBR_(dados.prazo), 'prazo');
       const sei = campo(13, _seiLimpo_(dados.sei), 'processo SEI');
+      // as tarefas são gravadas por inteiro; o histórico registra o que mudou
+      let tarefasTxt = String(atual[14] || '');
+      if (dados.tarefas !== undefined) {
+        const novas = _tarefasParaTexto_(dados.tarefas);
+        if (novas !== tarefasTxt) {
+          const antes = _tarefasDeTexto_(tarefasTxt), depois = _tarefasDeTexto_(novas);
+          const feitas = depois.filter(t => t.feita && !antes.some(a => a.texto === t.texto && a.feita));
+          const criadas = depois.filter(t => !antes.some(a => a.texto === t.texto));
+          const removidas = antes.filter(a => !depois.some(t => t.texto === a.texto));
+          const partes = [];
+          feitas.forEach(t => partes.push('concluiu "' + t.texto + '"'));
+          criadas.forEach(t => partes.push('criou a tarefa "' + t.texto + '"' + (t.prazo ? ' para ' + t.prazo : '')));
+          removidas.forEach(t => partes.push('removeu a tarefa "' + t.texto + '"'));
+          if (partes.length) mudancas.push(partes.join('; '));
+          tarefasTxt = novas;
+        }
+      }
       const concluida = /conclu/i.test(fase) ? (String(atual[11] || '').trim() || agora) : '';
       aba.getRange(linha, 4, 1, 9).setValues([[fase, prioridade, tit, desc, placa, resp, prazo, agora, concluida]]);
-      aba.getRange(linha, 14).setValue(sei);
+      aba.getRange(linha, 14, 1, 2).setValues([[sei, tarefasTxt]]);
       if (mudancas.length) {
         const historico = String(atual[12] || '');
         aba.getRange(linha, 13).setValue((historico ? historico + '\n' : '') + agora + ' • ' + p.sessao.email + ': ' + mudancas.join('; '));
