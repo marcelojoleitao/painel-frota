@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.76.0';
+const VERSAO_PAINEL = '2.77.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -949,6 +949,7 @@ function iniciarApp() {
   ouvir('btn-nova-viatura', 'click', () => abrirFormViatura(null));
   ouvir('btn-colunas', 'click', e => { e.stopPropagation(); cls('menu-colunas', 'oculto', !el('menu-colunas').classList.contains('oculto')); });
   document.addEventListener('click', e => { if (!e.target.closest('.seletor-colunas')) cls('menu-colunas', 'oculto', true); });
+  ouvir('btn-rel-frota', 'click', gerarRelatorioFrotaPdf);
   ouvir('btn-so-demanda', 'click', () => {
     ESTADO.soComDemanda = !ESTADO.soComDemanda;
     cls('btn-so-demanda', 'amarelo', ESTADO.soComDemanda);
@@ -6066,6 +6067,26 @@ function abrirDetalheOS(os) {
 function fecharDetalheOS() {
   const caixa = el('modal-os');
   if (caixa) caixa.classList.add('oculto');
+}
+
+
+/** Gera o relatório da frota em PDF, respeitando o filtro da tela. */
+function gerarRelatorioFrotaPdf() {
+  const btn = el('btn-rel-frota');
+  const selecao = (ESTADO.filtrado || []).map(v => v.placa);
+  const parcial = selecao.length && selecao.length !== (ESTADO.veiculos || []).length;
+  if (btn) { btn.disabled = true; btn.textContent = 'gerando…'; }
+  toast(parcial ? 'Gerando o relatório das ' + selecao.length + ' viaturas filtradas…' : 'Gerando o relatório da frota…');
+  const run = servidor('gerarRelatorioFrota',
+    r => {
+      if (btn) { btn.disabled = false; btn.textContent = '📄 Relatório PDF'; }
+      if (!r || !r.ok) { toast((r && r.erro) || 'Falha ao gerar.', true); return; }
+      if (r.link) { window.open(r.link, '_blank'); toast('Relatório gerado.'); }
+      else if (r.base64) { baixarBase64(r.base64, r.nome, 'application/pdf'); toast('Relatório baixado.'); }
+      if (r.aviso) toast(r.aviso);
+    },
+    e => { if (btn) { btn.disabled = false; btn.textContent = '📄 Relatório PDF'; } toast('Erro: ' + (e && e.message ? e.message : e), true); });
+  if (run) run.gerarRelatorioFrota(ESTADO.token, parcial ? { placas: selecao } : {});
 }
 
 </script>

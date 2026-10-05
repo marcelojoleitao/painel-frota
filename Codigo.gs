@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.76.0';
+const CODIGO_VERSAO = '2.77.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3158,6 +3158,265 @@ function _removerAcentos_(s) {
 }
 
 function _normalizarCodigo_(v) { return String(v || '').trim(); }
+
+
+/* ============================================================
+   RELATÓRIO DA FROTA (PDF, paisagem)
+   Retrato do estado da frota por unidade: o que está disponível,
+   o que está parado, como está o conceito do PGF e como o uso
+   SIPAC se distribui — separando policiamento ostensivo,
+   motopoliciamento e o restante.
+   ============================================================ */
+
+/** Agrupa os usos SIPAC em famílias, para a leitura não virar uma lista longa. */
+function _familiaUso_(uso) {
+  const t = _normCab_(uso);
+  if (!t) return 'Não informado';
+  if (/MOTOPOLICIAMENTO|MOTOCICLETA/.test(t)) return 'Motopoliciamento ostensivo';
+  if (/POLICIAMENTO OSTENSIVO/.test(t)) return 'Policiamento ostensivo';
+  if (/COMANDO|REPRESENTACAO|AUTORIDADE/.test(t)) return 'Comando e representação';
+  if (/APOIO|ADMINISTRATIV|TRANSPORTE|SERVICO/.test(t)) return 'Apoio e administrativo';
+  if (/OPERACION|ESPECIAL|CANIL|K9|TATICO|ROTA/.test(t)) return 'Operações especiais';
+  return 'Outros usos';
+}
+
+/** Disponibilidade a partir do status da viatura. */
+function _disponibilidade_(status) {
+  const t = _normCab_(status);
+  if (/DISPON|ATIVA|EM USO|OPERAC/.test(t)) return 'Disponível';
+  if (/MANUTENCAO|OFICINA|REPARO/.test(t)) return 'Em manutenção';
+  if (/DESFAZ|ALIENAD|BAIXAD|LEILAO/.test(t)) return 'Em desfazimento';
+  if (/CAUTELA|CEDID|EMPREST/.test(t)) return 'Cedida ou cautelada';
+  if (/SINISTR|ACIDENT/.test(t)) return 'Sinistrada';
+  if (!t) return 'Sem status';
+  return 'Outras situações';
+}
+
+function gerarRelatorioFrota(token, filtros) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    const todos = _lerVeiculos_(ss);
+    const placasFiltro = (filtros && filtros.placas && filtros.placas.length) ? {} : null;
+    if (placasFiltro) filtros.placas.forEach(pl => { placasFiltro[String(pl).toUpperCase()] = true; });
+    const veiculos = todos.filter(v => !placasFiltro || placasFiltro[v.placa]);
+    if (!veiculos.length) return { ok: false, erro: 'Nenhuma viatura na seleção.' };
+
+    // uso recente: abastecimento nos últimos dois meses indica viatura rodando
+    const dados = veiculos.map(v => ({
+      placa: v.placa, modelo: v.modelo || '', unidade: v.unidade || 'Sem unidade',
+      uso: v.uso || '', familia: _familiaUso_(v.uso), disponibilidade: _disponibilidade_(v.status),
+      status: v.status || '', conceito: v.conceito || v.notaFinal || '', nota: _num_(v.notaFinal) || 0,
+      anoFab: v.anoFab || '', anoMod: v.anoMod || '', odometro: _num_(v.odometro) || 0,
+      kmAno: _num_(v.kmR) || 0, abastRecente: /SIM|^S$|\d/i.test(String(v.abast2m || '').trim()),
+      prop: v.prop || '', anoEx: v.anoEx || '', emDesf: v.emDesf || ''
+    }));
+
+    const contar = (lista, chave) => {
+      const mapa = {};
+      lista.forEach(x => { const k = x[chave] || '—'; mapa[k] = (mapa[k] || 0) + 1; });
+      return Object.keys(mapa).map(k => ({ chave: k, qtd: mapa[k] })).sort((a, b) => b.qtd - a.qtd);
+    };
+
+    // quadro por unidade: o que é, o que roda, como está o conceito
+    const unidades = {};
+    dados.forEach(v => {
+      const u = unidades[v.unidade] || (unidades[v.unidade] = { unidade: v.unidade, total: 0, disponiveis: 0,
+        manutencao: 0, desfazimento: 0, outras: 0, rodando: 0, paradas: 0, somaNota: 0, comNota: 0,
+        conceitoD: 0, familias: {}, idadeSoma: 0, idadeN: 0 });
+      u.total++;
+      if (v.disponibilidade === 'Disponível') u.disponiveis++;
+      else if (v.disponibilidade === 'Em manutenção') u.manutencao++;
+      else if (v.disponibilidade === 'Em desfazimento') u.desfazimento++;
+      else u.outras++;
+      if (v.abastRecente) u.rodando++; else u.paradas++;
+      if (v.nota) { u.somaNota += v.nota; u.comNota++; }
+      if (/^D/i.test(String(v.conceito).trim())) u.conceitoD++;
+      u.familias[v.familia] = (u.familias[v.familia] || 0) + 1;
+      const ano = parseInt(String(v.anoFab).replace(/\D/g, ''), 10);
+      if (ano > 1980) { u.idadeSoma += (new Date().getFullYear() - ano); u.idadeN++; }
+    });
+    const listaUnidades = Object.keys(unidades).map(k => {
+      const u = unidades[k];
+      u.notaMedia = u.comNota ? Math.round(u.somaNota / u.comNota * 10) / 10 : 0;
+      u.idadeMedia = u.idadeN ? Math.round(u.idadeSoma / u.idadeN * 10) / 10 : 0;
+      u.aproveitamento = u.total ? Math.round(u.rodando / u.total * 100) : 0;
+      return u;
+    }).sort((a, b) => b.total - a.total);
+
+    // matriz uso × disponibilidade
+    const familias = {};
+    dados.forEach(v => {
+      const f = familias[v.familia] || (familias[v.familia] = { familia: v.familia, total: 0, disponiveis: 0,
+        rodando: 0, paradas: 0, somaNota: 0, comNota: 0, usos: {} });
+      f.total++;
+      if (v.disponibilidade === 'Disponível') f.disponiveis++;
+      if (v.abastRecente) f.rodando++; else f.paradas++;
+      if (v.nota) { f.somaNota += v.nota; f.comNota++; }
+      if (v.uso) f.usos[v.uso] = (f.usos[v.uso] || 0) + 1;
+    });
+    const listaFamilias = Object.keys(familias).map(k => {
+      const f = familias[k];
+      f.notaMedia = f.comNota ? Math.round(f.somaNota / f.comNota * 10) / 10 : 0;
+      f.aproveitamento = f.total ? Math.round(f.rodando / f.total * 100) : 0;
+      return f;
+    }).sort((a, b) => b.total - a.total);
+
+    const paradas = dados.filter(v => !v.abastRecente && v.disponibilidade === 'Disponível')
+      .sort((a, b) => a.unidade.localeCompare(b.unidade) || a.placa.localeCompare(b.placa));
+    const conceitoBaixo = dados.filter(v => /^D/i.test(String(v.conceito).trim()) || (v.nota && v.nota < 5))
+      .sort((a, b) => (a.nota || 99) - (b.nota || 99));
+
+    const resumo = {
+      total: dados.length,
+      disponiveis: dados.filter(v => v.disponibilidade === 'Disponível').length,
+      manutencao: dados.filter(v => v.disponibilidade === 'Em manutenção').length,
+      desfazimento: dados.filter(v => v.disponibilidade === 'Em desfazimento').length,
+      rodando: dados.filter(v => v.abastRecente).length,
+      unidades: listaUnidades.length,
+      notaMedia: (() => { const c = dados.filter(v => v.nota); return c.length ? Math.round(c.reduce((s, v) => s + v.nota, 0) / c.length * 10) / 10 : 0; })(),
+      idadeMedia: (() => {
+        const anos = dados.map(v => parseInt(String(v.anoFab).replace(/\D/g, ''), 10)).filter(a => a > 1980);
+        return anos.length ? Math.round(anos.reduce((s, a) => s + (new Date().getFullYear() - a), 0) / anos.length * 10) / 10 : 0;
+      })()
+    };
+
+    const html = _htmlRelatorioFrota_({ resumo: resumo, unidades: listaUnidades, familias: listaFamilias,
+      porDisponibilidade: contar(dados, 'disponibilidade'), porConceito: contar(dados.filter(v => v.conceito), 'conceito'),
+      paradas: paradas, conceitoBaixo: conceitoBaixo, dados: dados }, p.sessao, !!placasFiltro);
+
+    const nome = 'Relatorio_Frota_' + Utilities.formatDate(new Date(), CONFIG.FUSO, 'yyyyMMdd') + '.pdf';
+    const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);
+    _logAcao_(p.ss, p.sessao.email, 'Relatório da frota', '', dados.length + ' viatura(s)', pdf.link || 'download direto');
+    return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '', resumo: resumo };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+function _htmlRelatorioFrota_(r, sessao, filtrado) {
+  const n = v => fmtIntServidor(v);
+  const pct = (parte, total) => total ? Math.round(parte / total * 100) : 0;
+  const barra = (parte, total, cor) => {
+    const p = pct(parte, total);
+    return '<div class="barra"><div class="preenche" style="width:' + p + '%; background:' + (cor || '#0B2C5C') + '"></div></div>';
+  };
+  const hoje = Utilities.formatDate(new Date(), CONFIG.FUSO, "dd/MM/yyyy 'às' HH:mm");
+
+  const linhasUnidades = r.unidades.map(u => {
+    const fam = Object.keys(u.familias).sort((a, b) => u.familias[b] - u.familias[a])
+      .map(f => '<span class="tag">' + f + ' <b>' + u.familias[f] + '</b></span>').join(' ');
+    return '<tr>' +
+      '<td class="forte">' + u.unidade + '</td>' +
+      '<td class="num">' + u.total + '</td>' +
+      '<td class="num">' + u.disponiveis + '<small>' + pct(u.disponiveis, u.total) + '%</small></td>' +
+      '<td class="num">' + u.manutencao + '</td>' +
+      '<td class="num">' + u.desfazimento + '</td>' +
+      '<td class="num">' + u.rodando + barra(u.rodando, u.total, u.aproveitamento >= 70 ? '#1E7A4D' : u.aproveitamento >= 40 ? '#C58B00' : '#9A2F24') +
+        '<small>' + u.aproveitamento + '% em uso</small></td>' +
+      '<td class="num">' + (u.notaMedia || '—') + (u.conceitoD ? '<small class="alerta">' + u.conceitoD + ' em conceito D</small>' : '') + '</td>' +
+      '<td class="num">' + (u.idadeMedia || '—') + '</td>' +
+      '<td class="familias">' + fam + '</td>' +
+      '</tr>';
+  }).join('');
+
+  const linhasFamilias = r.familias.map(f => {
+    const usos = Object.keys(f.usos).sort((a, b) => f.usos[b] - f.usos[a]).slice(0, 6)
+      .map(u => u + ' (' + f.usos[u] + ')').join(' • ');
+    return '<tr>' +
+      '<td class="forte">' + f.familia + '</td>' +
+      '<td class="num">' + f.total + '<small>' + pct(f.total, r.resumo.total) + '% da frota</small></td>' +
+      '<td class="num">' + f.disponiveis + '</td>' +
+      '<td class="num">' + f.rodando + barra(f.rodando, f.total, '#0B2C5C') + '<small>' + f.aproveitamento + '%</small></td>' +
+      '<td class="num">' + f.paradas + '</td>' +
+      '<td class="num">' + (f.notaMedia || '—') + '</td>' +
+      '<td class="familias">' + usos + '</td>' +
+      '</tr>';
+  }).join('');
+
+  const linhasParadas = r.paradas.slice(0, 60).map(v =>
+    '<tr><td class="mono">' + v.placa + '</td><td>' + v.modelo + '</td><td>' + v.unidade + '</td>' +
+    '<td>' + (v.uso || '—') + '</td><td>' + (v.conceito || '—') + '</td>' +
+    '<td class="num">' + (v.odometro ? n(v.odometro) : '—') + '</td><td>' + (v.anoEx || '—') + '</td></tr>').join('');
+
+  const linhasConceito = r.conceitoBaixo.slice(0, 40).map(v =>
+    '<tr><td class="mono">' + v.placa + '</td><td>' + v.modelo + '</td><td>' + v.unidade + '</td>' +
+    '<td class="forte">' + (v.conceito || '—') + '</td><td class="num">' + (v.nota || '—') + '</td>' +
+    '<td>' + (v.anoFab || '—') + '</td><td class="num">' + (v.odometro ? n(v.odometro) : '—') + '</td></tr>').join('');
+
+  const cartoes = [
+    ['Viaturas', r.resumo.total, r.resumo.unidades + ' unidade(s)'],
+    ['Disponíveis', r.resumo.disponiveis, pct(r.resumo.disponiveis, r.resumo.total) + '% da frota'],
+    ['Em uso recente', r.resumo.rodando, pct(r.resumo.rodando, r.resumo.total) + '% rodando'],
+    ['Em manutenção', r.resumo.manutencao, ''],
+    ['Em desfazimento', r.resumo.desfazimento, ''],
+    ['Conceito médio', r.resumo.notaMedia || '—', 'PGF'],
+    ['Idade média', r.resumo.idadeMedia || '—', 'anos']
+  ].map(c => '<div class="cartao"><div class="rotulo">' + c[0] + '</div><div class="valor">' + c[1] + '</div><div class="sub">' + c[2] + '</div></div>').join('');
+
+  return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><style>' +
+    '@page { size: A4 landscape; margin: 12mm 10mm; }' +
+    'body { font-family: Arial, Helvetica, sans-serif; color: #14181F; font-size: 10px; margin: 0; }' +
+    'h1 { font-size: 16px; color: #0B2C5C; margin: 0 0 2px; }' +
+    'h2 { font-size: 12px; color: #0B2C5C; margin: 16px 0 6px; padding-bottom: 3px; border-bottom: 2px solid #F2B705; }' +
+    '.cab { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid #0B2C5C; padding-bottom: 6px; }' +
+    '.cab .sub { color: #5A6376; font-size: 10px; }' +
+    '.cartoes { display: flex; gap: 6px; margin: 10px 0 4px; }' +
+    '.cartao { flex: 1; border: 1px solid #E3E8F0; border-radius: 5px; padding: 6px 8px; background: #F6F8FC; }' +
+    '.cartao .rotulo { font-size: 8.5px; color: #5A6376; text-transform: uppercase; letter-spacing: .04em; }' +
+    '.cartao .valor { font-size: 17px; font-weight: bold; color: #0B2C5C; }' +
+    '.cartao .sub { font-size: 8.5px; color: #5A6376; }' +
+    'table { width: 100%; border-collapse: collapse; margin-top: 4px; }' +
+    'th { background: #0B2C5C; color: #fff; text-align: left; padding: 4px 6px; font-size: 9px; }' +
+    'td { padding: 4px 6px; border-bottom: 1px solid #E3E8F0; vertical-align: top; }' +
+    'tr:nth-child(even) td { background: #FAFBFD; }' +
+    '.num { text-align: right; white-space: nowrap; }' +
+    '.forte { font-weight: bold; }' +
+    '.mono { font-family: "Courier New", monospace; font-weight: bold; }' +
+    'small { display: block; color: #5A6376; font-size: 8px; font-weight: normal; }' +
+    'small.alerta { color: #9A2F24; font-weight: bold; }' +
+    '.barra { height: 4px; background: #E3E8F0; border-radius: 2px; margin-top: 2px; overflow: hidden; }' +
+    '.preenche { height: 100%; }' +
+    '.tag { display: inline-block; background: #E8EEFA; color: #0B2C5C; border-radius: 3px; padding: 1px 4px; font-size: 8px; margin: 1px 1px 0 0; }' +
+    '.familias { font-size: 8.5px; color: #5A6376; }' +
+    '.rodape { margin-top: 10px; border-top: 1px solid #E3E8F0; padding-top: 5px; font-size: 8px; color: #5A6376; }' +
+    '.quebra { page-break-before: always; }' +
+    '</style></head><body>' +
+    '<div class="cab"><div><h1>Relatório da Frota — 16ª SPRF/CE</h1>' +
+    '<div class="sub">Situação em ' + hoje + (filtrado ? ' • seleção filtrada no painel' : ' • frota completa') + '</div></div>' +
+    '<div class="sub">Emitido por ' + (sessao.nome || sessao.email) + '</div></div>' +
+    '<div class="cartoes">' + cartoes + '</div>' +
+
+    '<h2>Por unidade</h2>' +
+    '<table><thead><tr><th>Unidade</th><th class="num">Viaturas</th><th class="num">Disponíveis</th>' +
+    '<th class="num">Manutenção</th><th class="num">Desfazimento</th><th class="num">Em uso recente</th>' +
+    '<th class="num">Conceito</th><th class="num">Idade</th><th>Composição por uso</th></tr></thead>' +
+    '<tbody>' + linhasUnidades + '</tbody></table>' +
+
+    '<h2>Por família de uso SIPAC</h2>' +
+    '<table><thead><tr><th>Família</th><th class="num">Viaturas</th><th class="num">Disponíveis</th>' +
+    '<th class="num">Em uso</th><th class="num">Paradas</th><th class="num">Conceito</th><th>Usos que a compõem</th></tr></thead>' +
+    '<tbody>' + linhasFamilias + '</tbody></table>' +
+
+    (r.paradas.length ? '<div class="quebra"></div><h2>Disponíveis sem uso recente (' + r.paradas.length + ')</h2>' +
+      '<p style="font-size:9px; color:#5A6376; margin:2px 0 4px">Viaturas em condição de uso que não registram abastecimento nos últimos dois meses — candidatas a remanejamento.</p>' +
+      '<table><thead><tr><th>Placa</th><th>Modelo</th><th>Unidade</th><th>Uso SIPAC</th><th>Conceito</th>' +
+      '<th class="num">Odômetro</th><th>Exercício</th></tr></thead><tbody>' + linhasParadas + '</tbody></table>' : '') +
+
+    (r.conceitoBaixo.length ? '<h2>Conceito baixo no PGF (' + r.conceitoBaixo.length + ')</h2>' +
+      '<p style="font-size:9px; color:#5A6376; margin:2px 0 4px">Conceito D ou nota abaixo de 5 — a IN PRF 40/2021 trata o conceito D como indicativo de desfazimento.</p>' +
+      '<table><thead><tr><th>Placa</th><th>Modelo</th><th>Unidade</th><th>Conceito</th><th class="num">Nota</th>' +
+      '<th>Ano</th><th class="num">Odômetro</th></tr></thead><tbody>' + linhasConceito + '</tbody></table>' : '') +
+
+    '<div class="rodape">Fonte: ConsultaBD (cadastro, status e uso SIPAC), aba PGF (conceito e nota) e AbastBD (uso recente). ' +
+    'Disponibilidade e família de uso são agrupamentos do painel a partir do status e do uso SIPAC registrados.</div>' +
+    '</body></html>';
+}
+
+/** Inteiro com separador de milhar, no servidor. */
+function fmtIntServidor(v) {
+  return String(Math.round(_num_(v) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
 
 /* ============================================================
    RELATÓRIO DE ABASTECIMENTO (PDF, paisagem)
