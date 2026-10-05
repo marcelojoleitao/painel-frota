@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.77.0';
+const VERSAO_PAINEL = '2.77.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -6081,9 +6081,11 @@ function gerarRelatorioFrotaPdf() {
     r => {
       if (btn) { btn.disabled = false; btn.textContent = '📄 Relatório PDF'; }
       if (!r || !r.ok) { toast((r && r.erro) || 'Falha ao gerar.', true); return; }
-      if (r.link) { window.open(r.link, '_blank'); toast('Relatório gerado.'); }
-      else if (r.base64) { baixarBase64(r.base64, r.nome, 'application/pdf'); toast('Relatório baixado.'); }
-      if (r.aviso) toast(r.aviso);
+      // mesma entrega dos demais relatórios: abre o link ou baixa o arquivo
+      const html = entregarPdf(r);
+      toast(r.link ? 'Relatório gerado e salvo no Drive.' : 'Relatório baixado.');
+      const caixa = el('rel-frota-saida');
+      if (caixa) caixa.innerHTML = html;
     },
     e => { if (btn) { btn.disabled = false; btn.textContent = '📄 Relatório PDF'; } toast('Erro: ' + (e && e.message ? e.message : e), true); });
   if (run) run.gerarRelatorioFrota(ESTADO.token, parcial ? { placas: selecao } : {});
