@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.81.2';
+const VERSAO_PAINEL = '2.81.3';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2280,7 +2280,7 @@ function desenharFila(c, r) {
       <div class="form-acoes" style="margin-top:0">
         <button class="btn claro" onclick="renderFila(document.getElementById('acoes-conteudo'))">Atualizar</button>
         <button class="btn claro" onclick="limparConcluidas()">Limpar concluídas</button>
-        <span class="form-aviso">Rode <code>python worker_detran.py</code> na sua máquina para processar a fila.</span>
+        <span class="form-aviso">${ESTADO.temAgente ? 'A fila é executada pelo agente instalado — veja o quadro acima.' : 'Nenhum agente instalado: instale o agente numa máquina com acesso ao DETRAN (pasta do agente, instalar_agente.bat).'}</span>
       </div>
       <div class="mini-tabela" style="max-height:520px"><table class="tabela-simples"><thead><tr><th>Status</th><th>Ação</th><th>Placa</th><th>Pedido em</th><th>Quem</th><th>Resultado</th><th>Detalhe</th></tr></thead><tbody>
       ${r.itens.map(i => `<tr class="linha" data-placa="${escAttr(i.placa)}"><td>${badge(i.status)}</td><td>${esc(i.acao)}</td><td style="font-family:var(--fonte-dados)"><b>${esc(i.placa)}</b></td><td style="white-space:nowrap">${esc(i.criado)}</td><td>${esc((i.quem || '').split('@')[0])}</td><td>${esc(i.resultado)}</td><td title="${escAttr(i.detalhe)}">${esc((i.detalhe || '').substring(0, 90))}</td></tr>`).join('') || '<tr><td colspan="7"><div class="vazio">Fila vazia</div></td></tr>'}</tbody></table></div>
@@ -6195,6 +6195,7 @@ function carregarAgentes() {
   const run = servidor('lerAgentes',
     r => {
       if (!r || !r.ok) { caixa.innerHTML = '<div class="vinculo">' + esc((r && r.erro) || 'não consegui consultar') + '</div>'; return; }
+      ESTADO.temAgente = r.agentes.length > 0;
       const f = r.fila;
       caixa.innerHTML = `
         <div class="agentes-linha">
@@ -6208,7 +6209,9 @@ function carregarAgentes() {
             <span class="agente-farol ${a.ativo ? 'vivo' : 'morto'}"></span>
             <b>${esc(a.nome)}</b>
             <span class="agente-estado">${esc(a.estado || '—')}${a.noCiclo ? ' • ' + a.noCiclo + ' na fila' : ''}</span>
-            <span class="vinculo">${a.minutos === null ? 'sem sinal' : a.minutos < 1 ? 'agora há pouco' : 'há ' + a.minutos + ' min'}</span>
+            <span class="vinculo">${(a.minutos === null || a.minutos === undefined) ? 'sem sinal registrado'
+              : a.minutos < 1 ? 'agora há pouco' : a.minutos < 60 ? 'há ' + a.minutos + ' min'
+              : a.minutos < 1440 ? 'há ' + Math.round(a.minutos / 60) + ' h' : 'há ' + Math.round(a.minutos / 1440) + ' dia(s)'}</span>
             ${a.obs ? `<span class="vinculo">${esc(a.obs)}</span>` : ''}
           </div>`).join('')}</div>`
         : '<div class="cartao-dica">Nenhum agente registrado ainda. Instale o agente numa máquina com acesso ao DETRAN — veja o LEIAME da pasta do agente.</div>'}

@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.81.2';
+const CODIGO_VERSAO = '2.81.3';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -8469,9 +8469,17 @@ function lerAgentes(token) {
       aba.getRange(2, 1, aba.getLastRow() - 1, 6).getValues().forEach(l => {
         const nome = String(l[0] || '').trim();
         if (!nome) return;
-        const txt = String(l[1] || '').trim();
-        const m = txt.match(/(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2}):(\d{2})/);
-        const quando = m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6])) : null;
+        // o Sheets pode guardar isso como data ou como texto, conforme o formato da célula
+        let quando = null, txt = '';
+        if (l[1] instanceof Date) {
+          quando = l[1];
+          txt = Utilities.formatDate(quando, CONFIG.FUSO, 'dd/MM/yyyy HH:mm:ss');
+        } else {
+          txt = String(l[1] || '').trim();
+          const m = txt.match(/(\d{2})\/(\d{2})\/(\d{4})[ ,]+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+          if (m) quando = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]),
+            Number(m[4]), Number(m[5]), Number(m[6] || 0));
+        }
         const minutos = quando ? Math.round((agora - quando) / 60000) : null;
         agentes.push({ nome: nome, sinal: txt, minutos: minutos,
           ativo: minutos !== null && minutos <= 5,
