@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.80.1';
+const CODIGO_VERSAO = '2.81.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -8455,6 +8455,46 @@ function _abaFila_(ss) {
     aba.setColumnWidth(11, 420);
   }
   return aba;
+}
+
+/** Agentes que executam a fila do DETRAN, com o último sinal de vida. */
+function lerAgentes(token) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    const aba = ss.getSheetByName('Agentes');
+    const agentes = [];
+    const agora = new Date();
+    if (aba && aba.getLastRow() > 1) {
+      aba.getRange(2, 1, aba.getLastRow() - 1, 6).getValues().forEach(l => {
+        const nome = String(l[0] || '').trim();
+        if (!nome) return;
+        const txt = String(l[1] || '').trim();
+        const m = txt.match(/(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2}):(\d{2})/);
+        const quando = m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6])) : null;
+        const minutos = quando ? Math.round((agora - quando) / 60000) : null;
+        agentes.push({ nome: nome, sinal: txt, minutos: minutos,
+          ativo: minutos !== null && minutos <= 5,
+          estado: String(l[2] || '').trim(), noCiclo: _num_(l[3]) || 0,
+          total: _num_(l[4]) || 0, obs: String(l[5] || '').trim() });
+      });
+    }
+    const fila = { pendentes: 0, executando: 0, erro: 0, concluidos: 0 };
+    const abaFila = ss.getSheetByName(CONFIG.ABA_FILA);
+    if (abaFila && abaFila.getLastRow() > 1) {
+      abaFila.getRange(2, 9, abaFila.getLastRow() - 1, 1).getValues().forEach(l => {
+        const st = _normCab_(l[0]);
+        if (st.indexOf('PENDENTE') === 0) fila.pendentes++;
+        else if (st.indexOf('EXECUTANDO') === 0) fila.executando++;
+        else if (st.indexOf('ERRO') === 0) fila.erro++;
+        else if (st.indexOf('CONCLU') === 0) fila.concluidos++;
+      });
+    }
+    agentes.sort((a, b) => (a.minutos === null ? 9999 : a.minutos) - (b.minutos === null ? 9999 : b.minutos));
+    return { ok: true, agentes: agentes, fila: fila,
+      algumAtivo: agentes.some(a => a.ativo),
+      consultadoEm: Utilities.formatDate(agora, CONFIG.FUSO, 'HH:mm:ss') };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 
 /** Enfileira uma ou várias placas de uma vez. Devolve quantas entraram e quantas já estavam pendentes. */

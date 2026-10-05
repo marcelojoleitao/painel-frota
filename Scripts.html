@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.80.1';
+const VERSAO_PAINEL = '2.81.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2246,6 +2246,7 @@ function enviarCrlvManual(placa, arquivo, statusEl) {
 
 /* ---------------- Fila do DETRAN ---------------- */
 function renderFila(c) {
+  setTimeout(carregarAgentes, 300);
   if (!ESTADO.fila) c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Lendo a fila…</div></div>';
   google.script.run
     .withSuccessHandler(r => {
@@ -2270,7 +2271,12 @@ function desenharFila(c, r) {
       ${kpi('Últimos resultados', r.itens.filter(i => i.status === 'CONCLUÍDO' || i.status === 'OK').length, 'nesta lista', '', null, true)}
       ${kpi('Com erro', r.itens.filter(i => i.status === 'ERRO').length, 'conferir detalhe', r.itens.some(i => i.status === 'ERRO') ? 'vermelho' : 'verde', null, true)}
     </div>
-    <div class="cartao largo">
+    <div class="cartao largo" style="margin-bottom:12px">
+        <div class="cartao-cab"><h3>Agentes da fila</h3><small>quem executa as ações do DETRAN nesta rede</small></div>
+        <div id="agentes-estado"><div class="vinculo">consultando…</div></div>
+      </div>
+
+      <div class="cartao largo">
       <div class="cartao-cab"><h3>Fila do DETRAN</h3><small>aba FilaAcoes da planilha</small></div>
       <div class="form-acoes" style="margin-top:0">
         <button class="btn claro" onclick="renderFila(document.getElementById('acoes-conteudo'))">Atualizar</button>
@@ -6179,6 +6185,36 @@ function tarefasPendentes(d) {
 
 function tarefasVencidas(d) {
   return tarefasPendentes(d).filter(t => prazoVencido(t.prazo));
+}
+
+
+/** Painel dos agentes da fila: quem está vivo e o que há para fazer. */
+function carregarAgentes() {
+  const caixa = el('agentes-estado'); if (!caixa) return;
+  const run = servidor('lerAgentes',
+    r => {
+      if (!r || !r.ok) { caixa.innerHTML = '<div class="vinculo">' + esc((r && r.erro) || 'não consegui consultar') + '</div>'; return; }
+      const f = r.fila;
+      caixa.innerHTML = `
+        <div class="agentes-linha">
+          <span class="agente-farol ${r.algumAtivo ? 'vivo' : 'morto'}"></span>
+          <b>${r.algumAtivo ? 'Fila sendo executada' : 'Nenhum agente ativo'}</b>
+          <span class="vinculo">${f.pendentes} pendente(s)${f.executando ? ' • ' + f.executando + ' em execução' : ''}${f.erro ? ' • ' + f.erro + ' com erro' : ''}</span>
+          <button class="link-btn" onclick="carregarAgentes()">atualizar</button>
+        </div>
+        ${r.agentes.length ? `<div class="agentes-lista">${r.agentes.map(a => `
+          <div class="agente ${a.ativo ? 'vivo' : 'morto'}">
+            <span class="agente-farol ${a.ativo ? 'vivo' : 'morto'}"></span>
+            <b>${esc(a.nome)}</b>
+            <span class="agente-estado">${esc(a.estado || '—')}${a.noCiclo ? ' • ' + a.noCiclo + ' na fila' : ''}</span>
+            <span class="vinculo">${a.minutos === null ? 'sem sinal' : a.minutos < 1 ? 'agora há pouco' : 'há ' + a.minutos + ' min'}</span>
+            ${a.obs ? `<span class="vinculo">${esc(a.obs)}</span>` : ''}
+          </div>`).join('')}</div>`
+        : '<div class="cartao-dica">Nenhum agente registrado ainda. Instale o agente numa máquina com acesso ao DETRAN — veja o LEIAME da pasta do agente.</div>'}
+        ${!r.algumAtivo && f.pendentes ? '<div class="cartao-dica" style="border-left:3px solid var(--ambar)">Há itens na fila, mas nenhuma máquina está executando. Ligue o computador do agente ou rode o instalador em outra máquina.</div>' : ''}`;
+    },
+    () => { caixa.innerHTML = '<div class="vinculo">não consegui consultar os agentes</div>'; });
+  if (run) run.lerAgentes(ESTADO.token);
 }
 
 </script>
