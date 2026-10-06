@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.86.0';
+const VERSAO_PAINEL = '2.86.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4637,6 +4637,7 @@ function renderGestao() {
   if (ESTADO.subGestao === 'notas') return renderNotas(c);
   if (ESTADO.subGestao === 'sinistros') return renderSinistros(c);
   if (ESTADO.subGestao === 'preventiva') return renderPreventiva(c);
+  if (ESTADO.subGestao === 'contrato') return renderContrato(c);
   if (!ESTADO.demandas) {
     c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Carregando o quadro…</div></div>';
     const run = servidor('lerDemandas',
