@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.84.0';
+const VERSAO_PAINEL = '2.84.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -1076,7 +1076,7 @@ function falhaCarga(msg) {
   cls('btn-tentar', 'oculto', false); cls('btn-voltar-login', 'oculto', false);
 }
 
-function iniciar(dados) {
+function iniciar(dados, manterTela) {
   ESTADO.dados = dados;
   ESTADO.veiculos = dados.veiculos || [];
   ESTADO.usuario = dados.usuario || {}; ESTADO.admin = !!(dados.usuario && dados.usuario.admin);
@@ -1089,8 +1089,12 @@ function iniciar(dados) {
   if (!ESTADO.colunasVisiveis) ESTADO.colunasVisiveis = new Set(COLUNAS.filter(c => c.on).map(c => c.k));
   construirFiltros();
   construirMenuColunas();
-  aplicar();
-  mostrarTela('app');
+  if (!manterTela) {                               // ao reler depois de gravar, a
+    aplicar();                                     // tela atual é restaurada por quem chamou
+    mostrarTela('app');
+  } else {
+    ESTADO.preventiva = null; ESTADO.prevPorPlaca = null;   // recalculam com os dados novos
+  }
 }
 
 /** Carga sob demanda de AbastBD/ManutBD (agregados). */
@@ -1862,14 +1866,26 @@ function enviarFormViatura(placa) {
   else google.script.run.withSuccessHandler(depois).withFailureHandler(falha).salvarViatura(ESTADO.token, placa, alteracoes);
 }
 
+/**
+ * Relê a planilha depois de uma gravação, preservando onde a pessoa está.
+ * Antes isso voltava para a tela inicial e reabria a ficha — atrapalhava quem
+ * estava corrigindo viaturas em sequência na completude.
+ */
 function recarregarAposEdicao(placa) {
   toast('Recarregando dados da planilha…');
+  const abaAtual = ESTADO.aba, subAcoes = ESTADO.subAcoes, subOS = ESTADO.subOS, subMultas = ESTADO.subMultas, subGestao = ESTADO.subGestao;
+  const rolagem = (el('conteudo') || document.documentElement).scrollTop;
   google.script.run
     .withSuccessHandler(dados => {
       if (sessaoExpirou(dados)) return;
       if (!dados || dados.erro) { toast('Gravado, mas a releitura falhou — use o botão ⟳.'); return; }
-      iniciar(dados);
-      if (placa && ESTADO.veiculos.some(x => x.placa === placa)) abrirFicha(placa);
+      iniciar(dados, true);                       // sem voltar para a tela inicial
+      ESTADO.aba = abaAtual; ESTADO.subAcoes = subAcoes; ESTADO.subOS = subOS;
+      ESTADO.subMultas = subMultas; ESTADO.subGestao = subGestao;
+      mudarAba(abaAtual);
+      const caixa = el('conteudo') || document.documentElement;
+      setTimeout(() => { caixa.scrollTop = rolagem; }, 120);
+      toast('Dados atualizados.');
     })
     .withFailureHandler(() => toast('Gravado, mas a releitura falhou — use o botão ⟳.'))
     .carregarDados(ESTADO.token, true);
