@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.86.2';
+const VERSAO_PAINEL = '2.86.3';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -6287,7 +6287,7 @@ function renderContrato(c) {
         <button class="${foco === 'abastecimento' ? 'ativo' : ''}" data-contrato="abastecimento">Abastecimento</button>
       </div>
       <div style="flex:1"></div>
-      <span class="vinculo">vigência até ${esc(d.vigenciaFim)} • última competência ${esc(d.ultimaCompetencia)}${d.geradoEm ? ' • apurado em ' + esc(d.geradoEm) : ''}</span>
+      <span class="vinculo">vigência ${esc(d.vigenciaInicio || '')} a ${esc(d.vigenciaFim)} • competências ${esc(d.primeiraCompetencia || '')} a ${esc(d.ultimaCompetencia)}${d.geradoEm ? ' • apurado em ' + esc(d.geradoEm) : ''}</span>
     </div>
 
     <div class="kpis">
@@ -6306,6 +6306,11 @@ function renderContrato(c) {
           <span class="exec-trilha"><span class="exec-preenche" style="width:${Math.min(100, b.percentual)}%; background:${b.percentual > 85 ? 'var(--vermelho)' : b.percentual > 70 ? 'var(--ambar)' : 'var(--azul)'}"></span></span>
           <span class="exec-valor">${fmtDec(b.percentual)}% usado • saldo ${fmtMoeda(b.saldo)}</span>
         </div>`).join('')}
+    </div>` : ''}
+
+    ${bloco.executado === 0 ? `<div class="cartao largo" style="border-left:3px solid var(--ambar); margin-bottom:12px">
+      <b style="color:var(--ambar)">Nenhum valor somado</b>
+      <div class="vinculo">As colunas de valor não foram reconhecidas na aba de títulos. Rode <code>conferirContrato()</code> no editor: o log mostra os cabeçalhos existentes para eu ajustar os nomes.</div>
     </div>` : ''}
 
     <div class="cartao largo" style="margin-bottom:12px">

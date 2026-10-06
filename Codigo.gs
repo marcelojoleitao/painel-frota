@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.86.2';
+const CODIGO_VERSAO = '2.86.3';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3223,6 +3223,7 @@ function _normalizarCodigo_(v) { return String(v || '').trim(); }
    ============================================================ */
 
 const CONTRATO = {
+  vigenciaInicio: '01/03/2026',       // primeira competência da vigência atual: 03/2026
   vigenciaFim: '01/03/2027',          // última competência faturada: 02/2027
   limites: {
     abastecimento: 2200055.11,
@@ -3320,18 +3321,16 @@ function execucaoContrato(token) {
     const manut = _executadoPorCompetencia_(titulos.manut,
       { pecas: CONTRATO.colunas.pecas, servicos: CONTRATO.colunas.servicos, valor: ['Valor Total', 'Total'] });
 
-    // vigência: da primeira competência registrada até 02/2027
-    const compsManut = Object.keys(manut), compsAbast = Object.keys(abast);
-    const todas = compsManut.concat(compsAbast);
-    if (!todas.length) return { ok: false, erro: 'Nenhuma competência encontrada nas abas de títulos.' };
-    const chave = c => c.substring(3) + c.substring(0, 2);
-    todas.sort((a, b) => chave(a).localeCompare(chave(b)));
-    const primeira = todas[0];
+    // apenas a vigência atual: competências anteriores pertencem a outro período
+    const mIni = CONTRATO.vigenciaInicio.match(/(\d{2})\/(\d{2})\/(\d{4})/);
     const mFim = CONTRATO.vigenciaFim.match(/(\d{2})\/(\d{2})\/(\d{4})/);
     // a vigência termina em 01/03/2027, então a última competência faturada é 02/2027
     let fimMes = Number(mFim[2]) - 1, fimAno = Number(mFim[3]);
     if (fimMes < 1) { fimMes = 12; fimAno--; }
-    const linha = _competenciasAte_(Number(primeira.substring(0, 2)), Number(primeira.substring(3)), fimMes, fimAno);
+    const linha = _competenciasAte_(Number(mIni[2]), Number(mIni[3]), fimMes, fimAno);
+    if (!Object.keys(manut).length && !Object.keys(abast).length) {
+      return { ok: false, erro: 'Nenhuma competência encontrada nas abas de títulos. Rode conferirContrato() no editor para ver os cabeçalhos lidos.' };
+    }
 
     const montar = (mapa, campos, limite) => {
       const serie = linha.map(c => {
@@ -3373,7 +3372,8 @@ function execucaoContrato(token) {
     function executadoDe(lista) { return lista.reduce((t, x) => t + x.total, 0); }
 
     const limiteManut = CONTRATO.limites.pecas + CONTRATO.limites.servicos;
-    const saida = { ok: true, vigenciaFim: CONTRATO.vigenciaFim, ultimaCompetencia: linha[linha.length - 1],
+    const saida = { ok: true, vigenciaInicio: CONTRATO.vigenciaInicio, vigenciaFim: CONTRATO.vigenciaFim,
+      ultimaCompetencia: linha[linha.length - 1], primeiraCompetencia: linha[0],
       competencias: linha,
       abastecimento: montar(abast, ['valor'], CONTRATO.limites.abastecimento),
       manutencao: montar(manut, ['pecas', 'servicos'], limiteManut),
