@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.83.0';
+const VERSAO_PAINEL = '2.83.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -718,9 +718,18 @@ function tabelaSimples(lista, cols, vazio, clicavel) {
    ============================================================ */
 function abrirFicha(placa) {
   const v = ESTADO.veiculos.find(x => x.placa === placa); if (!v) return;
+  ESTADO.fichaAberta = placa;                                // a ficha que está de fato na tela
   if (!ESTADO.demandas && !ESTADO._carregandoDemandas) {     // só uma vez por sessão
     ESTADO._carregandoDemandas = true;
-    const run = servidor('lerDemandas', r => { if (r && r.ok) { ESTADO.demandas = r; if (el('gaveta').classList.contains('aberta')) abrirFicha(placa); } }, () => {});
+    const run = servidor('lerDemandas', r => {
+      if (!r || !r.ok) return;
+      ESTADO.demandas = r;
+      // a resposta pode demorar: só redesenha se esta mesma ficha ainda estiver aberta,
+      // senão a ficha reaparece por cima do que a pessoa está fazendo agora
+      const gaveta = el('gaveta');
+      if (gaveta && gaveta.classList.contains('aberta') && ESTADO.fichaAberta === placa) abrirFicha(placa);
+      else if (ESTADO.aba === 'viaturas') aplicar();         // atualiza só os marcadores da lista
+    }, () => {});
     if (run) run.lerDemandas(ESTADO.token);
   }
   const gestores = (ESTADO.dados.gestores || []).filter(g => g.unidadeSipac === v.unidade || g.unidade === v.unidade || g.unidade === v.unidadeCurta);
@@ -842,7 +851,8 @@ function abrirFicha(placa) {
   carregarLimiteReparo(v.placa);
   carregarPreventivaFicha(v.placa);
 }
-function fecharFicha() { cls('gaveta-fundo', 'aberta', false); cls('gaveta', 'aberta', false); document.body.style.overflow = ''; }
+function fecharFicha() {
+  ESTADO.fichaAberta = null; cls('gaveta-fundo', 'aberta', false); cls('gaveta', 'aberta', false); document.body.style.overflow = ''; }
 
 function secao(titulo, corpo, tag) {
   return `<div class="secao"><div class="secao-cab"><h4>${titulo}</h4>${tag ? `<span class="tag">${tag}</span>` : ''}</div><div class="secao-corpo">${corpo}</div></div>`;
