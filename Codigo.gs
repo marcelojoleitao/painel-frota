@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.84.1';
+const CODIGO_VERSAO = '2.85.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -1547,10 +1547,58 @@ function analisarFatura() { return analisarFormacaoFatura(null, null); }
 /*  Edição de campos da aba OS (observações, relato, justificativa) */
 /* ------------------------------------------------------------ */
 
+/**
+ * Valor de um registro procurando o cabeçalho por nomes alternativos e, se
+ * nenhum casar, por prefixo normalizado. Cabeçalhos mudam na planilha; o
+ * painel não deveria deixar de ler por causa disso.
+ */
+function _valorPorCabecalho_(obj, nomes, prefixo) {
+  for (let i = 0; i < nomes.length; i++) {
+    if (obj[nomes[i]] !== undefined && String(obj[nomes[i]]).trim() !== '') return _txt_(obj[nomes[i]]);
+  }
+  if (prefixo) {
+    const chaves = Object.keys(obj);
+    for (let i = 0; i < chaves.length; i++) {
+      if (_normCab_(chaves[i]).indexOf(prefixo) === 0) return _txt_(obj[chaves[i]]);
+    }
+  }
+  return '';
+}
+
+
+/** Mostra onde o painel encontrou cada coluna editável da aba OS. */
+function conferirColunasOS() {
+  const ss = _ssManut_();
+  const aba = ss.getSheetByName(CONFIG.ABA_OS) || SpreadsheetApp.openById(CONFIG.ID_BASE).getSheetByName(CONFIG.ABA_OS);
+  if (!aba) { Logger.log('Aba OS não encontrada.'); return; }
+  const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0].map(c => String(c || '').trim());
+  Logger.log('Cabeçalho da aba ' + aba.getName() + ':');
+  cab.forEach((c, i) => { if (c) Logger.log('   ' + _letraColuna_(i + 1) + ': ' + c); });
+  Logger.log('');
+  Logger.log('Campos editáveis pelo painel:');
+  Object.keys(CAMPOS_OS_EDITAVEIS).forEach(chave => {
+    const nomes = ALTERNATIVAS_OS[chave] || [CAMPOS_OS_EDITAVEIS[chave]];
+    let col = -1;
+    for (let i = 0; i < nomes.length && col < 0; i++) col = cab.findIndex(c => c.toUpperCase() === nomes[i].toUpperCase());
+    let porPrefixo = false;
+    if (col < 0) {
+      const alvo = _normCab_(nomes[0]);
+      col = cab.findIndex(c => _normCab_(c).indexOf(alvo) === 0);
+      porPrefixo = col >= 0;
+    }
+    Logger.log('   ' + chave.padEnd(14) + (col < 0 ? 'NÃO ENCONTRADA — procurei por: ' + nomes.join(', ')
+      : _letraColuna_(col + 1) + '  "' + cab[col] + '"' + (porPrefixo ? '  (casou pelo início do nome)' : '')));
+  });
+  return 'ok';
+}
+
 const CAMPOS_OS_EDITAVEIS = { obs: 'Observações', relato: 'Relato', diligencia: 'Diligência', justificativa: 'Justificativa', status: 'Status' };
 /** Rótulos alternativos aceitos para cada campo editável da aba OS. */
 const ALTERNATIVAS_OS = { aprovacao: ['Aprovação', 'Aprovacao', 'Análise', 'Analise'], obs: ['Observações', 'Observacoes'],
-  relato: ['Relato'], diligencia: ['Diligência', 'Diligencia'], justificativa: ['Justificativa'],
+  relato: ['Relato'], justificativa: ['Justificativa'],
+  // o cabeçalho desta coluna já mudou algumas vezes; aceitamos as variações
+  diligencia: ['Diligência', 'Diligencia', 'Diligência/Revisão/Fórum', 'Diligencia/Revisao/Forum',
+               'Diligência / Revisão / Fórum', 'Revisão', 'Fórum'],
   status: ['Status', 'Situação', 'Situacao'] };
 
 function salvarCamposOS(token, os, campos) {
@@ -1586,6 +1634,11 @@ function salvarCamposOS(token, os, campos) {
       const nomes = ALTERNATIVAS_OS[chave] || [rotulo];
       let col = -1;
       for (let i = 0; i < nomes.length && col < 0; i++) col = cab.findIndex(c => c.toUpperCase() === nomes[i].toUpperCase());
+      // se nenhum nome casar, aceita o cabeçalho que comece pelo primeiro nome
+      if (col < 0) {
+        const alvo = _normCab_(nomes[0]);
+        col = cab.findIndex(c => _normCab_(c).indexOf(alvo) === 0);
+      }
       if (col < 0) { recusados.push(rotulo + ' (coluna inexistente)'); return; }
       const celula = aba.getRange(linha, col + 1);
       if (celula.getFormula()) { recusados.push(rotulo + ' (coluna com fórmula)'); return; }
@@ -9027,7 +9080,7 @@ function _lerOS_(ss) {
     valor: _num_(o['Orçado']), aprovado: _num_(o['Aprovado']), data: _dataTxt_(o['Data']), oficina: _txt_(o['Oficina']), status: _txt_(o['Status']),
     unidade: _txt_(o['Unidade SIPAC']), obs: _txt_(o['Observações']), relato: _txt_(o['Relato']), justificativa: _txt_(o['Justificativa']),
     modelo: _txt_(o['Marca/Modelo']),
-    diligencia: _txt_(o['Diligência'] !== undefined ? o['Diligência'] : o['Diligencia']),
+    diligencia: _valorPorCabecalho_(o, ['Diligência', 'Diligencia', 'Diligência/Revisão/Fórum', 'Revisão', 'Fórum'], 'DILIGENCIA'),
     aprovacao: _txt_(o['Aprovação'] !== undefined ? o['Aprovação'] : o['Aprovacao']),
     linkAnalise: _txt_(o['Relatório da Análise'] !== undefined ? o['Relatório da Análise'] : o['Relatorio da Analise']) || _urlDaLinha_(o) }));
   if (ace) _linhasComoObjetos_(ace).forEach(o => lista.push({ origem: 'ACEITE', os: _txt_(o['OS']), placa: _txt_(o['Placa']).toUpperCase(),
