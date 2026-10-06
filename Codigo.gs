@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.85.0';
+const CODIGO_VERSAO = '2.86.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3212,6 +3212,158 @@ function _removerAcentos_(s) {
 
 function _normalizarCodigo_(v) { return String(v || '').trim(); }
 
+
+
+/* ============================================================
+   EXECUÇÃO CONTRATUAL — Contrato nº 08/2021 (Ticket Soluções)
+   Acompanha quanto já foi faturado por competência e projeta se o
+   saldo chega ao fim da vigência. Os limites ficam no CONFIG, com
+   as três projeções: média do exercício, média dos três últimos
+   meses e o ritmo que ainda caberia no saldo.
+   ============================================================ */
+
+const CONTRATO = {
+  vigenciaFim: '01/03/2027',          // última competência faturada: 02/2027
+  limites: {
+    abastecimento: 2200055.11,
+    pecas: 983278.07,
+    servicos: 498162.48
+  },
+  // rótulos das colunas de valor nas abas de títulos
+  colunas: {
+    abast: ['Valor Total', 'Valor da Nota', 'Total'],
+    pecas: ['Reembolso em Peças', 'Peças', 'Valor Peças'],
+    servicos: ['Reembolso de Mão de Obra', 'Mão de Obra', 'Serviços', 'Valor Serviços']
+  }
+};
+
+/** Competências entre duas datas, em ordem. */
+function _competenciasAte_(inicioMes, inicioAno, fimMes, fimAno) {
+  const lista = [];
+  let m = inicioMes, a = inicioAno;
+  while (a < fimAno || (a === fimAno && m <= fimMes)) {
+    lista.push(('0' + m).slice(-2) + '/' + a);
+    m++; if (m > 12) { m = 1; a++; }
+  }
+  return lista;
+}
+
+/** Soma por competência de uma aba de títulos. */
+function _executadoPorCompetencia_(tabela, nomesValor) {
+  const mapa = {};
+  if (!tabela || !tabela.cab || !tabela.linhas) return mapa;
+  const cab = tabela.cab.map(c => _normCab_(c));
+  const achar = nomes => {
+    for (let i = 0; i < nomes.length; i++) {
+      const alvo = _normCab_(nomes[i]);
+      const exato = cab.indexOf(alvo);
+      if (exato >= 0) return exato;
+    }
+    for (let i = 0; i < nomes.length; i++) {
+      const alvo = _normCab_(nomes[i]);
+      const p = cab.findIndex(c => c && c.indexOf(alvo) === 0);
+      if (p >= 0) return p;
+    }
+    return -1;
+  };
+  const iComp = achar(['Competência', 'Competencia', 'Mês', 'Mes']);
+  if (iComp < 0) return mapa;
+  const indices = {};
+  Object.keys(nomesValor).forEach(k => { indices[k] = achar(nomesValor[k]); });
+
+  tabela.linhas.forEach(l => {
+    const comp = _competenciaDaCelula_(l[iComp]) || String(l[iComp] || '').trim();
+    if (!/\d{2}\/\d{4}/.test(comp)) return;
+    const reg = mapa[comp] || (mapa[comp] = {});
+    Object.keys(indices).forEach(k => {
+      if (indices[k] < 0) return;
+      reg[k] = (reg[k] || 0) + (_num_(l[indices[k]]) || 0);
+    });
+  });
+  return mapa;
+}
+
+/**
+ * Execução do contrato: realizado por competência e as quatro linhas do
+ * acompanhamento — realizado, média do exercício, média dos três últimos
+ * meses e o ritmo que ainda cabe no saldo até o fim da vigência.
+ */
+function execucaoContrato(token) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const titulos = _lerTitulos_();
+    if (titulos.erro) return { ok: false, erro: 'Planilha de títulos: ' + titulos.erro };
+
+    const abast = _executadoPorCompetencia_(titulos.abast, { valor: CONTRATO.colunas.abast });
+    const manut = _executadoPorCompetencia_(titulos.manut,
+      { pecas: CONTRATO.colunas.pecas, servicos: CONTRATO.colunas.servicos, valor: ['Valor Total', 'Total'] });
+
+    // vigência: da primeira competência registrada até 02/2027
+    const compsManut = Object.keys(manut), compsAbast = Object.keys(abast);
+    const todas = compsManut.concat(compsAbast);
+    if (!todas.length) return { ok: false, erro: 'Nenhuma competência encontrada nas abas de títulos.' };
+    const chave = c => c.substring(3) + c.substring(0, 2);
+    todas.sort((a, b) => chave(a).localeCompare(chave(b)));
+    const primeira = todas[0];
+    const mFim = CONTRATO.vigenciaFim.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    // a vigência termina em 01/03/2027, então a última competência faturada é 02/2027
+    let fimMes = Number(mFim[2]) - 1, fimAno = Number(mFim[3]);
+    if (fimMes < 1) { fimMes = 12; fimAno--; }
+    const linha = _competenciasAte_(Number(primeira.substring(0, 2)), Number(primeira.substring(3)), fimMes, fimAno);
+
+    const montar = (mapa, campos, limite) => {
+      const serie = linha.map(c => {
+        const reg = mapa[c] || {};
+        const item = { comp: c, total: 0 };
+        campos.forEach(k => { item[k] = reg[k] || 0; item.total += item[k]; });
+        return item;
+      });
+      const realizadas = serie.filter(x => x.total > 0);
+      const executado = realizadas.reduce((t, x) => t + x.total, 0);
+      const saldo = limite - executado;
+      const restantes = serie.length - realizadas.length;
+      const anoAtual = new Date().getFullYear();
+      const doAno = realizadas.filter(x => Number(x.comp.substring(3)) === anoAtual);
+      const mediaAno = doAno.length ? executadoDe(doAno) / doAno.length : 0;
+      const ultimas3 = realizadas.slice(-3);
+      const media3 = ultimas3.length ? executadoDe(ultimas3) / ultimas3.length : 0;
+      const sustentavel = restantes > 0 ? saldo / restantes : 0;
+      // quando o saldo se esgota, mantido cada ritmo
+      const esgota = ritmo => {
+        if (ritmo <= 0) return '';
+        let acumulado = executado, i = realizadas.length;
+        while (i < serie.length) {
+          acumulado += ritmo;
+          if (acumulado > limite) return serie[i].comp;
+          i++;
+        }
+        return '';                       // não esgota dentro da vigência
+      };
+      return { serie: serie, realizadas: realizadas.length, restantes: restantes,
+        limite: limite, executado: Math.round(executado * 100) / 100,
+        saldo: Math.round(saldo * 100) / 100,
+        percentual: limite ? Math.round(executado / limite * 1000) / 10 : 0,
+        mediaAno: Math.round(mediaAno * 100) / 100, media3: Math.round(media3 * 100) / 100,
+        sustentavel: Math.round(sustentavel * 100) / 100,
+        esgotaMediaAno: esgota(mediaAno), esgotaMedia3: esgota(media3),
+        ultimaComp: realizadas.length ? realizadas[realizadas.length - 1].comp : '' };
+    };
+    function executadoDe(lista) { return lista.reduce((t, x) => t + x.total, 0); }
+
+    const limiteManut = CONTRATO.limites.pecas + CONTRATO.limites.servicos;
+    const saida = { ok: true, vigenciaFim: CONTRATO.vigenciaFim, ultimaCompetencia: linha[linha.length - 1],
+      competencias: linha,
+      abastecimento: montar(abast, ['valor'], CONTRATO.limites.abastecimento),
+      manutencao: montar(manut, ['pecas', 'servicos'], limiteManut),
+      limites: CONTRATO.limites,
+      geradoEm: Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm') };
+
+    // peças e serviços têm limites próprios: cada um tem o seu saldo
+    saida.manutencao.pecas = montar(manut, ['pecas'], CONTRATO.limites.pecas);
+    saida.manutencao.servicos = montar(manut, ['servicos'], CONTRATO.limites.servicos);
+    return saida;
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
 
 /* ============================================================
    RELATÓRIO DA FROTA (PDF, paisagem)

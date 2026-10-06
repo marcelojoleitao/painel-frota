@@ -807,7 +807,33 @@ table.tabela td.acoes { text-align: right; }
 .dem-tag.placa.clicavel:hover { background: var(--azul); color: #fff; }
 .dem-tag.modelo { background: rgba(20,24,31,.06); color: rgba(20,24,31,.66); font-weight: 600;
   max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dem-tag.agentes-linha { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.dem-tag.exec-cat { display: grid; grid-template-columns: 90px 1fr auto; align-items: center; gap: 10px; margin: 8px 0; }
+.exec-rotulo { font-weight: 700; font-size: 13px; }
+.exec-trilha { height: 14px; background: #EEF1F6; border-radius: 7px; overflow: hidden; }
+.exec-preenche { display: block; height: 100%; }
+.exec-valor { font-size: 11.5px; color: var(--tinta-suave); white-space: nowrap; }
+
+.barras-comp { display: flex; align-items: flex-end; gap: 6px; height: 210px; padding: 18px 2px 0; }
+.comp-col { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; }
+.comp-valor { font-size: 10px; color: var(--tinta-suave); margin-bottom: 2px; }
+.comp-barra { width: 100%; max-width: 46px; display: flex; flex-direction: column-reverse; border-radius: 3px 3px 0 0; overflow: hidden; }
+.comp-col.projecao .comp-barra { opacity: .55; }
+.parte { display: block; width: 100%; }
+.parte.pecas { background: #0B2C5C; }
+.parte.servicos { background: #F2B705; }
+.parte.unica { background: #0B2C5C; }
+.parte.proj { background: #9AA7BD; }
+.comp-rotulo { font-size: 9.5px; color: var(--tinta-suave); margin-top: 4px; }
+.legenda-comp { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 11px;
+  color: var(--tinta-suave); margin-top: 8px; }
+.legenda-comp .cor { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
+.legenda-comp .cor.pecas { background: #0B2C5C; }
+.legenda-comp .cor.servicos { background: #F2B705; }
+.legenda-comp .cor.unica { background: #0B2C5C; }
+.legenda-comp .cor.proj { background: #9AA7BD; }
+.svg-rol { overflow-x: auto; }
+
+.agentes-linha { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .agente-farol { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .agente-farol.vivo { background: var(--verde); box-shadow: 0 0 0 3px rgba(30,122,77,.18); }
 .agente-farol.morto { background: var(--vermelho); box-shadow: 0 0 0 3px rgba(154,47,36,.15); }
@@ -825,6 +851,32 @@ table.tabela td.acoes { text-align: right; }
 .dem-tag.prazo { background: #E9F7EF; color: #1E7A4D; font-family: var(--fonte-dados); }
 .dem-tag.venceu { background: #FDECEA; color: #9A2F24; font-family: var(--fonte-dados); }
 .dem-desc { font-size: 11.5px; color: var(--tinta-suave); line-height: 1.35; max-height: 46px; overflow: hidden; }
+.exec-cat { display: grid; grid-template-columns: 90px 1fr auto; align-items: center; gap: 10px; margin: 8px 0; }
+.exec-rotulo { font-weight: 700; font-size: 13px; }
+.exec-trilha { height: 14px; background: #EEF1F6; border-radius: 7px; overflow: hidden; }
+.exec-preenche { display: block; height: 100%; }
+.exec-valor { font-size: 11.5px; color: var(--tinta-suave); white-space: nowrap; }
+
+.barras-comp { display: flex; align-items: flex-end; gap: 6px; height: 210px; padding: 18px 2px 0; }
+.comp-col { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; }
+.comp-valor { font-size: 10px; color: var(--tinta-suave); margin-bottom: 2px; }
+.comp-barra { width: 100%; max-width: 46px; display: flex; flex-direction: column-reverse; border-radius: 3px 3px 0 0; overflow: hidden; }
+.comp-col.projecao .comp-barra { opacity: .55; }
+.parte { display: block; width: 100%; }
+.parte.pecas { background: #0B2C5C; }
+.parte.servicos { background: #F2B705; }
+.parte.unica { background: #0B2C5C; }
+.parte.proj { background: #9AA7BD; }
+.comp-rotulo { font-size: 9.5px; color: var(--tinta-suave); margin-top: 4px; }
+.legenda-comp { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 11px;
+  color: var(--tinta-suave); margin-top: 8px; }
+.legenda-comp .cor { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
+.legenda-comp .cor.pecas { background: #0B2C5C; }
+.legenda-comp .cor.servicos { background: #F2B705; }
+.legenda-comp .cor.unica { background: #0B2C5C; }
+.legenda-comp .cor.proj { background: #9AA7BD; }
+.svg-rol { overflow-x: auto; }
+
 .agentes-linha { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .agente-farol { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .agente-farol.vivo { background: var(--verde); box-shadow: 0 0 0 3px rgba(30,122,77,.18); }

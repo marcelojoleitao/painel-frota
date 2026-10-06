@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.85.0';
+const VERSAO_PAINEL = '2.86.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -82,7 +82,7 @@ const ESTADO = {
   pdfsPorOS: {}, pdfsPorPlaca: {}, filtroStatusOS: '', filtroStatusAceite: '',
   subAcoes: 'executar', lote: null, fila: null, subDados: 'importar', subOS: 'panorama', nivelOS: 'n2', osEditadas: {},
   subPag: 'panorama', processo: null, compProcesso: {}, tituloEditado: {},
-  subMultas: 'acompanhar', multas: null, projecao: null, cobranca: null, filtroCobranca: { registro: '', unidade: '', busca: '' }, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
+  subMultas: 'acompanhar', multas: null, contrato: null, contratoFoco: 'manutencao', projecao: null, cobranca: null, filtroCobranca: { registro: '', unidade: '', busca: '' }, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
   filtroAceite: '', filtroOS: { unidade: '', oficina: '' }, filtroAceites: { unidade: '', oficina: '' },
   subGestao: 'quadro', demandas: null, notas: null, soComDemanda: false, sinistros: null, filtroSinistro: { status: '', busca: '' },
   preventiva: null, prevReal: null, prevVisao: 'viatura', prevAberta: {},
@@ -6261,6 +6261,155 @@ function badgeDemandasFicha(placa) {
   const abertas = demandasDaViatura(placa).filter(x => !/conclu/i.test(x.fase));
   return (abertas.length ? `<span class="badge ${abertas.some(atrasada) ? 'indisponivel' : 'manutencao'}">${abertas.length} aberta(s)</span> ` : '') +
     `<button class="link-btn" onclick="novaDemandaDaViatura('${escAttr(placa)}')" style="font-weight:700">+ nova demanda</button>`;
+}
+
+
+/* ---------------- execução contratual ---------------- */
+function renderContrato(c) {
+  if (!ESTADO.contrato) {
+    c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Somando o faturado por competência…</div></div>';
+    const run = servidor('execucaoContrato',
+      r => { if (!r || !r.ok) { c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha.') + '</div></div>'; return; }
+             ESTADO.contrato = r; renderContrato(c); },
+      e => { c.innerHTML = '<div class="cartao largo"><div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div></div>'; });
+    if (run) run.execucaoContrato(ESTADO.token);
+    return;
+  }
+  const d = ESTADO.contrato;
+  const foco = ESTADO.contratoFoco || 'manutencao';
+  const bloco = foco === 'abastecimento' ? d.abastecimento : d.manutencao;
+
+  c.innerHTML = `
+    <div class="os-barra-acoes" style="margin-bottom:12px">
+      <div class="alternador">
+        <button class="${foco === 'manutencao' ? 'ativo' : ''}" data-contrato="manutencao">Manutenção</button>
+        <button class="${foco === 'abastecimento' ? 'ativo' : ''}" data-contrato="abastecimento">Abastecimento</button>
+      </div>
+      <div style="flex:1"></div>
+      <span class="vinculo">vigência até ${esc(d.vigenciaFim)} • última competência ${esc(d.ultimaCompetencia)}${d.geradoEm ? ' • apurado em ' + esc(d.geradoEm) : ''}</span>
+    </div>
+
+    <div class="kpis">
+      ${kpi('Limite contratual', fmtMoeda(bloco.limite), foco === 'manutencao' ? 'peças + serviços' : 'abastecimento', '', null, true)}
+      ${kpi('Executado', fmtMoeda(bloco.executado), fmtDec(bloco.percentual) + '% do limite', bloco.percentual > 85 ? 'vermelho' : bloco.percentual > 70 ? 'ambar' : '', null, true)}
+      ${kpi('Saldo disponível', fmtMoeda(bloco.saldo), bloco.restantes + ' competência(s) a faturar', bloco.saldo > 0 ? 'verde' : 'vermelho', null, true)}
+      ${kpi('Ritmo sustentável', fmtMoeda(bloco.sustentavel), 'por mês até o fim', '', null, true)}
+      ${kpi('Média 3 meses', fmtMoeda(bloco.media3), bloco.media3 > bloco.sustentavel ? 'acima do sustentável' : 'dentro do sustentável', bloco.media3 > bloco.sustentavel ? 'ambar' : 'verde', null, true)}
+    </div>
+
+    ${foco === 'manutencao' ? `<div class="cartao largo" style="margin-bottom:12px">
+      <div class="cartao-cab"><h3>Execução por categoria</h3><small>peças e serviços têm limites próprios</small></div>
+      ${[['Peças', d.manutencao.pecas], ['Serviços', d.manutencao.servicos]].map(([rotulo, b]) => `
+        <div class="exec-cat">
+          <span class="exec-rotulo">${rotulo}</span>
+          <span class="exec-trilha"><span class="exec-preenche" style="width:${Math.min(100, b.percentual)}%; background:${b.percentual > 85 ? 'var(--vermelho)' : b.percentual > 70 ? 'var(--ambar)' : 'var(--azul)'}"></span></span>
+          <span class="exec-valor">${fmtDec(b.percentual)}% usado • saldo ${fmtMoeda(b.saldo)}</span>
+        </div>`).join('')}
+    </div>` : ''}
+
+    <div class="cartao largo" style="margin-bottom:12px">
+      <div class="cartao-cab"><h3>Gasto por competência</h3>
+        <small>realizado e projeção pelo ritmo atual (${fmtMoeda(bloco.mediaAno)}/mês no exercício)</small></div>
+      ${barrasCompetencia(bloco, foco)}
+    </div>
+
+    <div class="cartao largo">
+      <div class="cartao-cab"><h3>Acumulado × limite contratual</h3><small>quatro cenários até o fim da vigência</small></div>
+      ${graficoAcumulado(bloco)}
+    </div>
+
+    ${alertaContrato(bloco, d)}`;
+
+  c.querySelectorAll('button[data-contrato]').forEach(b => b.addEventListener('click', () => {
+    ESTADO.contratoFoco = b.dataset.contrato; renderContrato(c);
+  }));
+  ajustarKpis();
+}
+
+/** Barras por competência: realizado em cores, projeção em cinza. */
+function barrasCompetencia(b, foco) {
+  const maximo = Math.max(1, ...b.serie.map(x => x.total), b.media3);
+  return `<div class="barras-comp">${b.serie.map((x, i) => {
+    const realizado = x.total > 0;
+    const valor = realizado ? x.total : b.media3;
+    const altura = Math.round(valor / maximo * 100);
+    return `<div class="comp-col ${realizado ? '' : 'projecao'}" title="${escAttr(x.comp + ' — ' + (realizado ? fmtMoeda(x.total) : 'projeção ' + fmtMoeda(b.media3)))}">
+      <span class="comp-valor">${Math.round(valor / 1000)}</span>
+      <span class="comp-barra" style="height:${altura}%">
+        ${realizado && foco === 'manutencao'
+          ? `<span class="parte pecas" style="height:${Math.round((x.pecas || 0) / valor * 100)}%"></span>
+             <span class="parte servicos" style="height:${Math.round((x.servicos || 0) / valor * 100)}%"></span>`
+          : `<span class="parte ${realizado ? 'unica' : 'proj'}" style="height:100%"></span>`}
+      </span>
+      <span class="comp-rotulo">${esc(x.comp.replace('/', '/').substring(0, 7))}</span>
+    </div>`;
+  }).join('')}</div>
+  <div class="legenda-comp">
+    ${foco === 'manutencao' ? '<span><i class="cor pecas"></i>Peças</span><span><i class="cor servicos"></i>Serviços</span>' : '<span><i class="cor unica"></i>Abastecimento</span>'}
+    <span><i class="cor proj"></i>Projeção</span>
+    <span class="vinculo">valores em R$ mil</span>
+  </div>`;
+}
+
+/** Acumulado com as quatro linhas, desenhado em SVG. */
+function graficoAcumulado(b) {
+  const larg = 760, alt = 260, mx = 54, my = 22;
+  const n = b.serie.length;
+  const realizadas = b.realizadas;
+  const linhas = [];
+  let acumulado = 0;
+  const realizado = b.serie.slice(0, realizadas).map(x => { acumulado += x.total; return acumulado; });
+  const projetar = ritmo => {
+    const pts = [acumulado]; let v = acumulado;
+    for (let i = realizadas; i < n; i++) { v += ritmo; pts.push(v); }
+    return pts;
+  };
+  const cenarios = [
+    { nome: 'Média do exercício', ritmo: b.mediaAno, cor: '#C58B00' },
+    { nome: 'Média 3 meses', ritmo: b.media3, cor: '#9A2F24' },
+    { nome: 'Ritmo sustentável', ritmo: b.sustentavel, cor: '#1E7A4D' }
+  ];
+  const maior = Math.max(b.limite, ...cenarios.map(c => projetar(c.ritmo).slice(-1)[0]));
+  const x = i => mx + (larg - mx - 16) * (n > 1 ? i / (n - 1) : 0);
+  const y = v => alt - my - (alt - my * 2) * (v / maior);
+
+  const caminho = (valores, deslocamento) => valores.map((v, i) =>
+    (i ? 'L' : 'M') + x(i + deslocamento).toFixed(1) + ' ' + y(v).toFixed(1)).join(' ');
+
+  cenarios.forEach(cen => {
+    linhas.push(`<path d="${caminho(projetar(cen.ritmo), realizadas - 1)}" fill="none" stroke="${cen.cor}" stroke-width="2" stroke-dasharray="6 4"/>`);
+  });
+
+  return `<div class="svg-rol"><svg viewBox="0 0 ${larg} ${alt}" style="width:100%; height:auto">
+    ${[0, 0.5, 1].map(f => `<line x1="${mx}" y1="${y(maior * f)}" x2="${larg - 16}" y2="${y(maior * f)}" stroke="#E3E8F0"/>
+      <text x="4" y="${y(maior * f) + 4}" font-size="10" fill="#5A6376">${fmtMoeda(maior * f).replace('R$ ', '')}</text>`).join('')}
+    <line x1="${mx}" y1="${y(b.limite)}" x2="${larg - 16}" y2="${y(b.limite)}" stroke="#14181F" stroke-width="1.5"/>
+    <text x="${mx + 6}" y="${y(b.limite) - 5}" font-size="10.5" font-weight="bold" fill="#14181F">Limite ${esc(fmtMoeda(b.limite))}</text>
+    ${linhas.join('')}
+    <path d="${caminho(realizado, 0)}" fill="none" stroke="#0B2C5C" stroke-width="2.6"/>
+    ${b.serie.map((s, i) => `<text x="${x(i)}" y="${alt - 4}" font-size="9" fill="#5A6376" text-anchor="middle">${esc(s.comp.substring(0, 2))}</text>`).join('')}
+  </svg></div>
+  <div class="legenda-comp">
+    <span><i class="cor" style="background:#0B2C5C"></i>Realizado</span>
+    ${cenarios.map(c => `<span><i class="cor" style="background:${c.cor}"></i>${esc(c.nome)} (${fmtMoeda(c.ritmo)}/mês)</span>`).join('')}
+  </div>`;
+}
+
+/** Aviso sobre o esgotamento do saldo. */
+function alertaContrato(b, d) {
+  const esgota = b.esgotaMedia3 || b.esgotaMediaAno;
+  if (!esgota) {
+    return `<div class="cartao largo" style="border-left:3px solid var(--verde); margin-top:12px">
+      <b class="ok-txt">Saldo suficiente até o fim da vigência</b>
+      <div class="vinculo">Mantido o ritmo atual, o saldo de ${fmtMoeda(b.saldo)} cobre as ${b.restantes} competência(s) restantes.
+      O limite sustentável é de ${fmtMoeda(b.sustentavel)} por mês e a média dos últimos três meses é de ${fmtMoeda(b.media3)}.</div>
+    </div>`;
+  }
+  return `<div class="cartao largo" style="border-left:3px solid var(--vermelho); margin-top:12px">
+    <b style="color:var(--vermelho)">ATENÇÃO</b>
+    <div style="margin-top:4px">Mantido o ritmo atual, o saldo se esgota em <b>${esc(esgota)}</b>, antes do fim da vigência (${esc(d.ultimaCompetencia)}).</div>
+    <div style="margin-top:4px">Para fechar ${esc(d.ultimaCompetencia)} dentro do limite: gasto médio de até <b>${fmtMoeda(b.sustentavel)}</b> por mês.</div>
+  </div>`;
 }
 
 </script>
