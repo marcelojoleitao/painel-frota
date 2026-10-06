@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.86.3';
+const CODIGO_VERSAO = '2.86.4';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3230,11 +3230,14 @@ const CONTRATO = {
     pecas: 983278.07,
     servicos: 498162.48
   },
-  // rótulos das colunas de valor nas abas de títulos
+  // nomes reais das colunas nas abas de títulos
   colunas: {
-    abast: ['Valor Total', 'Valor da Nota', 'Total'],
-    pecas: ['Reembolso em Peças', 'Peças', 'Valor Peças'],
-    servicos: ['Reembolso de Mão de Obra', 'Mão de Obra', 'Serviços', 'Valor Serviços']
+    abast: ['Valor Bruto'],
+    pecas: ['Valor em Peças'],
+    servicos: ['Valor Mão de Obra'],
+    // acidentes são reembolsados à parte: entram no acompanhamento, mas separados
+    pecasAcidente: ['Valor em Peças (Acidente)'],
+    servicosAcidente: ['Valor Mão de Obra (Acidente)']
   }
 };
 
@@ -3260,9 +3263,10 @@ function _executadoPorCompetencia_(tabela, nomesValor) {
       const exato = cab.indexOf(alvo);
       if (exato >= 0) return exato;
     }
+    // o prefixo só vale quando não houver risco de pegar a coluna de acidente
     for (let i = 0; i < nomes.length; i++) {
       const alvo = _normCab_(nomes[i]);
-      const p = cab.findIndex(c => c && c.indexOf(alvo) === 0);
+      const p = cab.findIndex(c => c && c.indexOf(alvo) === 0 && c.indexOf('ACIDENTE') < 0);
       if (p >= 0) return p;
     }
     return -1;
@@ -3318,8 +3322,10 @@ function execucaoContrato(token) {
     if (titulos.erro) return { ok: false, erro: 'Planilha de títulos: ' + titulos.erro };
 
     const abast = _executadoPorCompetencia_(titulos.abast, { valor: CONTRATO.colunas.abast });
-    const manut = _executadoPorCompetencia_(titulos.manut,
-      { pecas: CONTRATO.colunas.pecas, servicos: CONTRATO.colunas.servicos, valor: ['Valor Total', 'Total'] });
+    const manut = _executadoPorCompetencia_(titulos.manut, {
+      pecas: CONTRATO.colunas.pecas, servicos: CONTRATO.colunas.servicos,
+      pecasAcidente: CONTRATO.colunas.pecasAcidente, servicosAcidente: CONTRATO.colunas.servicosAcidente
+    });
 
     // apenas a vigência atual: competências anteriores pertencem a outro período
     const mIni = CONTRATO.vigenciaInicio.match(/(\d{2})\/(\d{2})\/(\d{4})/);
@@ -3377,6 +3383,7 @@ function execucaoContrato(token) {
       competencias: linha,
       abastecimento: montar(abast, ['valor'], CONTRATO.limites.abastecimento),
       manutencao: montar(manut, ['pecas', 'servicos'], limiteManut),
+      acidentes: montar(manut, ['pecasAcidente', 'servicosAcidente'], 0),
       limites: CONTRATO.limites,
       geradoEm: Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm') };
 
