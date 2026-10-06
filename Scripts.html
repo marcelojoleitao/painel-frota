@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.86.4';
+const VERSAO_PAINEL = '2.86.5';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -6265,6 +6265,22 @@ function badgeDemandasFicha(placa) {
 }
 
 
+
+/** Competência 03/2026 → "mar/26", para o eixo ficar legível. */
+function mesCurto(comp) {
+  const m = String(comp || '').match(/^(\d{2})\/(\d{4})$/);
+  if (!m) return String(comp || '');
+  const nomes = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  return nomes[Number(m[1]) - 1] + '/' + m[2].substring(2);
+}
+
+/** Valor abreviado para o eixo: 1,5 mi | 740 mil | 0. */
+function emMilhoes(v) {
+  if (!v) return '0';
+  if (v >= 1000000) return fmtDec(Math.round(v / 100000) / 10) + ' mi';
+  return Math.round(v / 1000) + ' mil';
+}
+
 /* ---------------- execução contratual ---------------- */
 function renderContrato(c) {
   if (!ESTADO.contrato) {
@@ -6300,10 +6316,10 @@ function renderContrato(c) {
 
     ${foco === 'manutencao' ? `<div class="cartao largo" style="margin-bottom:12px">
       <div class="cartao-cab"><h3>Execução por categoria</h3><small>peças e serviços têm limites próprios</small></div>
-      ${[['Peças', d.manutencao.pecas], ['Serviços', d.manutencao.servicos]].map(([rotulo, b]) => `
+      ${[['Peças', d.manutencao.pecas, '#0B2C5C'], ['Serviços', d.manutencao.servicos, '#F2B705']].map(([rotulo, b, cor]) => `
         <div class="exec-cat">
           <span class="exec-rotulo">${rotulo}</span>
-          <span class="exec-trilha"><span class="exec-preenche" style="width:${Math.min(100, b.percentual)}%; background:${b.percentual > 85 ? 'var(--vermelho)' : b.percentual > 70 ? 'var(--ambar)' : 'var(--azul)'}"></span></span>
+          <span class="exec-trilha"><span class="exec-preenche" style="width:${Math.min(100, b.percentual)}%; background:${b.percentual > 85 ? 'var(--vermelho)' : cor}"></span></span>
           <span class="exec-valor">${fmtDec(b.percentual)}% usado • saldo ${fmtMoeda(b.saldo)}</span>
         </div>`).join('')}
     </div>` : ''}
@@ -6342,17 +6358,25 @@ function barrasCompetencia(b, foco) {
     return `<div class="comp-col ${realizado ? '' : 'projecao'}" title="${escAttr(x.comp + ' — ' + (realizado ? fmtMoeda(x.total) : 'projeção ' + fmtMoeda(b.media3)))}">
       <span class="comp-valor">${Math.round(valor / 1000)}</span>
       <span class="comp-barra" style="height:${altura}%">
-        ${realizado && foco === 'manutencao'
-          ? `<span class="parte pecas" style="height:${Math.round((x.pecas || 0) / valor * 100)}%"></span>
-             <span class="parte servicos" style="height:${Math.round((x.servicos || 0) / valor * 100)}%"></span>`
-          : `<span class="parte ${realizado ? 'unica' : 'proj'}" style="height:100%"></span>`}
+        ${foco === 'manutencao'
+          ? (() => {
+              // na projeção, mantém a proporção média entre peças e serviços já praticada
+              const somaP = b.serie.reduce((t, s2) => t + (s2.pecas || 0), 0);
+              const somaS = b.serie.reduce((t, s2) => t + (s2.servicos || 0), 0);
+              const base = Math.max(1, somaP + somaS);
+              const p = realizado ? (x.pecas || 0) : somaP / base * valor;
+              const sv = realizado ? (x.servicos || 0) : somaS / base * valor;
+              return `<span class="parte pecas ${realizado ? '' : 'proj'}" style="height:${Math.round(p / valor * 100)}%"></span>
+                      <span class="parte servicos ${realizado ? '' : 'proj'}" style="height:${Math.round(sv / valor * 100)}%"></span>`;
+            })()
+          : `<span class="parte unica ${realizado ? '' : 'proj-unica'}" style="height:100%"></span>`}
       </span>
-      <span class="comp-rotulo">${esc(x.comp.replace('/', '/').substring(0, 7))}</span>
+      <span class="comp-rotulo">${esc(mesCurto(x.comp))}</span>
     </div>`;
   }).join('')}</div>
   <div class="legenda-comp">
     ${foco === 'manutencao' ? '<span><i class="cor pecas"></i>Peças</span><span><i class="cor servicos"></i>Serviços</span>' : '<span><i class="cor unica"></i>Abastecimento</span>'}
-    <span><i class="cor proj"></i>Projeção</span>
+    <span><i class="cor proj"></i>Projeção (mesma proporção, em tom claro)</span>
     <span class="vinculo">valores em R$ mil</span>
   </div>`;
 }
@@ -6387,13 +6411,13 @@ function graficoAcumulado(b) {
   });
 
   return `<div class="svg-rol"><svg viewBox="0 0 ${larg} ${alt}" style="width:100%; height:auto">
-    ${[0, 0.5, 1].map(f => `<line x1="${mx}" y1="${y(maior * f)}" x2="${larg - 16}" y2="${y(maior * f)}" stroke="#E3E8F0"/>
-      <text x="4" y="${y(maior * f) + 4}" font-size="10" fill="#5A6376">${fmtMoeda(maior * f).replace('R$ ', '')}</text>`).join('')}
+    ${[0, 0.25, 0.5, 0.75, 1].map(f => `<line x1="${mx}" y1="${y(maior * f)}" x2="${larg - 16}" y2="${y(maior * f)}" stroke="#E3E8F0"/>
+      <text x="${mx - 6}" y="${y(maior * f) + 3.5}" font-size="9.5" fill="#5A6376" text-anchor="end">${esc(emMilhoes(maior * f))}</text>`).join('')}
     <line x1="${mx}" y1="${y(b.limite)}" x2="${larg - 16}" y2="${y(b.limite)}" stroke="#14181F" stroke-width="1.5"/>
-    <text x="${mx + 6}" y="${y(b.limite) - 5}" font-size="10.5" font-weight="bold" fill="#14181F">Limite ${esc(fmtMoeda(b.limite))}</text>
+    <text x="${larg - 18}" y="${y(b.limite) - 6}" font-size="10.5" font-weight="bold" fill="#14181F" text-anchor="end">Limite ${esc(fmtMoeda(b.limite))}</text>
     ${linhas.join('')}
     <path d="${caminho(realizado, 0)}" fill="none" stroke="#0B2C5C" stroke-width="2.6"/>
-    ${b.serie.map((s, i) => `<text x="${x(i)}" y="${alt - 4}" font-size="9" fill="#5A6376" text-anchor="middle">${esc(s.comp.substring(0, 2))}</text>`).join('')}
+    ${b.serie.map((s, i) => `<text x="${x(i)}" y="${alt - 4}" font-size="9" fill="#5A6376" text-anchor="middle">${esc(mesCurto(s.comp))}</text>`).join('')}
   </svg></div>
   <div class="legenda-comp">
     <span><i class="cor" style="background:#0B2C5C"></i>Realizado</span>
