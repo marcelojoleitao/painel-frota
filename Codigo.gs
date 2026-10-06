@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.86.1';
+const CODIGO_VERSAO = '2.86.2';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3283,13 +3283,35 @@ function _executadoPorCompetencia_(tabela, nomesValor) {
   return mapa;
 }
 
+
+/** Mostra os cabeçalhos das abas de títulos e o que o contrato conseguiu somar. */
+function conferirContrato() {
+  const t = _lerTitulos_();
+  [['Títulos Abast.', t.abast], ['Títulos Manut.', t.manut]].forEach(([nome, tab]) => {
+    Logger.log('=== ' + nome + ' ===');
+    if (!tab) { Logger.log('   aba não lida'); return; }
+    Logger.log('   linhas: ' + (tab.linhas ? tab.linhas.length : 0));
+    (tab.cab || []).forEach((c, i) => { if (String(c || '').trim()) Logger.log('   ' + _letraColuna_(i + 1) + ': ' + c); });
+  });
+  Logger.log('');
+  const r = execucaoContrato('');
+  if (!r.ok) { Logger.log('Falha: ' + r.erro); return; }
+  ['abastecimento', 'manutencao'].forEach(k => {
+    const b = r[k];
+    Logger.log('--- ' + k + ' | limite ' + _moedaBR_(b.limite) + ' | executado ' + _moedaBR_(b.executado) +
+      ' (' + b.percentual + '%) | competências com valor: ' + b.realizadas);
+    b.serie.filter(x => x.total > 0).forEach(x => Logger.log('   ' + x.comp + ': ' + _moedaBR_(x.total)));
+  });
+  return 'ok';
+}
+
 /**
  * Execução do contrato: realizado por competência e as quatro linhas do
  * acompanhamento — realizado, média do exercício, média dos três últimos
  * meses e o ritmo que ainda cabe no saldo até o fim da vigência.
  */
 function execucaoContrato(token) {
-  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (token) { const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao; }
   try {
     const titulos = _lerTitulos_();
     if (titulos.erro) return { ok: false, erro: 'Planilha de títulos: ' + titulos.erro };
