@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.83.1';
+const VERSAO_PAINEL = '2.84.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -724,11 +724,15 @@ function abrirFicha(placa) {
     const run = servidor('lerDemandas', r => {
       if (!r || !r.ok) return;
       ESTADO.demandas = r;
-      // a resposta pode demorar: só redesenha se esta mesma ficha ainda estiver aberta,
-      // senão a ficha reaparece por cima do que a pessoa está fazendo agora
+      // nunca reabrir a ficha por conta disso: a pessoa pode já estar em outra
+      // coisa. Atualiza só o que está visível.
       const gaveta = el('gaveta');
-      if (gaveta && gaveta.classList.contains('aberta') && ESTADO.fichaAberta === placa) abrirFicha(placa);
-      else if (ESTADO.aba === 'viaturas') aplicar();         // atualiza só os marcadores da lista
+      if (gaveta && gaveta.classList.contains('aberta') && ESTADO.fichaAberta === placa) {
+        const alvo = el('dem-ficha-' + placa);
+        if (alvo) alvo.innerHTML = htmlDemandasDaFicha(placa);
+        const selo = el('dem-badge-' + placa);
+        if (selo) selo.innerHTML = badgeDemandasFicha(placa);
+      } else if (ESTADO.aba === 'viaturas') aplicar();
     }, () => {});
     if (run) run.lerDemandas(ESTADO.token);
   }
@@ -802,19 +806,8 @@ function abrirFicha(placa) {
       (v.restricoes ? `<div class="dado largo" style="margin-top:8px"><div class="k">Restrições (DETRAN)</div><div class="pre">${esc(v.restricoes)}</div></div>` : ''),
       v.statusLic === 'Atrasado' ? '<span class="badge indisponivel">Atrasado</span>' : v.statusLic === 'Em dia' ? '<span class="badge disponivel">Em dia</span>' : '')}
 
-    ${(() => {
-      const dem = demandasDaViatura(v.placa);
-      if (!ESTADO.demandas) return '';
-      const abertas = dem.filter(x => !/conclu/i.test(x.fase));
-      const botao = `<button class="link-btn" onclick="novaDemandaDaViatura('${escAttr(v.placa)}')" style="font-weight:700">+ nova demanda</button>`;
-      return secao('Demandas', (dem.length ? dem.map(x => `<div class="os-item ${atrasada(x) ? 'aceite' : ''}">
-        <a class="link-btn" style="font-weight:700" onclick="fecharFicha(); ESTADO.aba='gestao'; mudarAba('gestao'); setTimeout(function(){ abrirDemanda('${escAttr(x.id)}'); }, 200)">${esc(x.titulo)}</a>
-        • ${esc(x.fase)}${x.prazo ? ' • prazo ' + esc(x.prazo) : ''}${x.sei ? ' • SEI ' + esc(x.sei) : ''}${x.responsavel ? ' • ' + esc(x.responsavel) : ''}
-        ${x.descricao ? `<div class="linha2" style="color:var(--tinta-suave)">${esc(x.descricao)}</div>` : ''}</div>`).join('')
-        : '<div class="nao">Nenhuma demanda registrada para esta viatura</div>') +
-        `<div class="form-acoes" style="margin-top:6px"><button class="btn claro" onclick="novaDemandaDaViatura('${escAttr(v.placa)}')">+ Nova demanda para ${esc(v.placa)}</button></div>`,
-        (abertas.length ? `<span class="badge ${abertas.some(atrasada) ? 'indisponivel' : 'manutencao'}">${abertas.length} aberta(s)</span> ` : '') + botao);
-    })()}
+    ${secao('Demandas', `<div id="dem-ficha-${escAttr(v.placa)}">${htmlDemandasDaFicha(v.placa)}</div>`,
+      `<span id="dem-badge-${escAttr(v.placa)}">${badgeDemandasFicha(v.placa)}</span>`)}
 
     ${secao('Multas', multasHtml + (v.multasConsultaEm ? `<div class="cartao-dica">Consulta DETRAN em ${esc(v.multasConsultaEm)}</div>` : ''), v.qtdMultas ? `<span class="badge indisponivel">${v.qtdMultas} auto(s) • ${fmtMoeda(v.valorMultas)}</span>` : '<span class="badge disponivel">Sem multas</span>')}
 
@@ -4685,7 +4678,8 @@ function desenharQuadro(c) {
         ${placas.length
           ? placas.slice(0, 4).map(pl => {
               const vv = viaturaDaMulta(pl);
-              return `<span class="dem-tag placa" title="${escAttr(vv ? vv.modelo + (vv.unidade ? ' • ' + vv.unidade : '') : 'viatura fora do cadastro')}">${esc(pl)}</span>`;
+              return `<span class="dem-tag placa clicavel" title="${escAttr((vv ? vv.modelo + (vv.unidade ? ' • ' + vv.unidade : '') : 'viatura fora do cadastro') + ' — abrir a ficha da viatura')}"
+                onclick="event.stopPropagation(); abrirFicha('${escAttr(pl)}')">${esc(pl)}</span>`;
             }).join('') +
             (placas.length > 4 ? `<span class="dem-tag">+${placas.length - 4}</span>` : '') +
             (unica ? `<span class="dem-tag modelo">${esc(unica.modeloCurto || unica.modelo)}</span>` : '')
@@ -6230,6 +6224,27 @@ function carregarAgentes() {
     },
     () => { caixa.innerHTML = '<div class="vinculo">não consegui consultar os agentes</div>'; });
   if (run) run.lerAgentes(ESTADO.token);
+}
+
+
+/** Conteúdo da seção Demandas da ficha, para poder ser repintado sozinho. */
+function htmlDemandasDaFicha(placa) {
+  if (!ESTADO.demandas) return '<div class="vinculo">carregando as demandas…</div>';
+  const dem = demandasDaViatura(placa);
+  return (dem.length ? dem.map(x => `<div class="os-item ${atrasada(x) ? 'aceite' : ''}">
+      <a class="link-btn" style="font-weight:700" onclick="fecharFicha(); ESTADO.aba='gestao'; mudarAba('gestao'); setTimeout(function(){ abrirDemanda('${escAttr(x.id)}'); }, 200)">${esc(x.titulo)}</a>
+      • ${esc(x.fase)}${x.prazo ? ' • prazo ' + esc(x.prazo) : ''}${x.sei ? ' • SEI ' + esc(x.sei) : ''}${x.responsavel ? ' • ' + esc(x.responsavel) : ''}
+      ${(x.tarefas || []).length ? `<div class="linha2 vinculo">${x.tarefas.filter(t => t.feita).length}/${x.tarefas.length} tarefa(s)</div>` : ''}
+      ${x.descricao ? `<div class="linha2" style="color:var(--tinta-suave)">${esc(x.descricao)}</div>` : ''}</div>`).join('')
+    : '<div class="nao">Nenhuma demanda registrada para esta viatura</div>') +
+    `<div class="form-acoes" style="margin-top:6px"><button class="btn claro" onclick="novaDemandaDaViatura('${escAttr(placa)}')">+ Nova demanda para ${esc(placa)}</button></div>`;
+}
+
+function badgeDemandasFicha(placa) {
+  if (!ESTADO.demandas) return '';
+  const abertas = demandasDaViatura(placa).filter(x => !/conclu/i.test(x.fase));
+  return (abertas.length ? `<span class="badge ${abertas.some(atrasada) ? 'indisponivel' : 'manutencao'}">${abertas.length} aberta(s)</span> ` : '') +
+    `<button class="link-btn" onclick="novaDemandaDaViatura('${escAttr(placa)}')" style="font-weight:700">+ nova demanda</button>`;
 }
 
 </script>
