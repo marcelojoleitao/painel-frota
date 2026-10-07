@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.86.5';
+const VERSAO_PAINEL = '2.87.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2867,6 +2867,25 @@ function nivelDaOS(status) {
 function pesoNivel(k) { const i = NIVEIS_OS.findIndex(n => n.k === k); return i < 0 ? 99 : i; }
 
 /** Junta a OS com o cadastro da viatura: modelo e unidade vêm da ConsultaBD, não da aba OS. */
+
+/**
+ * A OS corresponde ao que foi digitado? Procura por placa (ignorando traços),
+ * número da OS, modelo, unidade e oficina. Vale também para viatura que não
+ * está na nossa frota, porque usa o que a própria linha da OS traz.
+ */
+function casaBuscaOS(x, termo) {
+  if (!termo) return true;
+  const soDigitos = termo.replace(/\D/g, '');
+  const placa = String(x.o.placa || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  const os = String(x.o.os || '').replace(/\D/g, '');
+  // número da OS: casa pelo começo, para "213" achar "21306717"
+  if (soDigitos.length >= 3 && os.indexOf(soDigitos) === 0) return true;
+  if (placa.indexOf(termo.replace(/[^A-Za-z0-9]/g, '')) >= 0) return true;
+  const alvo = [x.o.os, x.o.placa, x.modelo, x.modeloCompleto, x.unidade, x.o.oficina,
+    x.o.status, x.o.obs, x.o.relato].join(' ').toUpperCase();
+  return alvo.indexOf(termo) >= 0;
+}
+
 function osComViatura(o) {
   const v = ESTADO.veiculos.find(x => x.placa === o.placa || x.placaMerc === o.placa || x.placaRes === o.placa);
   return {
@@ -2882,14 +2901,19 @@ function renderOSAcompanhar(lista) {
   const c = el('os-conteudo'); if (!c) return;
   const exib = new Set(lista.map(v => v.placa));
   const filtroAtivo = Object.values(ESTADO.filtros).some(s => s.size) || ESTADO.busca || ESTADO.odoMin !== null || ESTADO.odoMax !== null;
+  const f = ESTADO.filtroOS;
+  const termo = String(f.busca || '').trim().toUpperCase();
+  const buscando = termo.length >= 2;
+  // Buscando, o filtro da frota é ignorado: a OS pode ser de viatura de outra
+  // frota, que por definição não está na ConsultaBD.
   const todas = (ESTADO.dados.os || []).filter(o => o.origem === 'PENDENTE')
     .map(osComViatura)
-    .filter(x => !filtroAtivo || !x.v || exib.has(x.v.placa));
+    .filter(x => buscando || !filtroAtivo || !x.v || exib.has(x.v.placa))
+    .filter(x => !buscando || casaBuscaOS(x, termo));
 
   const contagem = {};
   todas.forEach(x => { contagem[x.nivel] = (contagem[x.nivel] || 0) + 1; });
-  const nivel = ESTADO.nivelOS;
-  const f = ESTADO.filtroOS;
+  const nivel = buscando ? 'todas' : ESTADO.nivelOS;   // a busca varre todos os níveis
   const selecionadas = (nivel === 'todas' ? todas : todas.filter(x => x.nivel === nivel))
     .filter(x => !f.unidade || (x.unidade || '—') === f.unidade)
     .filter(x => !f.oficina || (x.o.oficina || '—') === f.oficina)
@@ -2952,6 +2976,11 @@ function renderOSAcompanhar(lista) {
     <div class="cartao largo">
       <div class="cartao-cab"><h3>${esc(rotuloNivel)}</h3><small>${selecionadas.length} ordem(ns) — edite e salve direto aqui</small></div>
       <div class="os-barra-acoes">
+        <div class="busca" style="max-width:300px">
+          <input id="os-busca" type="search" placeholder="placa ou número da OS" value="${escAttr(f.busca)}"
+                 title="Procura em todas as OS, inclusive de viaturas de outras frotas">
+        </div>
+        ${buscando ? `<span class="chip-filtro">busca: ${esc(f.busca)} <button data-limpa="busca">×</button></span>` : ''}
         <button class="btn amarelo" id="btn-salvar-os" disabled>Salvar alterações</button>
         <span class="form-aviso" id="os-pendentes">Nenhuma alteração pendente.</span>
         ${f.unidade ? `<span class="chip-filtro">unidade: ${esc(f.unidade)} <button data-limpa="unidade">×</button></span>` : ''}
@@ -2959,6 +2988,7 @@ function renderOSAcompanhar(lista) {
         <div style="flex:1"></div>
         <button class="btn claro" id="btn-exportar-os" title="Baixar a lista exibida em CSV">⤓ Exportar</button>
       </div>
+      ${buscando ? `<div class="cartao-dica">${selecionadas.length} OS encontrada(s) para "${esc(f.busca)}" — a busca percorre todos os níveis e ignora os filtros da frota, então encontra também viaturas que não são nossas.</div>` : ''}
       <div class="tabela-rol os-rol" style="max-height:620px">
         <table class="tabela-os">
           <colgroup>
@@ -3009,6 +3039,17 @@ function renderOSAcompanhar(lista) {
     ESTADO.filtroOS[b.dataset.limpa] = '';
     renderOSAcompanhar(ESTADO.filtrado);
   }));
+  const buscaOS = el('os-busca');
+  if (buscaOS) buscaOS.addEventListener('input', () => {
+    ESTADO.filtroOS.busca = buscaOS.value;
+    clearTimeout(ESTADO._tos);
+    ESTADO._tos = setTimeout(() => {
+      const pos = buscaOS.selectionStart;
+      renderOSAcompanhar(ESTADO.filtrado);
+      const n = el('os-busca');
+      if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} }
+    }, 350);
+  });
   ouvir('btn-exportar-os', 'click', () => baixarCsv(
     'ordens_de_servico_' + new Date().toISOString().substring(0, 10) + '.csv',
     ['OS', 'Placa', 'Marca/Modelo', 'Unidade', 'Oficina', 'Data', 'Orçado', 'Situação', 'Aprovação', 'Observações', 'Diligência', 'Relato', 'Justificativa'],
