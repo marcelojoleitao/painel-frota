@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.87.1';
+const VERSAO_PAINEL = '2.87.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -1529,7 +1529,10 @@ function renderOS(lista) {
     document.querySelectorAll('#subabas-os .subaba').forEach(b => b.classList.toggle('ativa', b.dataset.sub === ESTADO.subOS));
     if (ESTADO.subOS === 'aceites') renderAceites(lista);
     else if (ESTADO.subOS === 'acompanhar') renderOSAcompanhar(lista);
-    else { c.innerHTML = '<div class="kpis" id="kpis-os"></div><div class="grade" id="graficos-os"></div>'; renderOSPanorama(lista); }
+    else {
+      c.innerHTML = '<div id="pano-busca-area"></div><div class="kpis" id="kpis-os"></div><div class="grade" id="graficos-os"></div>';
+      renderOSPanorama(lista);
+    }
     return;
   }
   renderOSPanorama(lista);
@@ -1567,6 +1570,74 @@ function renderOSPanorama(lista) {
   g.appendChild(cartaoAgregado('Valor orçado por oficina (em andamento)', emAndamento, o => o.oficina, o => o.valor || 0, fmtMoeda, null, { max: 12 }));
   g.appendChild(cartaoTabelaAceites(ace, porPlaca));
   g.appendChild(cartaoTabelaOS(pend, porPlaca));
+  desenharBuscaPanorama();
+}
+
+/**
+ * Busca do panorama: procura em todas as OS e aceites, sem passar pelos
+ * filtros da frota — é o que permite achar viatura de outra frota. O resultado
+ * aparece como um cartão próprio, acima do panorama, que continua intacto.
+ */
+function desenharBuscaPanorama() {
+  const area = el('pano-busca-area'); if (!area) return;
+  const termo = String(ESTADO.buscaPanorama || '').trim().toUpperCase();
+  const buscando = termo.length >= 2;
+
+  let achados = [];
+  if (buscando) {
+    achados = (ESTADO.dados.os || []).map(osComViatura)
+      .filter(x => casaBuscaOS(x, termo))
+      .sort((a, b) => chaveData(b.o.data).localeCompare(chaveData(a.o.data)));
+  }
+
+  area.innerHTML = `
+    <div class="cartao largo" style="margin-bottom:12px">
+      <div class="os-barra-acoes" style="margin:0">
+        <div class="busca" style="max-width:320px">
+          <input id="pano-busca" type="search" placeholder="procurar OS por placa ou número"
+                 value="${escAttr(ESTADO.buscaPanorama || '')}"
+                 title="Procura em todas as OS e aceites, inclusive de viaturas de outras frotas">
+        </div>
+        ${buscando ? `<button class="btn claro" id="pano-busca-limpar">Limpar</button>` : ''}
+        <span class="vinculo">${buscando ? achados.length + ' resultado(s)' : 'inclusive viaturas que não são da nossa frota'}</span>
+      </div>
+      ${buscando ? (achados.length ? `
+        <div class="tabela-rol" style="max-height:320px; margin-top:8px">
+          <table class="tabela-simples" style="width:100%">
+            <thead><tr><th>OS</th><th>Placa</th><th>Viatura</th><th>Unidade</th><th>Oficina</th>
+              <th>Data</th><th>Situação</th><th class="num">Valor</th><th>Onde está</th></tr></thead>
+            <tbody>${achados.slice(0, 100).map(x => `<tr>
+              <td style="font-family:var(--fonte-dados); font-weight:700">
+                <button class="link-btn" onclick="abrirDetalheOS('${escAttr(x.o.os)}')">${esc(x.o.os)}</button></td>
+              <td style="font-family:var(--fonte-dados)">${x.v
+                ? `<a class="link-btn" onclick="abrirFicha('${escAttr(x.v.placa)}')">${esc(x.o.placa)}</a>`
+                : esc(x.o.placa || '—')}</td>
+              <td>${esc(x.modelo || '—')}${!x.v ? '<div class="vinculo">fora da nossa frota</div>' : ''}</td>
+              <td>${esc(x.unidade || '—')}</td>
+              <td>${esc(x.o.oficina || '—')}</td>
+              <td class="data-curta">${esc(x.o.data || '—')}</td>
+              <td>${badgeStatusOS(x.o.status)}</td>
+              <td class="num">${x.o.valor ? fmtMoeda(x.o.valor) : '—'}</td>
+              <td><span class="dem-tag">${x.o.origem === 'ACEITE' ? 'Aceites' : 'Acompanhamento'}</span></td>
+            </tr>`).join('')}</tbody>
+          </table>
+        </div>
+        ${achados.length > 100 ? `<div class="cartao-dica">Exibindo 100 de ${achados.length}. Refine a busca.</div>` : ''}`
+        : '<div class="cartao-dica" style="margin-top:8px">Nenhuma OS encontrada. A busca cobre todas as ordens de serviço e aceites, de qualquer frota — confira o número ou a placa.</div>') : ''}
+    </div>`;
+
+  const campo = el('pano-busca');
+  if (campo) campo.addEventListener('input', () => {
+    ESTADO.buscaPanorama = campo.value;
+    clearTimeout(ESTADO._tpano);
+    ESTADO._tpano = setTimeout(() => {
+      const pos = campo.selectionStart;
+      desenharBuscaPanorama();
+      const n = el('pano-busca');
+      if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} }
+    }, 350);
+  });
+  ouvir('pano-busca-limpar', 'click', () => { ESTADO.buscaPanorama = ''; desenharBuscaPanorama(); });
 }
 
 function botoesStatus(lista, chaveEstado, aoClicar) {
