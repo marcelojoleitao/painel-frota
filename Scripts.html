@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.87.0';
+const VERSAO_PAINEL = '2.87.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -83,7 +83,7 @@ const ESTADO = {
   subAcoes: 'executar', lote: null, fila: null, subDados: 'importar', subOS: 'panorama', nivelOS: 'n2', osEditadas: {},
   subPag: 'panorama', processo: null, compProcesso: {}, tituloEditado: {},
   subMultas: 'acompanhar', multas: null, contrato: null, contratoFoco: 'manutencao', projecao: null, cobranca: null, filtroCobranca: { registro: '', unidade: '', busca: '' }, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
-  filtroAceite: '', filtroOS: { unidade: '', oficina: '' }, filtroAceites: { unidade: '', oficina: '' },
+  filtroAceite: '', filtroOS: { unidade: '', oficina: '' }, filtroAceites: { unidade: '', oficina: '', busca: '' },
   subGestao: 'quadro', demandas: null, notas: null, soComDemanda: false, sinistros: null, filtroSinistro: { status: '', busca: '' },
   preventiva: null, prevReal: null, prevVisao: 'viatura', prevAberta: {},
   filtroPrev: { situacao: '', grupo: '', unidade: '', busca: '', detalhe: '' },
@@ -4459,6 +4459,20 @@ function classePrazo(dias) {
   return 'folga';
 }
 
+
+/** O aceite corresponde ao termo? Mesma lógica da busca de OS. */
+function casaBuscaAceite(a, termo) {
+  if (!termo) return true;
+  const soDigitos = termo.replace(/\D/g, '');
+  const placa = String(a.placa || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  const os = String(a.os || '').replace(/\D/g, '');
+  if (soDigitos.length >= 3 && os.indexOf(soDigitos) === 0) return true;
+  if (placa.indexOf(termo.replace(/[^A-Za-z0-9]/g, '')) >= 0) return true;
+  const alvo = [a.os, a.placa, a.modeloReal, a.modelo, a.unidadeReal, a.oficinaReal,
+    a.status, a.obs].join(' ').toUpperCase();
+  return alvo.indexOf(termo) >= 0;
+}
+
 function renderAceites(lista) {
   const c = el('os-conteudo'); if (!c) return;
   const exib = new Set(lista.map(v => v.placa));
@@ -4468,7 +4482,7 @@ function renderAceites(lista) {
   const porOs = {};
   (ESTADO.dados.os || []).filter(o => o.origem === 'PENDENTE').forEach(o => { porOs[String(o.os).replace(/\D/g, '')] = o; });
 
-  const todos = (ESTADO.dados.os || []).filter(o => o.origem === 'ACEITE').map(a => {
+  const todosBrutos = (ESTADO.dados.os || []).filter(o => o.origem === 'ACEITE').map(a => {
     const v = viaturaDaMulta(a.placa);
     const naOS = porOs[String(a.os).replace(/\D/g, '')] || null;
     return Object.assign({}, a, {
@@ -4478,7 +4492,15 @@ function renderAceites(lista) {
       linkAnalise: naOS ? naOS.linkAnalise : '', aprovacao: naOS ? naOS.aprovacao : '',
       oficinaReal: a.oficina || (naOS ? naOS.oficina : '') || ''
     });
-  }).filter(a => !filtroAtivo || !a.v || exib.has(a.v.placa));
+  });
+  const fa = ESTADO.filtroAceites;
+  const termoA = String(fa.busca || '').trim().toUpperCase();
+  const buscandoA = termoA.length >= 2;
+  // Buscando, o filtro da frota sai do caminho: o aceite pode ser de viatura
+  // de outra frota, que não está na ConsultaBD.
+  const todos = todosBrutos
+    .filter(a => buscandoA || !filtroAtivo || !a.v || exib.has(a.v.placa))
+    .filter(a => !buscandoA || casaBuscaAceite(a, termoA));
 
   // Comparação pelo valor do status (coluna I), sem procurar pedaços de palavra:
   // "Aguardando Aceite" contém "aceite", e era isso que fazia o filtro antigo
@@ -4496,8 +4518,9 @@ function renderAceites(lista) {
     contestacao: todos.filter(contesta),
     pendentes: todos.filter(aguardando)
   };
-  const fa = ESTADO.filtroAceites;
-  const sel = (ESTADO.filtroAceite && grupos[ESTADO.filtroAceite] ? grupos[ESTADO.filtroAceite] : todos)
+  // buscando, o indicador selecionado não restringe: o aceite procurado pode
+  // estar em qualquer situação
+  const sel = (!buscandoA && ESTADO.filtroAceite && grupos[ESTADO.filtroAceite] ? grupos[ESTADO.filtroAceite] : todos)
     .filter(a => !fa.unidade || a.unidadeReal === fa.unidade)
     .filter(a => !fa.oficina || (a.oficinaReal || 'sem oficina') === fa.oficina);
   const ordenados = sel.slice().sort((a, b) => {
@@ -4577,11 +4600,17 @@ function renderAceites(lista) {
     <div class="cartao largo">
       <div class="cartao-cab"><h3>Aceites</h3><small>${ordenados.length} registro(s) — ordenados pelo prazo</small></div>
       <div class="os-barra-acoes">
+        <div class="busca" style="max-width:300px">
+          <input id="ace-busca" type="search" placeholder="placa ou número da OS" value="${escAttr(fa.busca)}"
+                 title="Procura em todos os aceites, inclusive de viaturas de outras frotas">
+        </div>
+        ${buscandoA ? `<span class="chip-filtro">busca: ${esc(fa.busca)} <button data-limpaa="busca">×</button></span>` : ''}
         ${fa.unidade ? `<span class="chip-filtro">unidade: ${esc(fa.unidade)} <button data-limpaa="unidade">×</button></span>` : ''}
         ${fa.oficina ? `<span class="chip-filtro">oficina: ${esc(fa.oficina)} <button data-limpaa="oficina">×</button></span>` : ''}
         <div style="flex:1"></div>
         <button class="btn claro" id="btn-exportar-aceites" title="Baixar a lista exibida em CSV">⤓ Exportar</button>
       </div>
+      ${buscandoA ? `<div class="cartao-dica">${ordenados.length} aceite(s) para "${esc(fa.busca)}" — a busca percorre todas as situações e ignora os filtros da frota.</div>` : ''}
       <div class="tabela-rol os-rol" style="max-height:620px">
         <table class="tabela-multas tabela-aceites">
           <colgroup><col style="width:9%"><col style="width:6.5%"><col style="width:12%"><col style="width:9%"><col style="width:15%">
@@ -4626,6 +4655,17 @@ function renderAceites(lista) {
     ESTADO.filtroAceites[b.dataset.limpaa] = '';
     renderAceites(ESTADO.filtrado);
   }));
+  const buscaAce = el('ace-busca');
+  if (buscaAce) buscaAce.addEventListener('input', () => {
+    ESTADO.filtroAceites.busca = buscaAce.value;
+    clearTimeout(ESTADO._tace);
+    ESTADO._tace = setTimeout(() => {
+      const pos = buscaAce.selectionStart;
+      renderAceites(ESTADO.filtrado);
+      const n = el('ace-busca');
+      if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} }
+    }, 350);
+  });
   ouvir('btn-exportar-aceites', 'click', () => baixarCsv(
     'aceites_' + new Date().toISOString().substring(0, 10) + '.csv',
     ['OS', 'Placa', 'Modelo', 'Unidade', 'Oficina', 'Aprovação', 'Início', 'Conclusão', 'Prazo p/ aceite', 'Dias restantes', 'Valor', 'Situação', 'Observações'],
