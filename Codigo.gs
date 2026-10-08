@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.87.3';
+const CODIGO_VERSAO = '2.87.4';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -997,6 +997,19 @@ function _crlvViatura_(token, placa, aplicar) {
     return { ok: false, erro: String(e.message || e) };
   }
 }
+
+/**
+ * Documentos que a ficha da viatura aceita anexar. Faltava esta definição: a
+ * função de anexo a usava e quebrava com "DOCUMENTOS_VIATURA is not defined"
+ * no momento do envio.
+ *   pasta   — chave do CONFIG com a pasta do Drive (reserva: PASTA_CRLV)
+ *   campo   — campo da ConsultaBD onde o link é gravado
+ *   sufixo  — compõe o nome do arquivo: PLACA + sufixo + .pdf
+ */
+const DOCUMENTOS_VIATURA = {
+  crlv:       { rotulo: 'CRLV',                campo: 'linkCrlv', pasta: 'PASTA_CRLV',       sufixo: '' },
+  tombamento: { rotulo: 'Termo de tombamento', campo: 'linkTomb', pasta: 'PASTA_TOMBAMENTO', sufixo: ' - Tombamento' }
+};
 
 function anexarDocumento(token, placa, tipo, base64, nomeArquivo) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
