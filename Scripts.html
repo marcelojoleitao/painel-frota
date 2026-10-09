@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.88.0';
+const VERSAO_PAINEL = '2.88.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -3351,6 +3351,17 @@ function desenharProcesso(c, r) {
         <div class="cartao-dica">Por extenso: ${esc(extensoLocal(res.liquido))}</div>
       </div>
 
+      ${r.tipo === 'Abastecimento' ? `<div class="cartao">
+        <div class="cartao-cab"><h3>Relatório de glosa</h3><small>preços acima do teto da ANP em ${esc(r.competencia)}</small></div>
+        <div class="cartao-dica" style="margin:0 0 8px">Cruza os abastecimentos da competência com o preço máximo de revenda publicado pela ANP. O valor apurado é o que entra como <b>Glosa Preços Abusivos</b> na composição.</div>
+        <div class="acao-opcoes" id="proc-glosa-combs" style="max-height:150px; overflow:auto">
+          <span class="foto-data">Lendo os combustíveis da competência…</span>
+        </div>
+        <button class="btn amarelo" id="btn-proc-glosa" style="margin-top:8px">Gerar relatório de glosa</button>
+        <div class="foto-data" id="proc-glosa-status"></div>
+        <div id="proc-glosa-result"></div>
+      </div>` : ''}
+
       <div class="cartao">
         <div class="cartao-cab"><h3>Documentos do processo</h3><small>gerados a partir dos modelos</small></div>
         <div class="acao-opcoes" id="proc-docs"></div>
@@ -3403,6 +3414,10 @@ function desenharProcesso(c, r) {
   }));
   ouvir('btn-salvar-titulo', 'click', () => salvarTituloProcesso(r.tipo, r.competencia));
   ouvir('btn-gerar-docs', 'click', () => gerarDocsProcesso(r.tipo, r.competencia));
+  if (r.tipo === 'Abastecimento') {
+    carregarGlosaDoProcesso(r.competencia);
+    ouvir('btn-proc-glosa', 'click', () => gerarGlosaDoProcesso(r.competencia));
+  }
   ajustarKpis();
 }
 
@@ -6681,6 +6696,53 @@ function renderHistoricoImport(c) {
     ['Competência'].concat(fontes.map(f => f.rotulo)).concat(['Faltando', 'Última importação', 'Por quem']),
     d.linhas.map(l => [l.competencia].concat(fontes.map(f => l.valores[f.chave] || 0))
       .concat([l.faltando.join(' | '), l.registro ? l.registro.quando : '', l.registro ? l.registro.quem : '']))));
+}
+
+
+/* ---------------- glosa dentro do processo de pagamento ---------------- */
+
+/** Lista os combustíveis da competência do processo, já marcados. */
+function carregarGlosaDoProcesso(competencia) {
+  const caixa = el('proc-glosa-combs'); if (!caixa) return;
+  const run = servidor('combustiveisDaCompetencia',
+    r => {
+      if (!r || !r.ok) { caixa.innerHTML = '<span class="foto-data">' + esc((r && r.erro) || 'Falha ao ler.') + '</span>'; return; }
+      if (!r.combustiveis.length) { caixa.innerHTML = '<span class="foto-data">Nenhum abastecimento em ' + esc(competencia) + '.</span>'; return; }
+      caixa.innerHTML = r.combustiveis.map(c => `<label title="${c.anp ? 'ANP: ' + escAttr(c.anp) : 'sem produto correspondente na ANP'}">
+        <input type="checkbox" value="${escAttr(c.nome)}" ${c.anp ? 'checked' : 'disabled'}> ${esc(c.nome)}
+        <small style="color:var(--tinta-suave)">${c.qtd} abast.${c.anp ? '' : ' • sem equivalente na ANP'}</small></label>`).join('');
+    },
+    e => { caixa.innerHTML = '<span class="foto-data">' + esc(String(e && e.message ? e.message : e)) + '</span>'; });
+  if (run) run.combustiveisDaCompetencia(ESTADO.token, competencia);
+}
+
+/** Gera o relatório da glosa da competência do processo, sem sair da tela. */
+function gerarGlosaDoProcesso(competencia) {
+  const escolhidos = Array.from(document.querySelectorAll('#proc-glosa-combs input:checked')).map(i => i.value);
+  if (!escolhidos.length) { toast('Escolha ao menos um combustível.'); return; }
+  const btn = el('btn-proc-glosa'), status = el('proc-glosa-status'), resultado = el('proc-glosa-result');
+  if (btn) { btn.disabled = true; btn.textContent = 'Apurando…'; }
+  if (status) status.textContent = 'Cruzando os abastecimentos com o histórico da ANP…';
+  if (resultado) resultado.innerHTML = '';
+  const run = servidor('gerarRelatorioGlosa',
+    r => {
+      if (btn) { btn.disabled = false; btn.textContent = 'Gerar relatório de glosa'; }
+      if (!r || !r.ok) { if (status) status.textContent = ''; falhaNoCartao('proc-glosa-result', (r && r.erro) || 'Falha ao gerar.'); return; }
+      if (status) status.innerHTML = entregarPdf(r);
+      if (resultado) resultado.innerHTML = `
+        <div class="grade-dados" style="margin-top:10px">
+          <div class="dado"><div class="k">Total da glosa</div>
+            <div class="v ${r.total ? 'alerta-txt' : 'ok-txt'}">${fmtMoeda(r.total)}</div></div>
+          <div class="dado"><div class="k">Acima do teto</div>
+            <div class="v">${fmtInt(r.comGlosa)} de ${fmtInt(r.avaliados)}</div></div>
+        </div>
+        ${r.total ? `<div class="cartao-dica" style="border-left:3px solid var(--ambar)">
+          Lance <b>${fmtMoeda(r.total)}</b> na coluna <b>Glosa Preços Abusivos</b> da aba de títulos, na competência ${esc(competencia)},
+          para que a composição do processo passe a descontar esse valor.</div>` : ''}
+        ${r.semTeto && r.semTeto.length ? `<div class="cartao-dica">Sem teto publicado na ANP: ${esc(r.semTeto.join('; '))}</div>` : ''}`;
+    },
+    e => { if (btn) { btn.disabled = false; btn.textContent = 'Gerar relatório de glosa'; } if (status) status.textContent = ''; falhaNoCartao('proc-glosa-result', e); });
+  if (run) run.gerarRelatorioGlosa(ESTADO.token, competencia, escolhidos);
 }
 
 </script>
