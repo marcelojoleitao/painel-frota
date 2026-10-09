@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.87.6';
+const VERSAO_PAINEL = '2.88.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -80,7 +80,7 @@ const ESTADO = {
   uso: null, usoCarregando: false,
   periodoUso: '12m', periodoManut: '12m', periodoPag: 'tudo',
   pdfsPorOS: {}, pdfsPorPlaca: {}, filtroStatusOS: '', filtroStatusAceite: '',
-  subAcoes: 'executar', lote: null, fila: null, subDados: 'importar', subOS: 'panorama', nivelOS: 'n2', osEditadas: {},
+  subAcoes: 'executar', lote: null, fila: null, subDados: 'importar', histImport: null, histSoFaltas: false, subOS: 'panorama', nivelOS: 'n2', osEditadas: {},
   subPag: 'panorama', processo: null, compProcesso: {}, tituloEditado: {},
   subMultas: 'acompanhar', multas: null, contrato: null, contratoFoco: 'manutencao', projecao: null, cobranca: null, filtroCobranca: { registro: '', unidade: '', busca: '' }, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
   filtroAceite: '', filtroOS: { unidade: '', oficina: '' }, filtroAceites: { unidade: '', oficina: '', busca: '' },
@@ -2414,6 +2414,7 @@ function limparConcluidas() {
 function renderDados() {
   if (!ESTADO.admin) return;
   const c = el('dados-conteudo'); if (!c) return;
+  if (ESTADO.subDados === 'historico') return renderHistoricoImport(c);
   if (ESTADO.subDados === 'exportar') return renderExportar(c);
   if (ESTADO.subDados === 'relatorios') return renderRelatorios(c);
   renderImportar(c);
@@ -6602,6 +6603,84 @@ function alertaContrato(b, d) {
     <div style="margin-top:4px">Mantido o ritmo atual, o saldo se esgota em <b>${esc(esgota)}</b>, antes do fim da vigência (${esc(d.ultimaCompetencia)}).</div>
     <div style="margin-top:4px">Para fechar ${esc(d.ultimaCompetencia)} dentro do limite: gasto médio de até <b>${fmtMoeda(b.sustentavel)}</b> por mês.</div>
   </div>`;
+}
+
+
+/* ---------------- histórico de importações ---------------- */
+function renderHistoricoImport(c) {
+  if (!ESTADO.histImport) {
+    c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Conferindo o que existe em cada base…</div></div>';
+    const run = servidor('historicoImportacoes',
+      r => { if (!r || !r.ok) { c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha.') + '</div></div>'; return; }
+             ESTADO.histImport = r; renderHistoricoImport(c); },
+      e => { c.innerHTML = '<div class="cartao largo"><div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div></div>'; });
+    if (run) run.historicoImportacoes(ESTADO.token);
+    return;
+  }
+  const d = ESTADO.histImport;
+  const fontes = d.fontes.filter(f => f.existe);
+  const soFaltas = !!ESTADO.histSoFaltas;
+  const linhas = soFaltas ? d.linhas.filter(l => l.faltando.length) : d.linhas;
+  const daEsperada = d.linhas.find(l => l.competencia === d.esperada);
+
+  c.innerHTML = `
+    ${daEsperada && daEsperada.faltando.length
+      ? `<div class="cartao largo" style="border-left:3px solid var(--ambar); margin-bottom:12px">
+           <b style="color:var(--ambar)">Falta importar em ${esc(d.esperada)}</b>
+           <div style="margin-top:4px">${daEsperada.faltando.map(x => esc(x)).join(' • ')}</div>
+         </div>`
+      : daEsperada
+        ? `<div class="cartao largo" style="border-left:3px solid var(--verde); margin-bottom:12px">
+             <b class="ok-txt">${esc(d.esperada)} está completa</b>
+             <div class="vinculo">todas as bases têm registros desta competência</div>
+           </div>`
+        : `<div class="cartao largo" style="border-left:3px solid var(--vermelho); margin-bottom:12px">
+             <b style="color:var(--vermelho)">Nada importado em ${esc(d.esperada)}</b>
+             <div class="vinculo">é a competência do mês anterior, normalmente a que deve estar fechada</div>
+           </div>`}
+
+    <div class="cartao largo">
+      <div class="cartao-cab"><h3>Importações por competência</h3>
+        <small>${d.linhas.length} competência(s)${d.geradoEm ? ' • apurado em ' + esc(d.geradoEm) : ''}</small></div>
+      <div class="os-barra-acoes">
+        <button class="btn ${soFaltas ? 'amarelo' : 'claro'}" id="hist-faltas">${soFaltas ? 'Mostrando só as incompletas' : 'Só as incompletas'}</button>
+        <div style="flex:1"></div>
+        <button class="btn claro" id="hist-atualizar">⟳ Atualizar</button>
+        <button class="btn claro" id="hist-exportar">⤓ Exportar</button>
+      </div>
+      <div class="tabela-rol" style="max-height:600px">
+        <table class="tabela-simples" style="width:100%">
+          <thead><tr><th>Competência</th>
+            ${fontes.map(f => `<th class="num" title="${escAttr(f.nota)}">${esc(f.rotulo)}</th>`).join('')}
+            <th>Última importação registrada</th></tr></thead>
+          <tbody>
+          ${linhas.map(l => `<tr class="${l.competencia === d.esperada ? 'cobrada' : ''}">
+            <td class="forte" style="font-family:var(--fonte-dados); font-weight:700">${esc(l.competencia)}
+              ${l.competencia === d.esperada ? '<div class="vinculo">mês anterior</div>' : ''}</td>
+            ${fontes.map(f => {
+              const v = l.valores[f.chave] || 0;
+              return `<td class="num">${v
+                ? `<span class="prazo folga" title="${escAttr(fmtInt(v) + ' registro(s)')}">${fmtInt(v)}</span>`
+                : '<span class="prazo vencido" title="nada importado">—</span>'}</td>`;
+            }).join('')}
+            <td>${l.registro
+              ? `${esc(l.registro.quando)}<div class="vinculo">${esc(l.registro.quem.split('@')[0])} • ${esc(l.registro.acao)}</div>`
+              : '<span class="vinculo">sem registro no log</span>'}</td>
+          </tr>`).join('') || '<tr><td colspan="9"><div class="vazio">Nenhuma competência incompleta</div></td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <div class="cartao-dica">O quadro é montado a partir do que existe de fato em cada base, não de um registro do que foi anotado — número verde é a quantidade de linhas encontradas naquela competência.
+        A coluna da direita vem do registro de ações e diz quando e por quem a última importação daquela competência foi feita.</div>
+    </div>`;
+
+  ouvir('hist-faltas', 'click', () => { ESTADO.histSoFaltas = !ESTADO.histSoFaltas; renderHistoricoImport(c); });
+  ouvir('hist-atualizar', 'click', () => { ESTADO.histImport = null; renderHistoricoImport(c); });
+  ouvir('hist-exportar', 'click', () => baixarCsv(
+    'importacoes_' + new Date().toISOString().substring(0, 10) + '.csv',
+    ['Competência'].concat(fontes.map(f => f.rotulo)).concat(['Faltando', 'Última importação', 'Por quem']),
+    d.linhas.map(l => [l.competencia].concat(fontes.map(f => l.valores[f.chave] || 0))
+      .concat([l.faltando.join(' | '), l.registro ? l.registro.quando : '', l.registro ? l.registro.quem : '']))));
 }
 
 </script>

@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.87.6';
+const CODIGO_VERSAO = '2.88.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3019,6 +3019,125 @@ function importarGlosaAnp(token, competencia, origem, arquivo) {
 }
 
 
+
+
+/* ============================================================
+   HISTÓRICO DE IMPORTAÇÕES
+   Responde "já importei este mês?" olhando o que existe de fato
+   em cada base, e não um registro do que foi anotado. O log de
+   ações entra só para dizer quando e por quem.
+   ============================================================ */
+
+/** Competências presentes numa aba, pela coluna indicada. */
+function _competenciasDaAba_(aba, nomesColuna, linhaCabMax) {
+  const saida = {};
+  if (!aba || aba.getLastRow() < 2) return saida;
+  const largura = aba.getLastColumn();
+  const topo = aba.getRange(1, 1, Math.min(linhaCabMax || 6, aba.getLastRow()), largura).getValues();
+  let linhaCab = -1, iCol = -1;
+  for (let i = 0; i < topo.length && linhaCab < 0; i++) {
+    const nomes = topo[i].map(c => _normCab_(c));
+    for (let j = 0; j < nomesColuna.length && iCol < 0; j++) {
+      const p = nomes.indexOf(_normCab_(nomesColuna[j]));
+      if (p >= 0) { linhaCab = i + 1; iCol = p; }
+    }
+  }
+  if (iCol < 0) return saida;
+  const n = aba.getLastRow() - linhaCab;
+  if (n < 1) return saida;
+  aba.getRange(linhaCab + 1, iCol + 1, n, 1).getValues().forEach(l => {
+    const c = _parseCompetenciaCelula_(l[0]);
+    if (!c) return;
+    const k = ('0' + c.mm).slice(-2) + '/' + c.yyyy;
+    saida[k] = (saida[k] || 0) + 1;
+  });
+  return saida;
+}
+
+/**
+ * Quadro das importações por competência. Cada fonte vira uma coluna e cada
+ * competência uma linha, com a quantidade de registros encontrada.
+ */
+function historicoImportacoes(token) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+    const fontes = [];
+
+    const juntar = (chave, rotulo, nota, aba, colunas) => {
+      fontes.push({ chave: chave, rotulo: rotulo, nota: nota,
+        existe: !!aba, comps: aba ? _competenciasDaAba_(aba, colunas) : {} });
+    };
+
+    juntar('abastBD', 'Transações de abastecimento', 'aba ' + CONFIG.ABA_ABAST,
+      ss.getSheetByName(CONFIG.ABA_ABAST), ['COMPETÊNCIA', 'COMPETENCIA']);
+    juntar('manutBD', 'Transações de manutenção', 'aba ' + CONFIG.ABA_MANUT,
+      ss.getSheetByName(CONFIG.ABA_MANUT), ['COMPETÊNCIA', 'COMPETENCIA']);
+    juntar('anp', 'Série de preços da ANP', 'aba ' + CONFIG.ABA_ANP,
+      ss.getSheetByName(CONFIG.ABA_ANP), ['MÊS', 'MES', 'Competência']);
+
+    // títulos ficam na planilha de pagamentos
+    try {
+      const ssT = CONFIG.ID_TITULOS ? SpreadsheetApp.openById(CONFIG.ID_TITULOS) : null;
+      juntar('titAbast', 'Nota fiscal — abastecimento', 'aba ' + CONFIG.ABA_TIT_ABAST,
+        ssT ? ssT.getSheetByName(CONFIG.ABA_TIT_ABAST) : null, ['Competência', 'Competencia']);
+      juntar('titManut', 'Nota fiscal — manutenção', 'aba ' + CONFIG.ABA_TIT_MANUT,
+        ssT ? ssT.getSheetByName(CONFIG.ABA_TIT_MANUT) : null, ['Competência', 'Competencia']);
+    } catch (e) { Logger.log('Títulos no histórico: ' + e); }
+
+    // orçamentos ficam na planilha de manutenção
+    try {
+      const ssM = _ssManut_();
+      juntar('orcamentos', 'Orçamentos das OS', 'aba ' + CONFIG.ABA_ORCAMENTOS,
+        ssM ? ssM.getSheetByName(CONFIG.ABA_ORCAMENTOS) : null, ['Competência', 'Competencia']);
+    } catch (e) { Logger.log('Orçamentos no histórico: ' + e); }
+
+    // todas as competências encontradas, da mais recente para a mais antiga
+    const todas = {};
+    fontes.forEach(f => Object.keys(f.comps).forEach(k => { todas[k] = true; }));
+    const ordem = c => c.substring(3) + c.substring(0, 2);
+    const competencias = Object.keys(todas).sort((a, b) => ordem(b).localeCompare(ordem(a)));
+
+    // quando e por quem, do registro de ações
+    const registros = {};
+    try {
+      const log = ss.getSheetByName(CONFIG.ABA_LOG);
+      if (log && log.getLastRow() > 1) {
+        const n = log.getLastRow() - 1;
+        const linhas = log.getRange(2, 1, n, 6).getValues();
+        linhas.forEach(l => {
+          const acao = String(l[2] || '');
+          if (!/^Importar/i.test(acao)) return;
+          const detalhe = String(l[5] || '');
+          const m = detalhe.match(/(\d{2})\/(\d{4})/);
+          if (!m) return;
+          const comp = m[1] + '/' + m[2];
+          const quando = String(l[0] || '');
+          const atual = registros[comp];
+          if (!atual || quando > atual.quando) {
+            registros[comp] = { quando: quando, quem: String(l[1] || ''), acao: acao, resultado: String(l[4] || '') };
+          }
+        });
+      }
+    } catch (e) { Logger.log('Log no histórico: ' + e); }
+
+    // a competência do mês anterior é a que normalmente deve estar completa
+    const hoje = new Date();
+    const ant = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+    const esperada = ('0' + (ant.getMonth() + 1)).slice(-2) + '/' + ant.getFullYear();
+
+    return { ok: true,
+      fontes: fontes.map(f => ({ chave: f.chave, rotulo: f.rotulo, nota: f.nota, existe: f.existe })),
+      linhas: competencias.map(c => {
+        const linha = { competencia: c, valores: {}, registro: registros[c] || null };
+        fontes.forEach(f => { linha.valores[f.chave] = f.comps[c] || 0; });
+        linha.faltando = fontes.filter(f => f.existe && !f.comps[c]).map(f => f.rotulo);
+        return linha;
+      }),
+      esperada: esperada,
+      geradoEm: Utilities.formatDate(hoje, CONFIG.FUSO, 'dd/MM/yyyy HH:mm') };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
 
 /**
  * Testa o cálculo do teto da ANP de ponta a ponta: confere o cabeçalho da aba,
