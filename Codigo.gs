@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.87.4';
+const CODIGO_VERSAO = '2.87.5';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3016,6 +3016,105 @@ function importarGlosaAnp(token, competencia, origem, arquivo) {
     if (temporario && temporario.id) { try { Drive.Files.remove(temporario.id); } catch (e) {} }
     trava.releaseLock();
   }
+}
+
+
+/**
+ * Mostra onde a série da ANP está guardada e o que há em cada competência.
+ * Serve para o caso "diz que já importei, mas não encontro na planilha".
+ *     conferirAnp()            — panorama de todas as competências
+ *     conferirAnp('09/2026')   — detalha uma, com as linhas exatas
+ */
+function conferirAnp(competencia) {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const aba = ss.getSheetByName(CONFIG.ABA_ANP);
+  if (!aba) { Logger.log('A aba "' + CONFIG.ABA_ANP + '" não existe na planilha-mãe.'); return; }
+  Logger.log('Planilha: ' + ss.getName());
+  Logger.log('Aba: ' + aba.getName() + ' | linhas usadas: ' + aba.getLastRow() +
+    ' | linhas na grade: ' + aba.getMaxRows() + ' | colunas: ' + aba.getLastColumn());
+  Logger.log('Link direto: ' + ss.getUrl() + '#gid=' + aba.getSheetId());
+
+  const n = aba.getLastRow();
+  if (n < 1) { Logger.log('A aba está vazia.'); return; }
+  const colA = aba.getRange(1, 1, n, 1).getValues();
+  const exib = aba.getRange(1, 1, n, 1).getDisplayValues();
+
+  const porComp = {};
+  const soltas = [];
+  colA.forEach((l, i) => {
+    const c = _parseCompetenciaCelula_(l[0]);
+    const linha = i + 1;
+    if (!c) { if (String(exib[i][0]).trim()) soltas.push(linha + ': "' + exib[i][0] + '"'); return; }
+    const k = ('0' + c.mm).slice(-2) + '/' + c.yyyy;
+    if (!porComp[k]) porComp[k] = { qtd: 0, primeira: linha, ultima: linha };
+    porComp[k].qtd++;
+    porComp[k].ultima = linha;
+  });
+
+  const alvo = competencia ? _formatarCompetencia_(competencia, true) : '';
+  Logger.log('');
+  Logger.log('--- competências na aba ---');
+  Object.keys(porComp).sort((a, b) => (a.substring(3) + a.substring(0, 2)).localeCompare(b.substring(3) + b.substring(0, 2)))
+    .forEach(k => {
+      const c = porComp[k];
+      Logger.log('   ' + k + ': ' + c.qtd + ' linha(s), da linha ' + c.primeira + ' à ' + c.ultima +
+        (alvo === k ? '   <<< a que você procura' : ''));
+    });
+  if (soltas.length) {
+    Logger.log('');
+    Logger.log('--- conteúdo na coluna A que NÃO é competência (empurra as próximas importações para baixo) ---');
+    soltas.slice(0, 20).forEach(x => Logger.log('   linha ' + x));
+    if (soltas.length > 20) Logger.log('   … e mais ' + (soltas.length - 20));
+  }
+
+  if (alvo) {
+    Logger.log('');
+    if (!porComp[alvo]) {
+      Logger.log('A competência ' + alvo + ' NÃO está na aba. Se o painel disse que já existe, me avise.');
+    } else {
+      const c = porComp[alvo];
+      Logger.log('=== ' + alvo + ': ' + c.qtd + ' linha(s), entre as linhas ' + c.primeira + ' e ' + c.ultima + ' ===');
+      Logger.log('Para ver na planilha, vá até a linha ' + c.primeira + ' da aba ' + aba.getName() + '.');
+      const quantas = Math.min(5, c.qtd);
+      const amostra = aba.getRange(c.primeira, 1, quantas, Math.min(10, aba.getLastColumn())).getDisplayValues();
+      Logger.log('Amostra:');
+      amostra.forEach((l, i) => Logger.log('   linha ' + (c.primeira + i) + ': ' + l.join(' | ')));
+      Logger.log('');
+      Logger.log('Para reimportar, rode primeiro: removerCompetenciaAnp("' + alvo + '")');
+    }
+  }
+  return 'ok';
+}
+
+/**
+ * Apaga as linhas de uma competência da série da ANP, para permitir reimportar.
+ * A mensagem de erro da importação pede isso, mas não havia como fazer pelo painel.
+ *     removerCompetenciaAnp('09/2026')
+ */
+function removerCompetenciaAnp(competencia) {
+  const comp = _formatarCompetencia_(competencia || '', true);
+  if (!comp) { Logger.log('Informe a competência no formato MM/AAAA.'); return; }
+  const partes = comp.split('/'), mm = parseInt(partes[0], 10), yyyy = parseInt(partes[1], 10);
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const aba = ss.getSheetByName(CONFIG.ABA_ANP);
+  if (!aba) { Logger.log('Aba "' + CONFIG.ABA_ANP + '" não encontrada.'); return; }
+  const n = aba.getLastRow();
+  if (n < 1) { Logger.log('A aba está vazia.'); return; }
+
+  const colA = aba.getRange(1, 1, n, 1).getValues();
+  const apagar = [];
+  colA.forEach((l, i) => {
+    const c = _parseCompetenciaCelula_(l[0]);
+    if (c && c.mm === mm && c.yyyy === yyyy) apagar.push(i + 1);
+  });
+  if (!apagar.length) { Logger.log('Nenhuma linha de ' + comp + ' encontrada — nada a remover.'); return; }
+
+  // de baixo para cima, senão os índices mudam a cada remoção
+  apagar.sort((a, b) => b - a).forEach(linha => aba.deleteRow(linha));
+  SpreadsheetApp.flush();
+  limparCache();
+  Logger.log(apagar.length + ' linha(s) de ' + comp + ' removida(s). Agora dá para importar de novo.');
+  return apagar.length;
 }
 
 function _contarCompetenciaAnp_(aba, mm, yyyy) {
