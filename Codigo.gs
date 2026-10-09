@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.88.4';
+const CODIGO_VERSAO = '2.88.5';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -2994,18 +2994,23 @@ function importarGlosaAnp(token, competencia, origem, arquivo) {
     temporario = Drive.Files.create({ name: '[TEMP ANP painel]', mimeType: MimeType.GOOGLE_SHEETS }, blob);
     const dados = SpreadsheetApp.openById(temporario.id).getSheets()[0].getDataRange().getValues();   // tipado: datas reais
     const dataComp = new Date(yyyy, mm - 1, 1);
+    // a coluna UF do histórico era fórmula na planilha antiga; aqui é gravada como valor
+    const cabHist = aba.getRange(1, 1, 1, Math.max(10, aba.getLastColumn())).getValues()[0].map(c => _normCab_(c));
+    const iUfHist = cabHist.indexOf('UF'), iEstadoArq = 3;   // ESTADO é a coluna D do arquivo da ANP
+    const largura = Math.max(10, iUfHist + 1);
     const linhas = [];
     dados.forEach(linha => {
       const c = _parseCompetenciaCelula_(linha[0]);
       if (!c || c.mm !== mm || c.yyyy !== yyyy) return;
-      const saida = new Array(10).fill('');
+      const saida = new Array(largura).fill('');
       saida[0] = dataComp;
       for (let i = 1; i < 10; i++) saida[i] = (linha[i] !== undefined && linha[i] !== null) ? linha[i] : '';
+      if (iUfHist >= 10) saida[iUfHist] = _siglaUf_(linha[iEstadoArq]);
       linhas.push(saida);
     });
     if (!linhas.length) return { ok: false, erro: 'Nenhuma linha da competência ' + comp + ' foi encontrada no arquivo.' };
     const inicio = _proximaLinhaAppend_(aba, 1, 2);
-    aba.getRange(inicio, 1, linhas.length, 10).setValues(linhas);
+    aba.getRange(inicio, 1, linhas.length, largura).setValues(linhas);
     aba.getRange(inicio, 1, linhas.length, 1).setNumberFormat('MM/yyyy');
     SpreadsheetApp.flush();
     _logAcao_(p.ss, p.sessao.email, 'Importar glosa ANP', '', linhas.length + ' linhas', 'competência ' + comp + ' | origem: ' + (origem === 'site' ? 'site da ANP' : 'arquivo'));
@@ -3161,6 +3166,7 @@ function conferirTetosAnp(competencia) {
   exigidas.forEach(([chave, rotulo]) => {
     let i = norm.indexOf(chave);
     if (i < 0 && chave === 'PRECO MAXIMO REVENDA') i = norm.indexOf('VALOR');
+    if (i < 0 && chave === 'UF') i = norm.indexOf('ESTADO');   // a sigla pode ser derivada do nome
     if (i < 0) { faltou = true; Logger.log('   FALTA: ' + rotulo); }
     else Logger.log('   ok: ' + rotulo + ' na coluna ' + _letraColuna_(i + 1));
   });
@@ -3207,6 +3213,38 @@ function conferirTetosAnp(competencia) {
   Object.keys(tetos).filter(k => k.indexOf(alvo + '|CE|') === 0)
     .forEach(k => Logger.log('   ' + k.split('|')[2] + ': R$ ' + tetos[k]));
   return 'ok';
+}
+
+/**
+ * Preenche a coluna UF do Histórico ANP, a partir do ESTADO, nas linhas em que
+ * ela está vazia — são as importadas depois da migração, quando a fórmula da
+ * planilha antiga já não existia. Rode uma vez no editor; não altera o que já
+ * está preenchido. O painel passou a calcular sem depender disto, mas a planilha
+ * fica coerente para quem a consulta direto.
+ */
+function preencherUfHistoricoAnp() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const aba = ss.getSheetByName(CONFIG.ABA_ANP);
+  if (!aba) { Logger.log('Aba "' + CONFIG.ABA_ANP + '" não encontrada.'); return; }
+  const valores = aba.getDataRange().getValues();
+  const cab = valores[0].map(c => _normCab_(c));
+  const iUf = cab.indexOf('UF'), iEstado = cab.indexOf('ESTADO');
+  if (iUf < 0) { Logger.log('Não há coluna UF no cabeçalho — nada a preencher (o painel usa ESTADO).'); return; }
+  if (iEstado < 0) { Logger.log('Não há coluna ESTADO — não tenho de onde tirar a sigla.'); return; }
+  const coluna = valores.slice(1).map(l => [l[iUf]]);
+  let preenchidas = 0, semSigla = {};
+  for (let r = 0; r < coluna.length; r++) {
+    if (String(coluna[r][0] || '').trim()) continue;
+    const estado = valores[r + 1][iEstado];
+    if (!String(estado || '').trim()) continue;
+    const sigla = _siglaUf_(estado);
+    if (!sigla) { semSigla[String(estado)] = (semSigla[String(estado)] || 0) + 1; continue; }
+    coluna[r][0] = sigla; preenchidas++;
+  }
+  if (preenchidas) { aba.getRange(2, iUf + 1, coluna.length, 1).setValues(coluna); SpreadsheetApp.flush(); limparCache(); }
+  Logger.log(preenchidas + ' linha(s) receberam a UF na coluna ' + _letraColuna_(iUf + 1) + '.');
+  Object.keys(semSigla).forEach(e => Logger.log('   estado não reconhecido: "' + e + '" (' + semSigla[e] + ' linha(s))'));
+  return preenchidas;
 }
 
 /**
@@ -4730,21 +4768,51 @@ function migrarResumoGlosa(aplicar) {
 }
 
 /** Tetos da ANP no formato { 'MM/AAAA|UF|PRODUTO': preçoMáximo }. */
+/**
+ * Sigla da UF a partir do nome do estado como a ANP escreve ("CEARA", "SAO PAULO").
+ * Substitui o PROCV em Database!A:B da planilha antiga, que não veio na migração.
+ * Se já receber uma sigla, devolve a própria.
+ */
+const _UFS_ = {
+  'ACRE': 'AC', 'ALAGOAS': 'AL', 'AMAPA': 'AP', 'AMAZONAS': 'AM', 'BAHIA': 'BA', 'CEARA': 'CE',
+  'DISTRITO FEDERAL': 'DF', 'ESPIRITO SANTO': 'ES', 'GOIAS': 'GO', 'MARANHAO': 'MA', 'MATO GROSSO': 'MT',
+  'MATO GROSSO DO SUL': 'MS', 'MINAS GERAIS': 'MG', 'PARA': 'PA', 'PARAIBA': 'PB', 'PARANA': 'PR',
+  'PERNAMBUCO': 'PE', 'PIAUI': 'PI', 'RIO DE JANEIRO': 'RJ', 'RIO GRANDE DO NORTE': 'RN',
+  'RIO GRANDE DO SUL': 'RS', 'RONDONIA': 'RO', 'RORAIMA': 'RR', 'SANTA CATARINA': 'SC',
+  'SAO PAULO': 'SP', 'SERGIPE': 'SE', 'TOCANTINS': 'TO'
+};
+function _siglaUf_(v) {
+  const t = _normCab_(v);
+  if (!t) return '';
+  if (/^[A-Z]{2}$/.test(t)) return t;
+  return _UFS_[t] || '';
+}
+
+/**
+ * Tetos da ANP por competência|UF|produto. A UF sai da coluna UF quando preenchida
+ * e, na falta dela, do nome do estado (coluna ESTADO, que vem no arquivo da ANP).
+ * Na planilha antiga a UF era fórmula (PROCV no Database); a migração trouxe os
+ * valores das linhas velhas, mas as importações novas chegavam com a coluna vazia
+ * e eram descartadas aqui em silêncio — glosa zerada com a série na planilha.
+ */
 function _tetosAnp_(ss) {
   const aba = ss.getSheetByName(CONFIG.ABA_ANP);
   if (!aba) return null;
   const valores = aba.getDataRange().getValues();
   if (valores.length < 2) return {};
   const cab = valores[0].map(c => _normCab_(c));
-  const iMes = cab.indexOf('MES'), iProd = cab.indexOf('PRODUTO'), iUf = cab.indexOf('UF');
+  const iMes = cab.indexOf('MES'), iProd = cab.indexOf('PRODUTO'), iUf = cab.indexOf('UF'), iEstado = cab.indexOf('ESTADO');
   let iMax = cab.indexOf('PRECO MAXIMO REVENDA');
   if (iMax < 0) iMax = cab.indexOf('VALOR');
-  if (iMes < 0 || iProd < 0 || iUf < 0 || iMax < 0) throw new Error('Cabeçalho do ' + CONFIG.ABA_ANP + ' não reconhecido (esperado MÊS, PRODUTO, UF e PREÇO MÁXIMO REVENDA).');
+  if (iMes < 0 || iProd < 0 || (iUf < 0 && iEstado < 0) || iMax < 0) {
+    throw new Error('Cabeçalho do ' + CONFIG.ABA_ANP + ' não reconhecido (esperado MÊS, PRODUTO, UF ou ESTADO, e PREÇO MÁXIMO REVENDA).');
+  }
   const mapa = {};
   for (let r = 1; r < valores.length; r++) {
     const l = valores[r];
     const comp = _competenciaDaCelula_(l[iMes]);
-    const uf = String(l[iUf] || '').trim().toUpperCase();
+    let uf = iUf < 0 ? '' : _siglaUf_(l[iUf]);
+    if (!uf && iEstado >= 0) uf = _siglaUf_(l[iEstado]);
     const produto = _normCab_(l[iProd]);
     const teto = _num_(l[iMax]);
     if (!comp || !uf || !produto || !teto) continue;
@@ -4888,10 +4956,12 @@ function _panoramaAnp_(ss, competencia) {
     out.cabecalho = valores[0].map(c => String(c || '').trim());
     const norm = out.cabecalho.map(c => _normCab_(c));
     const achar = nomes => { for (let i = 0; i < nomes.length; i++) { const p = norm.indexOf(nomes[i]); if (p >= 0) return p; } return -1; };
-    const iMes = achar(['MES']), iProd = achar(['PRODUTO']), iUf = achar(['UF']), iMax = achar(['PRECO MAXIMO REVENDA', 'VALOR']);
+    const iMes = achar(['MES']), iProd = achar(['PRODUTO']), iMax = achar(['PRECO MAXIMO REVENDA', 'VALOR']);
+    const iUfCol = achar(['UF']), iEstado = achar(['ESTADO']);
+    const iUf = iUfCol >= 0 ? iUfCol : iEstado;          // a UF pode vir da sigla ou do nome do estado
     out.colunas = {
       mes: iMes < 0 ? '' : _letraColuna_(iMes + 1), produto: iProd < 0 ? '' : _letraColuna_(iProd + 1),
-      uf: iUf < 0 ? '' : _letraColuna_(iUf + 1), precoMaximo: iMax < 0 ? '' : _letraColuna_(iMax + 1)
+      uf: iUf < 0 ? '' : _letraColuna_(iUf + 1) + (iUfCol < 0 ? ' (ESTADO)' : ''), precoMaximo: iMax < 0 ? '' : _letraColuna_(iMax + 1)
     };
     if (iMes >= 0) {
       for (let r = 1; r < valores.length; r++) {
@@ -4899,7 +4969,8 @@ function _panoramaAnp_(ss, competencia) {
         out.linhas++;
         if (!out.amostra) {
           out.amostra = { mes: String(valores[r][iMes]), produto: iProd < 0 ? '(coluna ausente)' : String(valores[r][iProd] || '(vazio)'),
-            uf: iUf < 0 ? '(coluna ausente)' : String(valores[r][iUf] || '(vazio)'),
+            uf: iUf < 0 ? '(coluna ausente)' : (String(valores[r][iUf] || '').trim() || '(vazio)')
+                + (iEstado >= 0 && iEstado !== iUf ? ' • estado: ' + (String(valores[r][iEstado] || '').trim() || '(vazio)') : ''),
             precoMaximo: iMax < 0 ? '(coluna ausente)' : String(valores[r][iMax] || '(vazio)') };
         }
       }
