@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.88.2';
+const CODIGO_VERSAO = '2.88.3';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6127,13 +6127,24 @@ function _parametrosPagamento_(tipo, t, resumo, competencia) {
 /** Preenche as tabelas do documento casando pelo rótulo da primeira coluna. */
 function _preencherTabelas_(corpo, resumo, serie) {
   let ajustadas = 0;
+  const naoCasaram = [];
   const normaliza = t => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
   const porRotulo = {};
   resumo.linhas.forEach(l => { porRotulo[normaliza(l[0])] = l[1]; });
   // o modelo pode escrever o rótulo de outra forma; aceitamos variações
   const sinonimos = {
     'outros descontos': ['(-) outros descontos', 'outros descontos', 'outras deducoes', '(-) outras deducoes'],
-    'glosa (imr)': ['(-) glosa (imr)', 'glosa imr', '(-) glosa do imr'],
+    'glosa (imr)': ['(-) glosa (imr)', 'glosa imr', '(-) glosa do imr', 'glosa do imr', '(-) glosa imr'],
+    'glosa do imr': ['(-) glosa do imr', 'glosa imr', 'glosa (imr)', '(-) glosa (imr)'],
+    // faltava: o modelo escreve este rótulo de várias formas e a célula ficava com o valor do modelo
+    'glosa de precos abusivos': ['(-) glosa de precos abusivos', 'glosa de precos abusivos',
+      'glosa precos abusivos', '(-) glosa precos abusivos', 'glosa de preco abusivo',
+      'glosa por precos abusivos', '(-) glosa por precos abusivos', 'glosa de precos',
+      'glosa de abastecimento', '(-) glosa de abastecimento'],
+    'desconto contratual': ['(-) desconto contratual', 'desconto contratual', 'desconto contratual (4,67%)',
+      '(-) desconto contratual (4,67%)', 'desconto 4,67%'],
+    'valor bruto da nota fiscal': ['(+) valor bruto da nota fiscal', 'valor bruto da nota fiscal',
+      'valor bruto da nf', '(+) valor bruto da nf', 'valor bruto'],
     'valor liquido apos glosa': ['(=) valor liquido apos glosa', 'valor liquido'],
     'valor liquido apos desconto e glosas': ['(=) valor liquido apos desconto e glosas', 'valor liquido']
   };
@@ -6143,6 +6154,17 @@ function _preencherTabelas_(corpo, resumo, serie) {
     sinonimos[base].forEach(alt => { if (porRotulo[alt] === undefined) porRotulo[alt] = porRotulo[achado]; });
   });
 
+  /** Último recurso: casa pelas palavras marcantes do rótulo. */
+  const porAproximacao = rotulo => {
+    const palavras = rotulo.replace(/[()+=-]/g, ' ').split(/\s+/).filter(x => x.length > 3);
+    if (!palavras.length) return undefined;
+    const candidatos = Object.keys(porRotulo).filter(k => {
+      const kp = k.replace(/[()+=-]/g, ' ');
+      return palavras.every(w => kp.indexOf(w) >= 0);
+    });
+    return candidatos.length === 1 ? porRotulo[candidatos[0]] : undefined;   // só quando não houver dúvida
+  };
+
   const tabelas = corpo.getTables();
   for (let t = 0; t < tabelas.length; t++) {
     const tab = tabelas[t];
@@ -6150,10 +6172,19 @@ function _preencherTabelas_(corpo, resumo, serie) {
       const linha = tab.getRow(r);
       if (linha.getNumCells() < 2) continue;
       const rotulo = normaliza(linha.getCell(0).getText());
-      if (porRotulo[rotulo] === undefined) continue;
+      let valor = porRotulo[rotulo];
+      if (valor === undefined) valor = porAproximacao(rotulo);
+      if (valor === undefined) {
+        // registra só as linhas que parecem de valor — as demais são texto do documento
+        const ultima = linha.getCell(linha.getNumCells() - 1).getText();
+        if (rotulo && /r\$|\d+[.,]\d{2}/i.test(ultima)) {
+          naoCasaram.push(linha.getCell(0).getText().trim() + ' → ' + ultima.trim());
+        }
+        continue;
+      }
       const celula = linha.getCell(linha.getNumCells() - 1);
       const texto = celula.getText();
-      const formatado = (texto.indexOf('R$') >= 0 ? 'R$ ' : '') + _decBR_(porRotulo[rotulo]);
+      const formatado = (texto.indexOf('R$') >= 0 ? 'R$ ' : '') + _decBR_(valor);
       celula.editAsText().setText(formatado);
       ajustadas++;
     }
@@ -6176,7 +6207,9 @@ function _preencherTabelas_(corpo, resumo, serie) {
       }
     }
   }
-  return ajustadas;
+  if (naoCasaram.length) Logger.log('Rótulos sem correspondência: ' + naoCasaram.join(' | '));
+  return { ajustadas: ajustadas, naoCasaram: naoCasaram,
+           disponiveis: resumo.linhas.map(l => String(l[0]) + ' = ' + _decBR_(l[1])) };
 }
 
 
@@ -6429,14 +6462,20 @@ function gerarDocumentosPagamento(token, tipo, competencia, quais) {
       const doc = DocumentApp.openById(copia.getId());
       const corpo = doc.getBody();
       Object.keys(parametros).forEach(chave => { corpo.replaceText(chave.replace(/[{}]/g, '\\$&'), parametros[chave]); });
-      const ajustadas = _preencherTabelas_(corpo, leitura.resumo, leitura.serie);
+      const tab = _preencherTabelas_(corpo, leitura.resumo, leitura.serie);
       doc.saveAndClose();
       try { copia.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
-      gerados.push({ nome: novoNome, url: copia.getUrl(), celulas: ajustadas, substituidos: substituidos });
+      gerados.push({ nome: novoNome, url: copia.getUrl(), celulas: tab.ajustadas,
+                     naoCasaram: tab.naoCasaram, substituidos: substituidos });
     });
 
-    _logAcao_(p.ss, p.sessao.email, 'Gerar documentos ' + tipo, '', competencia, gerados.map(g => g.nome).join(' | '));
-    return { ok: true, gerados: gerados, parametros: Object.keys(parametros).length };
+    const pendentes = [];
+    gerados.forEach(g => (g.naoCasaram || []).forEach(x => { if (pendentes.indexOf(x) < 0) pendentes.push(x); }));
+    _logAcao_(p.ss, p.sessao.email, 'Gerar documentos ' + tipo, '', competencia,
+      gerados.map(g => g.nome).join(' | ') + (pendentes.length ? ' || sem correspondência: ' + pendentes.join(' ; ') : ''));
+    return { ok: true, gerados: gerados, parametros: Object.keys(parametros).length,
+      naoCasaram: pendentes,
+      disponiveis: leitura.resumo.linhas.map(l => String(l[0]) + ' = ' + _decBR_(l[1])) };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 

@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.88.2';
+const VERSAO_PAINEL = '2.88.3';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -3451,11 +3451,33 @@ function gerarDocsProcesso(tipo, competencia) {
       if (status) status.textContent = r.parametros + ' parâmetros aplicados.';
       if (resultado) resultado.innerHTML = r.gerados.map(g => `<div style="margin-top:8px">
         <a class="btn claro" href="${escAttr(g.url)}" target="_blank" rel="noopener" style="text-decoration:none; width:100%; justify-content:flex-start">${icoPdf()} ${esc(g.nome)}</a>
-        <div class="cartao-dica" style="margin:2px 0 0">${g.celulas} célula(s) de tabela preenchida(s)${g.substituidos ? ` • ${g.substituidos} versão(ões) anterior(es) para a lixeira` : ''}</div></div>`).join('');
+        <div class="cartao-dica" style="margin:2px 0 0">${g.celulas} célula(s) de tabela preenchida(s)${g.substituidos ? ` • ${g.substituidos} versão(ões) anterior(es) para a lixeira` : ''}</div></div>`).join('')
+        + avisoRotulosNaoCasados(r);
       toast(r.gerados.length + ' documento(s) gerado(s) na pasta do Drive.');
     },
     e => { btn.disabled = false; btn.textContent = 'Gerar documentos'; if (status) status.textContent = ''; falhaNoCartao('docs-result', e); });
   if (run) run.gerarDocumentosPagamento(ESTADO.token, tipo, competencia, quais);
+}
+
+/**
+ * Quando uma linha de valor do modelo não casa com nenhum rótulo da composição,
+ * a célula fica com o valor que estava no modelo — em geral zero. Isto mostra
+ * exatamente quais rótulos não foram reconhecidos, ao lado dos que existem,
+ * para que a diferença de escrita possa ser corrigida no modelo.
+ */
+function avisoRotulosNaoCasados(r) {
+  if (!r || !r.naoCasaram || !r.naoCasaram.length) return '';
+  return `<div class="alerta-item amb" style="margin-top:10px; cursor:default; padding:8px 10px">
+    <strong>${r.naoCasaram.length} linha(s) de valor do modelo não foram reconhecidas</strong>
+    <div class="cartao-dica" style="margin:4px 0 6px">
+      Estas células continuaram com o valor que já estava no modelo — é o que faz um valor
+      correto na composição sair zerado no documento. Ajuste o texto do rótulo no modelo
+      para um dos nomes da composição, ou me diga o texto exato que eu aceito como sinônimo.
+    </div>
+    <div style="font-size:12px"><em>No modelo, sem correspondência:</em><ul style="margin:4px 0 6px 18px">
+      ${r.naoCasaram.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+      <em>Na composição, disponíveis:</em><ul style="margin:4px 0 0 18px">
+      ${(r.disponiveis || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul></div></div>`;
 }
 
 /** Valor por extenso (mesma regra do servidor) para exibir na tela. */
