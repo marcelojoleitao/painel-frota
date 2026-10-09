@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.88.3';
+const VERSAO_PAINEL = '2.88.4';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -6731,10 +6731,30 @@ function avisoGlosaZerada(r, competencia) {
       As transações desta competência não estão no AbastBD — importe-as antes de apurar a glosa.</div>`;
   }
   if (!r.tetosDaCompetencia) {
+    const a = r.anp || {};
+    // linhas na planilha mas nenhum teto legível é um problema diferente de não ter importado
+    if (a.linhas) {
+      const falta = ['mes', 'produto', 'uf', 'precoMaximo'].filter(k => !(a.colunas || {})[k]);
+      const rot = { mes: 'MÊS', produto: 'PRODUTO', uf: 'UF', precoMaximo: 'PREÇO MÁXIMO REVENDA' };
+      return `<div class="cartao-dica" style="border-left:3px solid var(--vermelho)">
+        <b style="color:var(--vermelho)">A série de ${esc(competencia)} está na planilha, mas o painel não consegue lê-la.</b>
+        São ${fmtInt(a.linhas)} linha(s) no ${esc(a.aba || 'HistoricoANP')} com esta competência, e nenhum teto saiu delas —
+        reimportar não resolve.
+        ${falta.length ? `Falta(m) a(s) coluna(s) <b>${falta.map(k => esc(rot[k])).join(', ')}</b> no cabeçalho da linha 1.`
+                       : `As quatro colunas existem (mês ${esc(a.colunas.mes)}, produto ${esc(a.colunas.produto)}, UF ${esc(a.colunas.uf)}, preço ${esc(a.colunas.precoMaximo)}),
+                          então o conteúdo veio deslocado ou vazio.`}
+        ${a.amostra ? `<div style="margin-top:6px">Primeira linha desta competência, como o painel a lê:
+          <ul style="margin:4px 0 0 18px">
+            <li>mês: ${esc(a.amostra.mes)}</li><li>produto: ${esc(a.amostra.produto)}</li>
+            <li>UF: ${esc(a.amostra.uf)}</li><li>preço máximo: ${esc(a.amostra.precoMaximo)}</li></ul></div>` : ''}
+        ${a.erro ? `<div style="margin-top:6px">Erro ao montar os tetos: ${esc(a.erro)}</div>` : ''}</div>`;
+    }
     return `<div class="cartao-dica" style="border-left:3px solid var(--vermelho)">
       <b style="color:var(--vermelho)">A série da ANP de ${esc(competencia)} não está na planilha.</b>
       Os ${fmtInt(r.avaliados)} abastecimentos foram lidos, mas não há preço máximo para comparar — por isso o total saiu zerado.
-      Importe a série da ANP desta competência em Dados → Importações e gere o relatório de novo.</div>`;
+      Importe a série da ANP desta competência em Dados → Importações e gere o relatório de novo.
+      <div style="margin-top:6px">Se a importação recusar dizendo que a competência já existe, então ela está lá e o problema é de leitura —
+      me avise, porque aí o caminho é outro.</div></div>`;
   }
   if (r.semTetoQtd >= r.avaliados) {
     return `<div class="cartao-dica" style="border-left:3px solid var(--ambar)">

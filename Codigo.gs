@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.88.3';
+const CODIGO_VERSAO = '2.88.4';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4858,13 +4858,61 @@ function gerarRelatorioGlosa(token, competencia, combustiveis) {
     _gravarResumoGlosa_(ss, competencia, dados.total);
     _logAcao_(p.ss, p.sessao.email, 'Relatório de glosa', '', competencia, 'total ' + _moedaBR_(dados.total) + ' | ' + dados.comGlosa + ' de ' + dados.avaliados + ' abastecimentos');
     const semTetoQtd = Object.keys(dados.semTeto).reduce((t, k) => t + dados.semTeto[k], 0);
-    const tetosDaComp = Object.keys(_tetosAnp_(ss) || {}).filter(k => k.indexOf(competencia + '|') === 0).length;
+    const anp = _panoramaAnp_(ss, competencia);
+    const tetosDaComp = anp.tetos;
     return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '', total: dados.total, comGlosa: dados.comGlosa,
              avaliados: dados.avaliados, grupos: dados.grupos.map(g => ({ combustivel: g.combustivel, subtotal: g.subtotal, itens: g.itens.length })),
              semTeto: Object.keys(dados.semTeto).map(k => k + ' (' + dados.semTeto[k] + ')'),
              // para a tela poder dizer POR QUE o total é zero
-             semTetoQtd: semTetoQtd, tetosDaCompetencia: tetosDaComp };
+             semTetoQtd: semTetoQtd, tetosDaCompetencia: tetosDaComp, anp: anp };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/**
+ * Panorama da série da ANP numa competência. Existe porque "não está na planilha"
+ * e "está na planilha mas o painel não consegue ler" produzem o mesmo zero, e são
+ * problemas diferentes: o primeiro se resolve importando, o segundo não.
+ * Linhas é o que a coluna do mês mostra; tetos é o que sobra depois de exigir
+ * também UF, produto e preço máximo — se um dos três estiver fora de lugar, as
+ * linhas aparecem e os tetos não.
+ */
+function _panoramaAnp_(ss, competencia) {
+  const out = { aba: CONFIG.ABA_ANP, existeAba: false, linhas: 0, tetos: 0, colunas: {},
+                cabecalho: [], produtosCE: [], amostra: null, erro: '' };
+  try {
+    const aba = ss.getSheetByName(CONFIG.ABA_ANP);
+    if (!aba) return out;
+    out.existeAba = true;
+    const valores = aba.getDataRange().getValues();
+    if (!valores.length) return out;
+    out.cabecalho = valores[0].map(c => String(c || '').trim());
+    const norm = out.cabecalho.map(c => _normCab_(c));
+    const achar = nomes => { for (let i = 0; i < nomes.length; i++) { const p = norm.indexOf(nomes[i]); if (p >= 0) return p; } return -1; };
+    const iMes = achar(['MES']), iProd = achar(['PRODUTO']), iUf = achar(['UF']), iMax = achar(['PRECO MAXIMO REVENDA', 'VALOR']);
+    out.colunas = {
+      mes: iMes < 0 ? '' : _letraColuna_(iMes + 1), produto: iProd < 0 ? '' : _letraColuna_(iProd + 1),
+      uf: iUf < 0 ? '' : _letraColuna_(iUf + 1), precoMaximo: iMax < 0 ? '' : _letraColuna_(iMax + 1)
+    };
+    if (iMes >= 0) {
+      for (let r = 1; r < valores.length; r++) {
+        if (_competenciaDaCelula_(valores[r][iMes]) !== competencia) continue;
+        out.linhas++;
+        if (!out.amostra) {
+          out.amostra = { mes: String(valores[r][iMes]), produto: iProd < 0 ? '(coluna ausente)' : String(valores[r][iProd] || '(vazio)'),
+            uf: iUf < 0 ? '(coluna ausente)' : String(valores[r][iUf] || '(vazio)'),
+            precoMaximo: iMax < 0 ? '(coluna ausente)' : String(valores[r][iMax] || '(vazio)') };
+        }
+      }
+    }
+    let tetos = {};
+    try { tetos = _tetosAnp_(ss) || {}; } catch (e) { out.erro = String(e.message || e); }
+    Object.keys(tetos).forEach(k => {
+      if (k.indexOf(competencia + '|') !== 0) return;
+      out.tetos++;
+      if (k.indexOf(competencia + '|CE|') === 0) out.produtosCE.push(k.split('|')[2] + ': ' + _decBR_(tetos[k]));
+    });
+  } catch (e) { out.erro = String(e.message || e); }
+  return out;
 }
 
 function _gravarResumoGlosa_(ss, competencia, total) {
