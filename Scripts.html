@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.88.5';
+const VERSAO_PAINEL = '2.88.6';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4876,7 +4876,15 @@ function desenharQuadro(c) {
     return true;
   });
 
-  const porFase = fase => todas.filter(d => d.fase === fase)
+  // um cartão cuja fase não bate com nenhuma coluna não pode sumir: vai para a coluna mais parecida
+  const faseDe = d => {
+    if (dados.fases.indexOf(d.fase) >= 0) return d.fase;
+    const t = String(d.fase || '').toLowerCase();
+    if (/conclu|finaliz|encerr/.test(t)) return dados.fases[dados.fases.length - 1];
+    if (/resolu|andamento|execu/.test(t)) return dados.fases[1] || dados.fases[0];
+    return dados.fases[0];
+  };
+  const porFase = fase => todas.filter(d => faseDe(d) === fase)
     .sort((a, b) => (atrasada(b) ? 1 : 0) - (atrasada(a) ? 1 : 0) ||
       ['Urgente', 'Alta', 'Normal'].indexOf(a.prioridade) - ['Urgente', 'Alta', 'Normal'].indexOf(b.prioridade));
 

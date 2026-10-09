@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.88.5';
+const CODIGO_VERSAO = '2.88.6';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -8024,6 +8024,22 @@ const DEMANDAS = {
         'Responsável', 'Prazo', 'Atualizada em', 'Concluída em', 'Anotações', 'Processo SEI', 'Tarefas']
 };
 
+/**
+ * Fase canônica a partir do que está na célula. O quadro só desenha as três
+ * colunas de DEMANDAS.fases; um texto com espaço a mais, sem acento ou digitado
+ * direto na planilha ("Concluido", "Concluída ") não casava com nenhuma e o
+ * cartão simplesmente não aparecia em lugar algum.
+ */
+function _faseCanonica_(v) {
+  const t = _normCab_(v);
+  if (!t) return DEMANDAS.fases[0];
+  const exata = DEMANDAS.fases.find(f => _normCab_(f) === t);
+  if (exata) return exata;
+  if (/CONCLU|FINALIZ|ENCERR|FEIT/.test(t)) return DEMANDAS.fases[2];
+  if (/RESOLU|ANDAMENTO|EXECU|FAZENDO/.test(t)) return DEMANDAS.fases[1];
+  return DEMANDAS.fases[0];
+}
+
 /** Número do processo SEI no formato oficial (00000.000000/0000-00). */
 function _seiLimpo_(v) {
   const t = String(v === null || v === undefined ? '' : v).trim();
@@ -8113,7 +8129,7 @@ function lerDemandas(token) {
         lista.push({
           id: String(l[0]), linha: i + 2,
           criadaEm: _dataTxt_(l[1]), criadaPor: String(l[2] || ''),
-          fase: String(l[3] || DEMANDAS.fases[0]), prioridade: String(l[4] || 'Normal'),
+          fase: _faseCanonica_(l[3]), faseOriginal: String(l[3] || '').trim(), prioridade: String(l[4] || 'Normal').trim(),
           titulo: String(l[5] || ''), descricao: String(l[6] || ''),
           placas: _placasDaDemanda_(l[7]),
           placa: _placasDaDemanda_(l[7])[0] || '',          // compatibilidade com o que já existia
@@ -8211,7 +8227,7 @@ function moverDemanda(token, id, fase) {
     const linha = _linhaDemanda_(aba, id);
     if (linha < 0) return { ok: false, erro: 'Demanda não encontrada.' };
     const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm');
-    const anterior = String(aba.getRange(linha, 4).getValue() || '');
+    const anterior = String(aba.getRange(linha, 4).getValue() || '').trim();
     if (anterior === fase) return { ok: true, id: id, fase: fase };
     aba.getRange(linha, 4).setValue(fase);
     aba.getRange(linha, 11).setValue(agora);
