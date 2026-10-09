@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.87.5';
+const CODIGO_VERSAO = '2.87.6';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -3018,6 +3018,77 @@ function importarGlosaAnp(token, competencia, origem, arquivo) {
   }
 }
 
+
+
+/**
+ * Testa o cálculo do teto da ANP de ponta a ponta: confere o cabeçalho da aba,
+ * mostra quantos tetos foram carregados por competência e simula a consulta
+ * para cada combustível. Se a glosa parar de sair, é aqui que aparece.
+ *     conferirTetosAnp('09/2026')
+ */
+function conferirTetosAnp(competencia) {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const aba = ss.getSheetByName(CONFIG.ABA_ANP);
+  if (!aba) { Logger.log('Aba "' + CONFIG.ABA_ANP + '" não encontrada.'); return; }
+
+  const cab = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0];
+  Logger.log('Cabeçalho da linha 1 (é dele que o painel depende):');
+  cab.forEach((c, i) => { if (String(c || '').trim()) Logger.log('   ' + _letraColuna_(i + 1) + ': ' + c); });
+  const norm = cab.map(c => _normCab_(c));
+  const exigidas = [['MES', 'MÊS'], ['PRODUTO', 'PRODUTO'], ['UF', 'UF'],
+                    ['PRECO MAXIMO REVENDA', 'PREÇO MÁXIMO REVENDA (ou VALOR)']];
+  let faltou = false;
+  Logger.log('');
+  exigidas.forEach(([chave, rotulo]) => {
+    let i = norm.indexOf(chave);
+    if (i < 0 && chave === 'PRECO MAXIMO REVENDA') i = norm.indexOf('VALOR');
+    if (i < 0) { faltou = true; Logger.log('   FALTA: ' + rotulo); }
+    else Logger.log('   ok: ' + rotulo + ' na coluna ' + _letraColuna_(i + 1));
+  });
+  if (faltou) {
+    Logger.log('');
+    Logger.log('Sem essas colunas o painel não calcula teto nenhum e a glosa da ANP sai zerada.');
+    return;
+  }
+
+  let tetos;
+  try { tetos = _tetosAnp_(ss); }
+  catch (e) { Logger.log('ERRO ao montar os tetos: ' + e); return; }
+
+  const porComp = {};
+  Object.keys(tetos).forEach(k => {
+    const comp = k.split('|')[0];
+    porComp[comp] = (porComp[comp] || 0) + 1;
+  });
+  Logger.log('');
+  Logger.log('--- tetos carregados por competência ---');
+  Object.keys(porComp).sort((a, b) => (a.substring(3) + a.substring(0, 2)).localeCompare(b.substring(3) + b.substring(0, 2)))
+    .forEach(c => Logger.log('   ' + c + ': ' + porComp[c] + ' combinação(ões) UF+produto'));
+
+  const alvo = competencia ? _formatarCompetencia_(competencia, true) : '';
+  if (!alvo) return 'ok';
+
+  Logger.log('');
+  Logger.log('=== simulação para ' + alvo + ', no Ceará ===');
+  if (!porComp[alvo]) {
+    Logger.log('   Nenhum teto nesta competência. Importe a série da ANP de ' + alvo + '.');
+    return;
+  }
+  // os mesmos combustíveis que o painel reconhece nas transações
+  ['GASOLINA COMUM', 'GASOLINA ADITIVADA', 'OLEO DIESEL S10', 'DIESEL', 'ETANOL'].forEach(comb => {
+    const prod = _produtoAnp_(comb);
+    if (!prod) { Logger.log('   ' + comb.padEnd(20) + ' → combustível não reconhecido pelo painel'); return; }
+    const chave = alvo + '|CE|' + _normCab_(prod.anp);
+    const teto = tetos[chave];
+    Logger.log('   ' + comb.padEnd(20) + ' → produto ANP "' + prod.anp + '" | teto ' +
+      (teto ? 'R$ ' + teto : 'NÃO ENCONTRADO (confira o nome do produto na planilha)'));
+  });
+  Logger.log('');
+  Logger.log('Produtos que a ANP trouxe nesta competência, para o CE:');
+  Object.keys(tetos).filter(k => k.indexOf(alvo + '|CE|') === 0)
+    .forEach(k => Logger.log('   ' + k.split('|')[2] + ': R$ ' + tetos[k]));
+  return 'ok';
+}
 
 /**
  * Mostra onde a série da ANP está guardada e o que há em cada competência.
