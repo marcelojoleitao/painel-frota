@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.88.1';
+const CODIGO_VERSAO = '2.88.2';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4857,9 +4857,13 @@ function gerarRelatorioGlosa(token, competencia, combustiveis) {
     const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);
     _gravarResumoGlosa_(ss, competencia, dados.total);
     _logAcao_(p.ss, p.sessao.email, 'Relatório de glosa', '', competencia, 'total ' + _moedaBR_(dados.total) + ' | ' + dados.comGlosa + ' de ' + dados.avaliados + ' abastecimentos');
+    const semTetoQtd = Object.keys(dados.semTeto).reduce((t, k) => t + dados.semTeto[k], 0);
+    const tetosDaComp = Object.keys(_tetosAnp_(ss) || {}).filter(k => k.indexOf(competencia + '|') === 0).length;
     return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '', total: dados.total, comGlosa: dados.comGlosa,
              avaliados: dados.avaliados, grupos: dados.grupos.map(g => ({ combustivel: g.combustivel, subtotal: g.subtotal, itens: g.itens.length })),
-             semTeto: Object.keys(dados.semTeto).map(k => k + ' (' + dados.semTeto[k] + ')') };
+             semTeto: Object.keys(dados.semTeto).map(k => k + ' (' + dados.semTeto[k] + ')'),
+             // para a tela poder dizer POR QUE o total é zero
+             semTetoQtd: semTetoQtd, tetosDaCompetencia: tetosDaComp };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 
