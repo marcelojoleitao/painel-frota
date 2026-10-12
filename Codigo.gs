@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.89.5';
+const CODIGO_VERSAO = '2.89.6';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -2919,7 +2919,9 @@ function importarDetalhamento(token, arquivo, titulo, competencia) {
     if (comp) aba.getRange(inicio, 30, linhas.length, 1).setValues(linhas.map(() => [comp]));
     // colunas A:E são calculadas por fórmula na planilha — replica da linha anterior
     _replicarColunasIniciais_(aba, inicio, linhas.length, 5);
-    SpreadsheetApp.flush();
+    // gestor, unidade e OS: calculados pelo painel (a fórmula antiga dependia da GestoresDB)
+    try { _preencherUnidadeGestorBases_(p.ss, false, inicio, linhas.length); } catch (e) { Logger.log('Unidade/gestor: ' + e); }
+    SpreadsheetApp.flush(); limparCache();
     _logAcao_(p.ss, p.sessao.email, 'Importar detalhamento', '', linhas.length + ' linhas', 'título ' + tit + ' | comp. ' + comp);
     return { ok: true, inseridos: linhas.length, titulo: tit, competencia: comp };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
@@ -2958,6 +2960,12 @@ function importarAceites(token, arquivo, tipo) {
       aba.getRange(inicio, 8, linhas.length, 1).setValues(linhas.map(() => [tipo]));
       const replicadas = _replicarFormulas_(aba, inicio, linhas.length, 8);   // I em diante são calculadas
       if (replicadas) Logger.log('AceitesDB: ' + replicadas + ' coluna(s) de fórmula replicada(s) nas linhas novas.');
+      try {
+        const mapa = _unidadeGestorPorPlaca_(p.ss);
+        aba.getRange(inicio, 10, linhas.length, 1).setValues(linhas.map(l => {
+          const m = mapa[String(l[1] || '').trim().toUpperCase()]; return [m ? m.unidade : ''];
+        }));
+      } catch (e) { Logger.log('Unidade nos aceites: ' + e); }
     }
     SpreadsheetApp.flush(); limparCache();
     _logAcao_(p.ss, p.sessao.email, 'Importar aceites (' + tipo + ')', '', linhas.length + ' inseridos', 'lidos: ' + lidos + ' | duplicados: ' + duplicados);
@@ -10507,6 +10515,14 @@ function consertarFormulasMigradas(aplicar) {
       if (rArr >= 0) {
         // prefere a fórmula que já está na mãe (a migração pode ter reapontado abas)
         const formula = (fN[rArr] && /ARRAYFORMULA/i.test(fN[rArr][c])) ? fN[rArr][c] : fV[rArr][c];
+        // Unidade e gestor vinham da GestoresDB da planilha antiga (placa → unidade → gestor).
+        // A migração reapontou para ConsultaBD!A:E, onde a 2ª coluna é o Renavam e a 5ª o ano:
+        // restaurar daria valores errados. Essas colunas passam a ser preenchidas pelo painel.
+        if (/Consulta[BD]{2}!/i.test(formula)) {
+          Logger.log('   ' + rotulo + ': fórmula por posição na ConsultaBD (daria valor errado) — vira valor calculado pelo painel.');
+          if (aplicar) nova.getRange(rArr + 1, c + 1).clearContent();
+          continue;
+        }
         const faltam = refsDe(formula).filter(r => nomesDestino.indexOf(r) < 0);
         if (faltam.length) { Logger.log('   ' + rotulo + ': ARRAYFORMULA cita aba(s) que não existem na mãe (' + faltam.join(', ') + ') — NÃO mexi.'); continue; }
         let fixos = 0;
@@ -10555,7 +10571,103 @@ function consertarFormulasMigradas(aplicar) {
       Logger.log('   → ' + mexeu + ' coluna(s) consertada(s).' + (lista.length ? ' Células com erro depois do conserto — ' + lista.join(', ') : ' Nenhuma célula com erro.'));
     }
   });
+  Logger.log('');
+  const preenchidos = _preencherUnidadeGestorBases_(destino, !aplicar);
+  Logger.log('▶ Unidade e gestor calculados pelo painel (ConsultaBD → Unidade SIPAC; Gestores → gestor da unidade):');
+  preenchidos.forEach(l => Logger.log('   ' + l));
   if (aplicar) limparCache();
   Logger.log('');
   Logger.log(aplicar ? 'Pronto. As próximas importações já encontram as fórmulas.' : 'Fim da simulação.');
+}
+
+/**
+ * Placa → unidade (Unidade SIPAC da ConsultaBD) e gestor (aba Gestores, pela
+ * mesma regra da ficha da viatura no painel). Substitui a GestoresDB da
+ * planilha antiga, que não veio na migração.
+ */
+function _unidadeGestorPorPlaca_(ss) {
+  const mapa = {};
+  const aba = ss.getSheetByName(CONFIG.ABA_BASE);
+  if (!aba) return mapa;
+  const v = aba.getDataRange().getValues();
+  let h = -1;
+  for (let i = 0; i < Math.min(6, v.length); i++) {
+    const n = v[i].map(c => _normCab_(c));
+    if (n.indexOf('PLACA') >= 0 && n.indexOf('UNIDADE SIPAC') >= 0) { h = i; break; }
+  }
+  if (h < 0) return mapa;
+  const n = v[h].map(c => _normCab_(c));
+  const iPl = n.indexOf('PLACA'), iUn = n.indexOf('UNIDADE SIPAC');
+  const gestores = _lerGestores_(ss);
+  const curta = u => String(u || '').toUpperCase().replace(/-CE$/, '').split('/').pop().trim();
+  const gestorDe = un => {
+    if (!un) return '';
+    let g = gestores.find(x => x.unidadeSipac === un || x.unidade === un);
+    if (!g) g = gestores.find(x => curta(x.unidadeSipac) === curta(un) || curta(x.unidade) === curta(un));
+    return g ? g.nome : '';
+  };
+  for (let r = h + 1; r < v.length; r++) {
+    const placa = String(v[r][iPl] || '').trim().toUpperCase();
+    if (!placa) continue;
+    const un = String(v[r][iUn] || '').trim();
+    mapa[placa] = { unidade: un, gestor: gestorDe(un) };
+  }
+  return mapa;
+}
+
+/**
+ * Preenche, com valores, as colunas que antes vinham da GestoresDB:
+ *   DetalhamentoDB  A (gestor), B (unidade), C (gestor), E (OS = coluna L, quando vazia)
+ *   AceitesDB       J (unidade)
+ * Só preenche célula vazia ou com erro — o que já tem valor fica como está.
+ * simular=true apenas conta.
+ */
+function _preencherUnidadeGestorBases_(ss, simular, linhaIni, qtd) {
+  const mapa = _unidadeGestorPorPlaca_(ss);
+  const saida = [];
+  if (!Object.keys(mapa).length) { saida.push('ConsultaBD sem as colunas Placa e Unidade SIPAC — nada feito.'); return saida; }
+  const erro = t => /^#/.test(String(t));
+
+  const det = ss.getSheetByName(CONFIG.ABA_DETALHE);
+  if (det && det.getLastRow() >= 4) {
+    const ini = linhaIni || 4, n = qtd || (det.getLastRow() - 3);
+    const faixa = det.getRange(ini, 1, n, 12);
+    const vals = faixa.getValues();
+    let mudou = 0, semPlaca = 0;
+    const novos = vals.map(l => {
+      const placa = String(l[5] || '').trim().toUpperCase();
+      if (!placa) return [l[0], l[1], l[2], l[4]];
+      const m = mapa[placa];
+      if (!m) semPlaca++;
+      // só preenche o que está vazio ou com erro: as linhas antigas guardam a unidade e o gestor da época
+      const vazio = x => !String(x === null || x === undefined ? '' : x).trim() || erro(x);
+      const quer = [vazio(l[0]) && m ? m.gestor : l[0], vazio(l[1]) && m ? m.unidade : l[1],
+                    vazio(l[2]) && m ? m.gestor : l[2], vazio(l[4]) ? l[11] : l[4]];
+      if (quer.some((q, i) => String(q) !== String([l[0], l[1], l[2], l[4]][i]))) mudou++;
+      return quer;
+    });
+    saida.push('DetalhamentoDB: ' + mudou + ' linha(s) ' + (simular ? 'seriam ajustadas' : 'ajustadas') +
+      (semPlaca ? ' | ' + semPlaca + ' com placa fora da ConsultaBD (unidade/gestor mantidos)' : ''));
+    if (!simular && mudou) {
+      det.getRange(ini, 1, n, 3).setValues(novos.map(q => [q[0], q[1], q[2]]));
+      det.getRange(ini, 5, n, 1).setValues(novos.map(q => [q[3]]));
+    }
+  }
+
+  const ace = ss.getSheetByName(CONFIG.ABA_ACEITES);
+  if (ace && ace.getLastRow() >= 4 && !linhaIni) {
+    const n = ace.getLastRow() - 3;
+    const vals = ace.getRange(4, 1, n, 10).getValues();
+    let mudou = 0;
+    const novos = vals.map(l => {
+      const m = mapa[String(l[1] || '').trim().toUpperCase()];
+      const atual = String(l[9] === null || l[9] === undefined ? '' : l[9]).trim();
+      const quer = (!atual || erro(atual)) && m ? m.unidade : l[9];
+      if (String(quer) !== String(l[9])) mudou++;
+      return [quer];
+    });
+    saida.push('AceitesDB (J, unidade): ' + mudou + ' linha(s) ' + (simular ? 'seriam ajustadas' : 'ajustadas'));
+    if (!simular && mudou) ace.getRange(4, 10, n, 1).setValues(novos);
+  }
+  return saida;
 }
