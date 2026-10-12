@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.89.4';
+const CODIGO_VERSAO = '2.89.5';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -10446,4 +10446,116 @@ function excluirDocumentoArquivo(token, id) {
       d.categoria + ' • ' + d.titulo + (d.numero ? ' (' + d.numero + ')' : '') + (d.nomeArquivo ? ' | arquivo ' + d.nomeArquivo + ' na lixeira do Drive' : ''));
     return { ok: true, id: id };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+
+/* ============================================================
+   CONSERTO DAS FÓRMULAS DAS BASES MIGRADAS
+   A migração copiou a planilha antiga célula a célula. Onde havia
+   ARRAYFORMULA, a fórmula veio na célula de cima, mas os valores que ela
+   tinha espalhado nas linhas de baixo vieram junto como texto fixo — e
+   esses valores fixos impedem a fórmula de se espalhar (#REF!). Nas linhas
+   importadas depois, a coluna fica vazia, porque não há fórmula para copiar.
+   Onde a fórmula era linha a linha, ela só existe nas linhas migradas.
+
+   consertarFormulasMigradas()      → só mostra o que faria (não altera)
+   consertarFormulasMigradas(true)  → aplica
+   ============================================================ */
+function consertarFormulasMigradas(aplicar) {
+  const origem = SpreadsheetApp.openById(CONFIG.ID_MANUT_ANTIGA);
+  const destino = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const nomesDestino = destino.getSheets().map(a => a.getName());
+  const bases = [CONFIG.ABA_DETALHE, CONFIG.ABA_ACEITES, CONFIG.ABA_ORCAMENTOS].concat(CONFIG.ABAS_AUX_MANUT || []);
+  const refsDe = f => (String(f).match(/'[^']+'!|[A-Za-zÀ-ÿ0-9_.çÇ]+!/g) || []).map(r => r.replace(/['!]/g, '').trim());
+  const erroVisivel = t => /^#(REF|N\/A|ERROR|VALUE|NAME|DIV\/0)/i.test(String(t));
+  Logger.log(aplicar ? '=== APLICANDO ===' : '=== SIMULAÇÃO — nada será alterado. Rode consertarFormulasMigradas(true) para aplicar. ===');
+
+  bases.forEach(nome => {
+    const velha = origem.getSheetByName(nome), nova = destino.getSheetByName(nome);
+    if (!velha || !nova) { Logger.log(nome + ': ' + (!velha ? 'não existe na planilha antiga' : 'não existe na planilha-mãe')); return; }
+    const nLinV = velha.getLastRow(), nColV = velha.getLastColumn();
+    const nLinN = nova.getLastRow(), nColN = Math.max(nova.getLastColumn(), nColV);
+    if (nLinV < 2 || nLinN < 2) { Logger.log(nome + ': vazia'); return; }
+    const fV = velha.getRange(1, 1, nLinV, nColV).getFormulas();
+    const fVR1 = velha.getRange(1, 1, nLinV, nColV).getFormulasR1C1();
+    const fN = nova.getRange(1, 1, nLinN, nColN).getFormulas();
+    const fNR1 = nova.getRange(1, 1, nLinN, nColN).getFormulasR1C1();
+    const cab = velha.getRange(1, 1, Math.min(3, nLinV), nColV).getDisplayValues();
+    const nomeCol = c => { for (let r = cab.length - 1; r >= 0; r--) if (String(cab[r][c] || '').trim()) return String(cab[r][c]).trim(); return ''; };
+    Logger.log('');
+    Logger.log('▶ ' + nome + ' — antiga: ' + (nLinV) + ' linhas | mãe: ' + nLinN + ' linhas');
+    let mexeu = 0;
+    // colunas que as importações do painel gravam — nunca recebem fórmula nem são limpas
+    const gravadas = nome === CONFIG.ABA_ORCAMENTOS ? [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12]
+                   : nome === CONFIG.ABA_ACEITES ? [1, 2, 3, 4, 5, 6, 7, 8]
+                   : nome === CONFIG.ABA_DETALHE ? Array.from({ length: 25 }, (_, i) => i + 6) : [];
+
+    for (let c = 0; c < nColV; c++) {
+      const rotulo = _letraColuna_(c + 1) + (nomeCol(c) ? ' (' + nomeCol(c) + ')' : '');
+      if (gravadas.indexOf(c + 1) >= 0) {
+        if (fV.some(l => l[c])) Logger.log('   ' + rotulo + ': tinha fórmula na antiga, mas a importação grava nesta coluna — NÃO mexi.');
+        continue;
+      }
+      // ARRAYFORMULA na planilha antiga?
+      let rArr = -1;
+      for (let r = 0; r < Math.min(10, nLinV); r++) if (/ARRAYFORMULA/i.test(fV[r][c])) { rArr = r; break; }
+      // ou fórmula linha a linha: a da última linha que tem fórmula
+      let rLinha = -1, qtd = 0;
+      if (rArr < 0) for (let r = nLinV - 1; r >= 1; r--) if (fV[r][c]) { qtd++; if (rLinha < 0) rLinha = r; }
+      if (rArr < 0 && (rLinha < 0 || qtd < 3)) continue;    // coluna de dados, não de fórmula
+
+      if (rArr >= 0) {
+        // prefere a fórmula que já está na mãe (a migração pode ter reapontado abas)
+        const formula = (fN[rArr] && /ARRAYFORMULA/i.test(fN[rArr][c])) ? fN[rArr][c] : fV[rArr][c];
+        const faltam = refsDe(formula).filter(r => nomesDestino.indexOf(r) < 0);
+        if (faltam.length) { Logger.log('   ' + rotulo + ': ARRAYFORMULA cita aba(s) que não existem na mãe (' + faltam.join(', ') + ') — NÃO mexi.'); continue; }
+        let fixos = 0;
+        for (let r = rArr + 1; r < nLinN; r++) if (!fN[r][c]) fixos++;
+        const ini = nova.getRange(rArr + 1, c + 1).getDisplayValue();
+        Logger.log('   ' + rotulo + ': ARRAYFORMULA na linha ' + (rArr + 1) + (erroVisivel(ini) ? ' — hoje mostra ' + ini : '') +
+          ' | ' + fixos + ' célula(s) com valor fixo abaixo, que impedem a fórmula de se espalhar');
+        Logger.log('      ' + formula.substring(0, 220));
+        if (aplicar) {
+          if (nLinN > rArr + 1) nova.getRange(rArr + 2, c + 1, nLinN - rArr - 1, 1).clearContent();
+          nova.getRange(rArr + 1, c + 1).setFormula(formula);
+          mexeu++;
+        }
+      } else {
+        const r1 = (() => { for (let r = nLinN - 1; r >= 1; r--) if (fNR1[r][c]) return fNR1[r][c]; return fVR1[rLinha][c]; })();
+        const faltam = refsDe(r1).filter(r => nomesDestino.indexOf(r) < 0);
+        if (faltam.length) { Logger.log('   ' + rotulo + ': fórmula cita aba(s) que não existem na mãe (' + faltam.join(', ') + ') — NÃO mexi.'); continue; }
+        // linhas de dados na mãe sem fórmula nesta coluna, a partir da 1ª linha que tinha fórmula na antiga
+        let primeira = -1;
+        for (let r = 1; r < nLinV; r++) if (fV[r][c]) { primeira = r; break; }
+        const sem = [];
+        for (let r = primeira; r < nLinN; r++) if (!fNR1[r][c]) sem.push(r);
+        Logger.log('   ' + rotulo + ': fórmula linha a linha | ' + sem.length + ' linha(s) da mãe sem ela' + (sem.length ? ' (a partir da ' + (sem[0] + 1) + ')' : ''));
+        Logger.log('      ' + String(fV[rLinha][c]).substring(0, 220));
+        if (aplicar && sem.length) {
+          // agrupa em blocos contíguos para gravar de uma vez
+          let i = 0;
+          while (i < sem.length) {
+            let j = i;
+            while (j + 1 < sem.length && sem[j + 1] === sem[j] + 1) j++;
+            const n = j - i + 1;
+            nova.getRange(sem[i] + 1, c + 1, n, 1).setFormulasR1C1(Array.from({ length: n }, () => [r1]));
+            i = j + 1;
+          }
+          mexeu++;
+        }
+      }
+    }
+    if (aplicar && mexeu) {
+      SpreadsheetApp.flush();
+      // confere se ficou algum erro visível nas colunas mexidas
+      const vis = nova.getRange(1, 1, nova.getLastRow(), nColN).getDisplayValues();
+      const erros = {};
+      vis.forEach(l => l.forEach((t, c) => { if (erroVisivel(t)) erros[c] = (erros[c] || 0) + 1; }));
+      const lista = Object.keys(erros).map(c => _letraColuna_(Number(c) + 1) + ': ' + erros[c]);
+      Logger.log('   → ' + mexeu + ' coluna(s) consertada(s).' + (lista.length ? ' Células com erro depois do conserto — ' + lista.join(', ') : ' Nenhuma célula com erro.'));
+    }
+  });
+  if (aplicar) limparCache();
+  Logger.log('');
+  Logger.log(aplicar ? 'Pronto. As próximas importações já encontram as fórmulas.' : 'Fim da simulação.');
 }
