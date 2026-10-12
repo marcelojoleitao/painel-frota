@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.89.9';
+const CODIGO_VERSAO = '2.90.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -2537,8 +2537,8 @@ function importarOrcamentos(token, texto, competencia) {
 
     const existentes = {};
     if (aba.getLastRow() > 2) {
-      aba.getRange(1, 1, aba.getLastRow(), 1).getDisplayValues().forEach(l => {
-        const os = String(l[0] || '').replace(/\D/g, ''); if (os) existentes[os] = true;
+      aba.getRange(1, 1, aba.getLastRow(), 1).getValues().forEach(l => {   // valor, não texto exibido
+        const os = String(l[0] === null ? '' : l[0]).replace(/\.0+$/, '').replace(/\D/g, ''); if (os) existentes[os] = true;
       });
     }
 
@@ -2684,10 +2684,13 @@ function _primeiraLinhaVaziaNaColuna_(aba, col, startRow) {
 }
 
 function _proximaLinhaAppend_(aba, col, floor) {
+  // Pelo VALOR, não pelo texto exibido: na planilha-mãe a coluna da OS ficou com
+  // um formato que não exibe o número, e a leitura pelo texto exibido via a
+  // coluna vazia — a importação gravava sempre a partir da linha 4, por cima.
   const maxRows = aba.getMaxRows();
-  const vals = aba.getRange(1, col, maxRows, 1).getDisplayValues();
+  const vals = aba.getRange(1, col, maxRows, 1).getValues();
   let last = 0;
-  for (let i = 0; i < vals.length; i++) if (String(vals[i][0]).trim() !== '') last = i + 1;
+  for (let i = 0; i < vals.length; i++) if (String(vals[i][0] === null ? '' : vals[i][0]).trim() !== '') last = i + 1;
   return Math.max(last + 1, floor);
 }
 
@@ -2695,8 +2698,8 @@ function _obterValoresColuna_(aba, col, startRow) {
   const set = new Set();
   const maxRows = aba.getMaxRows();
   if (maxRows < startRow) return set;
-  const vals = aba.getRange(startRow, col, maxRows - startRow + 1, 1).getDisplayValues();
-  vals.forEach(r => { const v = _normalizarCodigo_(r[0]); if (v) set.add(v); });
+  const vals = aba.getRange(startRow, col, maxRows - startRow + 1, 1).getValues();   // valor, não texto exibido
+  vals.forEach(r => { const v = _normalizarCodigo_(r[0]).replace(/\.0+$/, ''); if (v) set.add(v); });
   return set;
 }
 
@@ -3506,10 +3509,13 @@ function _primeiraLinhaVaziaNaColuna_(aba, col, startRow) {
 }
 
 function _proximaLinhaAppend_(aba, col, floor) {
+  // Pelo VALOR, não pelo texto exibido: na planilha-mãe a coluna da OS ficou com
+  // um formato que não exibe o número, e a leitura pelo texto exibido via a
+  // coluna vazia — a importação gravava sempre a partir da linha 4, por cima.
   const maxRows = aba.getMaxRows();
-  const vals = aba.getRange(1, col, maxRows, 1).getDisplayValues();
+  const vals = aba.getRange(1, col, maxRows, 1).getValues();
   let last = 0;
-  for (let i = 0; i < vals.length; i++) if (String(vals[i][0]).trim() !== '') last = i + 1;
+  for (let i = 0; i < vals.length; i++) if (String(vals[i][0] === null ? '' : vals[i][0]).trim() !== '') last = i + 1;
   return Math.max(last + 1, floor);
 }
 
@@ -3517,8 +3523,8 @@ function _obterValoresColuna_(aba, col, startRow) {
   const set = new Set();
   const maxRows = aba.getMaxRows();
   if (maxRows < startRow) return set;
-  const vals = aba.getRange(startRow, col, maxRows - startRow + 1, 1).getDisplayValues();
-  vals.forEach(r => { const v = _normalizarCodigo_(r[0]); if (v) set.add(v); });
+  const vals = aba.getRange(startRow, col, maxRows - startRow + 1, 1).getValues();   // valor, não texto exibido
+  vals.forEach(r => { const v = _normalizarCodigo_(r[0]).replace(/\.0+$/, ''); if (v) set.add(v); });
   return set;
 }
 
@@ -10751,4 +10757,77 @@ function diagnosticarBasesManutencao() {
       .filter(l => /^Importar/i.test(l[2])).slice(-12)
       .forEach(l => Logger.log('   ' + l[0] + ' | ' + l[2] + ' | ' + l[4] + ' | ' + String(l[5]).substring(0, 160)));
   } catch (e) { Logger.log('   log indisponível: ' + e); }
+}
+
+
+/* ============================================================
+   RESTAURAÇÃO DO AceitesDB E DO OrçamentosDB
+   As importações feitas pelo painel depois da migração gravaram a partir da
+   linha 4, por cima dos dados antigos: a coluna da OS não exibia o número e
+   o painel lia a coluna como vazia. A planilha antiga não foi tocada desde a
+   migração e tem as linhas originais.
+
+   restaurarBasesSimular()  → só mostra o que faria
+   restaurarBasesAplicar()  → faz uma cópia de segurança de cada aba e restaura
+   Depois: aplicarConsertoFormulas e reimportar orçamentos e aceites de 09/2026.
+   ============================================================ */
+function restaurarBasesSimular() { return _restaurarBases_(false); }
+function restaurarBasesAplicar() { return _restaurarBases_(true); }
+
+function _restaurarBases_(aplicar) {
+  const origem = SpreadsheetApp.openById(CONFIG.ID_MANUT_ANTIGA);
+  const destino = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const quando = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd-MM HH.mm');
+  Logger.log(aplicar ? '=== APLICANDO ===' : '=== SIMULAÇÃO — nada será alterado. Rode restaurarBasesAplicar para aplicar. ===');
+  const norm = v => v instanceof Date ? 'D' + v.getTime() : String(v === null || v === undefined ? '' : v).trim().replace(/\.0+$/, '');
+
+  // [aba, colunas de dados a restaurar (1-based)]
+  [[CONFIG.ABA_ACEITES, [1, 2, 3, 4, 5, 6, 7, 8, 10]], [CONFIG.ABA_ORCAMENTOS, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]].forEach(([nome, cols]) => {
+    const velha = origem.getSheetByName(nome), nova = destino.getSheetByName(nome);
+    Logger.log('');
+    if (!velha || !nova) { Logger.log('▶ ' + nome + ': aba ausente em uma das planilhas.'); return; }
+    const nV = velha.getLastRow(), nN = nova.getLastRow();
+    const largura = Math.max.apply(null, cols);
+    const vV = velha.getRange(1, 1, nV, largura).getValues();
+    const vN = nova.getRange(1, 1, Math.max(nN, nV), largura).getValues();
+    // linhas em que a OS (coluna A) difere da planilha antiga
+    const difere = [];
+    for (let r = 3; r < nV; r++) if (norm(vV[r][0]) !== norm(vN[r] ? vN[r][0] : '')) difere.push(r);
+    // conferência: fora do trecho sobrescrito, as duas devem ser iguais
+    let iguais = 0;
+    for (let r = 3; r < nV; r++) if (difere.indexOf(r) < 0) iguais++;
+    const blocos = [];
+    difere.forEach(r => { const b = blocos[blocos.length - 1]; if (b && b[1] === r - 1) b[1] = r; else blocos.push([r, r]); });
+    Logger.log('▶ ' + nome + ': ' + difere.length + ' linha(s) diferentes da planilha antiga' +
+      (blocos.length ? ' — ' + blocos.map(b => 'linhas ' + (b[0] + 1) + ' a ' + (b[1] + 1)).join(', ') : '') +
+      ' | ' + iguais + ' linha(s) iguais');
+    if (difere.length) {
+      const r0 = difere[0];
+      Logger.log('   exemplo, linha ' + (r0 + 1) + ': hoje OS ' + norm(vN[r0][0]) + ' (' + norm(vN[r0][1]) + ') → antiga OS ' + norm(vV[r0][0]) + ' (' + norm(vV[r0][1]) + ')');
+    }
+    try { Logger.log('   formato da coluna A (OS) na mãe: "' + nova.getRange(4, 1).getNumberFormat() + '" | exibido: "' + nova.getRange(4, 1).getDisplayValue() + '"'); } catch (e) {}
+    if (!aplicar) return;
+    if (difere.length) {
+      nova.copyTo(destino).setName(nome + ' (antes da restauração ' + quando + ')');
+      blocos.forEach(([a, b]) => {
+        cols.forEach(c => {
+          nova.getRange(a + 1, c, b - a + 1, 1).setValues(vV.slice(a, b + 1).map(l => [l[c - 1]]));
+        });
+      });
+    }
+    nova.getRange(4, 1, Math.max(1, nova.getMaxRows() - 3), 1).setNumberFormat('0');   // a OS volta a aparecer
+    Logger.log('   → ' + (difere.length ? difere.length + ' linha(s) restauradas; cópia de segurança criada como aba à parte; ' : 'nada a restaurar; ') + 'coluna A com formato de número.');
+  });
+
+  // DetalhamentoDB: só o formato das colunas de OS (E e L), para voltarem a aparecer
+  const det = destino.getSheetByName(CONFIG.ABA_DETALHE);
+  if (det) {
+    Logger.log('');
+    Logger.log('▶ ' + CONFIG.ABA_DETALHE + ': formato de E/L hoje "' + det.getRange(4, 12).getNumberFormat() + '", exibido "' + det.getRange(4, 12).getDisplayValue() + '"' +
+      (aplicar ? ' → ajustado para número.' : ''));
+    if (aplicar) { const n = Math.max(1, det.getMaxRows() - 3); det.getRange(4, 5, n, 1).setNumberFormat('0'); det.getRange(4, 12, n, 1).setNumberFormat('0'); }
+  }
+  if (aplicar) { SpreadsheetApp.flush(); limparCache(); }
+  Logger.log('');
+  Logger.log(aplicar ? 'Pronto. Agora rode aplicarConsertoFormulas e reimporte orçamentos e aceites de 09/2026.' : 'Fim da simulação.');
 }
