@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.89.7';
+const CODIGO_VERSAO = '2.89.8';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -10706,3 +10706,6 @@ function _preencherUnidadeGestorBases_(ss, simular, linhaIni, qtd) {
   }
   return saida;
 }
+
+/** Para rodar pelo botão Executar do editor, que não aceita argumentos: aplica o conserto. */
+function aplicarConsertoFormulas() { return consertarFormulasMigradas(true); }
