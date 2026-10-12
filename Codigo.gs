@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.89.3';
+const CODIGO_VERSAO = '2.89.4';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6245,7 +6245,7 @@ function _parametrosPagamento_(tipo, t, resumo, competencia) {
 }
 
 /** Preenche as tabelas do documento casando pelo rótulo da primeira coluna. */
-function _preencherTabelas_(corpo, resumo, serie) {
+function _preencherTabelas_(corpo, resumo, serie, competencia) {
   let ajustadas = 0;
   const naoCasaram = [];
   const normaliza = t => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
@@ -6319,24 +6319,30 @@ function _preencherTabelas_(corpo, resumo, serie) {
     const ancorada = ehExecucao && serie && serie.todas && serie.limite &&
       Array.from({ length: tab.getNumRows() - 1 }, (_, i) => mesDaLinha(tab.getRow(i + 1).getCell(0).getText())).filter(Boolean).length >= 2;
     if (ancorada) {
-      // cada linha já traz o mês da vigência; o valor daquele mês entra na própria linha,
-      // e o percentual é sobre o limite do contrato — como no modelo
+      // Layout do modelo: cada linha traz o mês da vigência; o valor daquele mês entra
+      // na própria linha e o percentual é sobre o limite do contrato. Os meses posteriores
+      // à competência em análise ficam zerados. O SALDO UTILIZADO não conta a nota em
+      // análise ("Notas em análise para pagamento não serão consideradas").
+      const chave = c => c.substring(3) + c.substring(0, 2);   // AAAAMM
+      const atual = /^\d{2}\/\d{4}$/.test(String(competencia || '')) ? chave(competencia) : '999999';
       const porComp = {};
       serie.todas.forEach(x => { porComp[x.comp] = x; });
       const pct = v => _decBR_(v / serie.limite * 100) + '%';
+      const moeda = (celula, v) => (/R\$/.test(celula.getText()) ? 'R$ ' : '') + _decBR_(v);
       let usado = 0;
       for (let r = 1; r < tab.getNumRows(); r++) {
         const linha = tab.getRow(r);
         const n = linha.getNumCells();
         const comp = mesDaLinha(linha.getCell(0).getText());
         if (!comp || n < 2) continue;
-        const item = porComp[comp];
+        const k = chave(comp);
+        const item = k <= atual ? porComp[comp] : null;
         const bruto = item ? item.bruto : 0;
-        usado += bruto;
+        if (item && k < atual) usado += bruto;
         if (n >= 4) {
-          linha.getCell(1).editAsText().setText(item ? item.nf : '');
-          linha.getCell(2).editAsText().setText(item ? item.notaPagamento : '');
-          linha.getCell(3).editAsText().setText('R$ ' + _decBR_(bruto));
+          linha.getCell(1).editAsText().setText(item ? String(item.nf || '') : '');
+          linha.getCell(2).editAsText().setText(item ? String(item.notaPagamento || '') : '');
+          linha.getCell(3).editAsText().setText(moeda(linha.getCell(3), bruto));
         }
         linha.getCell(n - 1).editAsText().setText(pct(bruto));
         ajustadas++;
@@ -6349,10 +6355,15 @@ function _preencherTabelas_(corpo, resumo, serie) {
         if (/saldo utilizado/.test(rot)) valor = usado;
         else if (/saldo restante|saldo a utilizar|saldo disponivel/.test(rot)) valor = serie.limite - usado;
         else continue;
-        for (let c = 1; c < n - 1; c++) {
-          if (/R\$/.test(linha.getCell(c).getText())) linha.getCell(c).editAsText().setText('R$ ' + _decBR_(valor));
+        // no modelo: valor na 2ª célula e percentual na 3ª; as demais vazias
+        let fezValor = false, fezPct = false;
+        for (let c = 1; c < n; c++) {
+          const celula = linha.getCell(c), t = celula.getText();
+          if (!fezPct && /%/.test(t)) { celula.editAsText().setText(pct(valor)); fezPct = true; }
+          else if (!fezValor && /\d/.test(t)) { celula.editAsText().setText(moeda(celula, valor)); fezValor = true; }
         }
-        linha.getCell(n - 1).editAsText().setText(pct(valor));
+        if (!fezValor && n > 1) linha.getCell(1).editAsText().setText(_decBR_(valor));
+        if (!fezPct && n > 2) linha.getCell(2).editAsText().setText(pct(valor));
         ajustadas++;
       }
     } else if (serie && serie.linhas.length && /mes de referencia/.test(cabecalho) && tab.getNumRows() > 2) {
@@ -6605,6 +6616,59 @@ function _modelosPagamento_() {
   return CONFIG.MODELOS_PAGAMENTO;
 }
 
+/**
+ * Substitui os {{parâmetros}} no corpo, cabeçalho e rodapé.
+ *
+ * O replaceText do Docs procura dentro de cada trecho de texto separadamente:
+ * se o marcador estiver partido entre dois trechos (o que o Docs faz por conta
+ * própria depois de edições, revisões ou colagens), ele não é encontrado e fica
+ * no documento como {{...}}. Para esses casos há uma segunda passada, parágrafo
+ * a parágrafo, que lê o texto inteiro do parágrafo, localiza o marcador (inclusive
+ * com caracteres invisíveis no meio) e o troca pela posição.
+ * Devolve os marcadores que ainda assim sobraram, com o motivo.
+ */
+function _substituirParametros_(doc, par) {
+  const secoes = [doc.getBody()];
+  try { if (doc.getHeader()) secoes.push(doc.getHeader()); } catch (e) {}
+  try { if (doc.getFooter()) secoes.push(doc.getFooter()); } catch (e) {}
+  const chaves = Object.keys(par);
+  const limpaChave = t => '{{' + String(t).replace(/[\u200B-\u200D\uFEFF\u00AD\s]/g, '').toLowerCase() + '}}';
+  const porChaveLimpa = {};
+  chaves.forEach(k => { porChaveLimpa[limpaChave(k.replace(/[{}]/g, ''))] = k; });
+
+  // 1ª passada: a substituição normal
+  secoes.forEach(sec => chaves.forEach(k => {
+    try { sec.replaceText(k.replace(/[{}]/g, '\\$&'), String(par[k] === null || par[k] === undefined ? '' : par[k])); }
+    catch (e) { Logger.log('replaceText ' + k + ': ' + e); }
+  }));
+
+  // 2ª passada: marcadores partidos, por parágrafo
+  const paragrafos = [];
+  secoes.forEach(sec => { try { sec.getParagraphs().forEach(p => paragrafos.push(p)); } catch (e) {} });
+  const restantes = [];
+  paragrafos.forEach(p => {
+    const texto = p.getText();
+    if (texto.indexOf('{') < 0) return;
+    const re = /\{\{([^{}]{1,80})\}\}/g;
+    const achados = [];
+    let m;
+    while ((m = re.exec(texto)) !== null) achados.push({ ini: m.index, fim: m.index + m[0].length - 1, bruto: m[0], chave: limpaChave(m[1]) });
+    if (!achados.length) return;
+    const t = p.editAsText();
+    // de trás para frente, para as posições anteriores continuarem válidas
+    achados.reverse().forEach(a => {
+      const original = porChaveLimpa[a.chave];
+      if (!original) { restantes.push({ texto: a.bruto, motivo: 'parâmetro desconhecido — não existe na lista do painel' }); return; }
+      const valor = String(par[original] === null || par[original] === undefined ? '' : par[original]);
+      try {
+        if (valor) t.insertText(a.fim + 1, valor);
+        t.deleteText(a.ini, a.fim);
+      } catch (e) { restantes.push({ texto: a.bruto, motivo: 'não consegui substituir: ' + e }); }
+    });
+  });
+  return restantes;
+}
+
 function gerarDocumentosPagamento(token, tipo, competencia, quais) {
   const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
   try {
@@ -6626,18 +6690,20 @@ function gerarDocumentosPagamento(token, tipo, competencia, quais) {
       const copia = DriveApp.getFileById(modelos[nomeModelo]).makeCopy(novoNome, pasta);
       const doc = DocumentApp.openById(copia.getId());
       const corpo = doc.getBody();
-      Object.keys(parametros).forEach(chave => { corpo.replaceText(chave.replace(/[{}]/g, '\\$&'), parametros[chave]); });
-      const tab = _preencherTabelas_(corpo, leitura.resumo, leitura.serie);
+      const restantes = _substituirParametros_(doc, parametros);
+      const tab = _preencherTabelas_(corpo, leitura.resumo, leitura.serie, competencia);
       doc.saveAndClose();
       try { copia.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
       gerados.push({ nome: novoNome, url: copia.getUrl(), celulas: tab.ajustadas,
-                     naoCasaram: tab.naoCasaram, substituidos: substituidos });
+                     naoCasaram: tab.naoCasaram, parametrosRestantes: restantes, substituidos: substituidos });
     });
 
     const pendentes = [];
     gerados.forEach(g => (g.naoCasaram || []).forEach(x => { if (pendentes.indexOf(x) < 0) pendentes.push(x); }));
     _logAcao_(p.ss, p.sessao.email, 'Gerar documentos ' + tipo, '', competencia,
       gerados.map(g => g.nome).join(' | ') + (pendentes.length ? ' || sem correspondência: ' + pendentes.join(' ; ') : ''));
+    gerados.forEach(g => (g.parametrosRestantes || []).forEach(x =>
+      _logAcao_(p.ss, p.sessao.email, 'Parâmetro não substituído', '', competencia, g.nome + ': ' + x.texto + ' | ' + x.motivo)));
     return { ok: true, gerados: gerados, parametros: Object.keys(parametros).length,
       naoCasaram: pendentes,
       disponiveis: leitura.resumo.linhas.map(l => String(l[0]) + ' = ' + _decBR_(l[1])) };

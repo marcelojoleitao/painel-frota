@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.89.3';
+const VERSAO_PAINEL = '2.89.4';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -3453,7 +3453,7 @@ function gerarDocsProcesso(tipo, competencia) {
       if (resultado) resultado.innerHTML = r.gerados.map(g => `<div style="margin-top:8px">
         <a class="btn claro" href="${escAttr(g.url)}" target="_blank" rel="noopener" style="text-decoration:none; width:100%; justify-content:flex-start">${icoPdf()} ${esc(g.nome)}</a>
         <div class="cartao-dica" style="margin:2px 0 0">${g.celulas} célula(s) de tabela preenchida(s)${g.substituidos ? ` • ${g.substituidos} versão(ões) anterior(es) para a lixeira` : ''}</div></div>`).join('')
-        + avisoRotulosNaoCasados(r);
+        + avisoParametrosRestantes(r) + avisoRotulosNaoCasados(r);
       toast(r.gerados.length + ' documento(s) gerado(s) na pasta do Drive.');
     },
     e => { btn.disabled = false; btn.textContent = 'Gerar documentos'; if (status) status.textContent = ''; falhaNoCartao('docs-result', e); });
@@ -3466,6 +3466,17 @@ function gerarDocsProcesso(tipo, competencia) {
  * exatamente quais rótulos não foram reconhecidos, ao lado dos que existem,
  * para que a diferença de escrita possa ser corrigida no modelo.
  */
+/** Marcadores {{...}} que sobraram no documento gerado, por documento. */
+function avisoParametrosRestantes(r) {
+  const docs = (r && r.gerados || []).filter(g => g.parametrosRestantes && g.parametrosRestantes.length);
+  if (!docs.length) return '';
+  return `<div class="alerta-item" style="margin-top:10px; cursor:default; padding:8px 10px">
+    <span class="t">PARÂMETROS QUE FICARAM NO DOCUMENTO</span>
+    ${docs.map(g => `<div style="margin-top:6px"><b>${esc(g.nome)}</b><ul style="margin:3px 0 0 18px">
+      ${g.parametrosRestantes.map(x => `<li><code>${esc(x.texto)}</code> — ${esc(x.motivo)}</li>`).join('')}</ul></div>`).join('')}
+  </div>`;
+}
+
 function avisoRotulosNaoCasados(r) {
   if (!r || !r.naoCasaram || !r.naoCasaram.length) return '';
   return `<div class="alerta-item amb" style="margin-top:10px; cursor:default; padding:8px 10px">
