@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.90.0';
+const VERSAO_PAINEL = '2.90.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2715,35 +2715,40 @@ function renderRelatorios(c) {
   ouvir('btn-rel-abast', 'click', () => {
     const de = val('rel-de'), ate = val('rel-ate');
     if (!de || !ate) { toast('Informe as competências.'); return; }
-    const btn = el('btn-rel-abast'), status = el('rel-status'), resultado = el('rel-result');
-    btn.disabled = true; btn.textContent = 'Gerando…';
-    if (status) status.textContent = 'Lendo a AbastBD e montando o documento…';
-    if (resultado) resultado.innerHTML = '';
-    google.script.run
-      .withSuccessHandler(r => {
-        btn.disabled = false; btn.textContent = 'Gerar PDF';
-        if (sessaoExpirou(r)) return;
-        if (!r || !r.ok) { if (status) status.textContent = ''; falhaNoCartao('rel-result', (r && r.erro) || 'Falha ao gerar.'); return; }
-        if (status) status.innerHTML = entregarPdf(r);
-        if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
-          <div class="dado"><div class="k">Abastecimentos</div><div class="v">${fmtInt(r.resumo.registros)}</div></div>
-          <div class="dado"><div class="k">Valor</div><div class="v">${fmtMoeda(r.resumo.valor)}</div></div>
-          <div class="dado"><div class="k">Viaturas</div><div class="v">${fmtInt(r.resumo.viaturas)}</div></div>
-          <div class="dado"><div class="k">Alertas</div><div class="v ${r.resumo.alertas ? 'alerta-txt' : 'ok-txt'}">${fmtInt(r.resumo.alertas)}</div></div>
-        </div>`;
-      })
-      .withFailureHandler(e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; falhaNoCartao('rel-result', e); })
-      .gerarRelatorioAbastecimento(ESTADO.token, de, ate);
+    gerarRelAbastecimento(de, ate, { btn: 'btn-rel-abast', status: 'rel-status', result: 'rel-result' });
   });
   verificarServidor();
   carregarCompetencias();
-  ouvir('btn-rel-pecas', 'click', gerarPecas);
-  ouvir('btn-rel-aceites', 'click', gerarAceites);
+  ouvir('btn-rel-pecas', 'click', () => gerarPecas());
+  ouvir('btn-rel-aceites', 'click', () => gerarAceites());
   ouvir('glosa-rel-comp', 'change', carregarCombustiveisGlosa);
   ouvir('btn-rel-glosa', 'click', gerarGlosa);
   carregarCombustiveisGlosa();
 }
 
+
+/** Relatório de Abastecimento (AbastBD) — usado na tela de Relatórios e no processo de pagamento. */
+function gerarRelAbastecimento(de, ate, ids) {
+  const btn = el(ids.btn), status = el(ids.status), resultado = el(ids.result);
+  const rotulo = btn ? btn.textContent : 'Gerar PDF';
+  if (btn) { btn.disabled = true; btn.textContent = 'Gerando…'; }
+  if (status) status.textContent = 'Lendo a AbastBD e montando o documento…';
+  if (resultado) resultado.innerHTML = '';
+  const run = servidor('gerarRelatorioAbastecimento',
+    r => {
+      if (btn) { btn.disabled = false; btn.textContent = rotulo; }
+      if (!r || !r.ok) { if (status) status.textContent = ''; falhaNoCartao(ids.result, (r && r.erro) || 'Falha ao gerar.'); return; }
+      if (status) status.innerHTML = entregarPdf(r);
+      if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
+        <div class="dado"><div class="k">Abastecimentos</div><div class="v">${fmtInt(r.resumo.registros)}</div></div>
+        <div class="dado"><div class="k">Valor</div><div class="v">${fmtMoeda(r.resumo.valor)}</div></div>
+        <div class="dado"><div class="k">Viaturas</div><div class="v">${fmtInt(r.resumo.viaturas)}</div></div>
+        <div class="dado"><div class="k">Alertas</div><div class="v ${r.resumo.alertas ? 'alerta-txt' : 'ok-txt'}">${fmtInt(r.resumo.alertas)}</div></div>
+      </div>`;
+    },
+    e => { if (btn) { btn.disabled = false; btn.textContent = rotulo; } if (status) status.textContent = ''; falhaNoCartao(ids.result, e); });
+  if (run) run.gerarRelatorioAbastecimento(ESTADO.token, de, ate);
+}
 
 /* ---------------- Relatório de glosa ---------------- */
 function competenciaBR(valor) {
@@ -2796,17 +2801,19 @@ function gerarGlosa() {
 
 
 /* ---------------- Relatório de OS analítico ---------------- */
-function gerarPecas() {
-  const comp = competenciaBR(val('pecas-comp'));
+function gerarPecas(compDireta, ids) {
+  const comp = typeof compDireta === 'string' ? compDireta : competenciaBR(val('pecas-comp'));
   if (!comp) { toast('Informe a competência.'); return; }
-  const btn = el('btn-rel-pecas'), status = el('pecas-status'), resultado = el('pecas-result');
+  ids = ids || { btn: 'btn-rel-pecas', status: 'pecas-status', result: 'pecas-result' };
+  const btn = el(ids.btn), status = el(ids.status), resultado = el(ids.result);
+  const rotulo = btn ? btn.textContent : 'Gerar PDF';
   btn.disabled = true; btn.textContent = 'Montando…';
   if (status) status.textContent = 'Lendo o detalhamento de itens…';
   if (resultado) resultado.innerHTML = '';
   const run = servidor('gerarRelatorioPecas',
     r => {
-      btn.disabled = false; btn.textContent = 'Gerar PDF';
-      if (!r || !r.ok) { if (status) status.textContent = ''; falhaNoCartao('pecas-result', (r && r.erro) || 'Falha ao gerar.'); return; }
+      btn.disabled = false; btn.textContent = rotulo;
+      if (!r || !r.ok) { if (status) status.textContent = ''; falhaNoCartao(ids.result, (r && r.erro) || 'Falha ao gerar.'); return; }
       if (status) status.innerHTML = entregarPdf(r);
       if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
         <div class="dado"><div class="k">Total</div><div class="v">${fmtMoeda(r.total)}</div></div>
@@ -2819,23 +2826,25 @@ function gerarPecas() {
         : `<div class="cartao-dica">Nenhuma placa do relatório tem processo de acidente em aberto.</div>`);
       if (r.acidentes && r.acidentes.length) toast('Atenção: ' + r.acidentes.length + ' placa(s) com processo de acidente em aberto neste relatório.', true);
     },
-    e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; falhaNoCartao('pecas-result', e); });
+    e => { btn.disabled = false; btn.textContent = rotulo; if (status) status.textContent = ''; falhaNoCartao(ids.result, e); });
   if (run) run.gerarRelatorioPecas(ESTADO.token, comp, '');
 }
 
 
 /* ---------------- Relatório de OS resumo ---------------- */
-function gerarAceites() {
-  const comp = competenciaBR(val('aceites-comp'));
+function gerarAceites(compDireta, ids) {
+  const comp = typeof compDireta === 'string' ? compDireta : competenciaBR(val('aceites-comp'));
   if (!comp) { toast('Informe a competência.'); return; }
-  const btn = el('btn-rel-aceites'), status = el('aceites-status'), resultado = el('aceites-result');
+  ids = ids || { btn: 'btn-rel-aceites', status: 'aceites-status', result: 'aceites-result' };
+  const btn = el(ids.btn), status = el(ids.status), resultado = el(ids.result);
+  const rotulo = btn ? btn.textContent : 'Gerar PDF';
   btn.disabled = true; btn.textContent = 'Montando…';
   if (status) status.textContent = 'Lendo os aceites da competência…';
   if (resultado) resultado.innerHTML = '';
   const run = servidor('gerarRelatorioAceites',
     r => {
-      btn.disabled = false; btn.textContent = 'Gerar PDF';
-      if (!r || !r.ok) { if (status) status.textContent = ''; falhaNoCartao('aceites-result', (r && r.erro) || 'Falha ao gerar.'); return; }
+      btn.disabled = false; btn.textContent = rotulo;
+      if (!r || !r.ok) { if (status) status.textContent = ''; falhaNoCartao(ids.result, (r && r.erro) || 'Falha ao gerar.'); return; }
       if (status) status.innerHTML = entregarPdf(r);
       if (resultado) resultado.innerHTML = `<div class="grade-dados" style="margin-top:10px">
         <div class="dado"><div class="k">Total</div><div class="v">${fmtMoeda(r.total)}</div></div>
@@ -2850,7 +2859,7 @@ function gerarAceites() {
         : `<div class="cartao-dica">Nenhuma placa com processo de acidente em aberto nesta competência.</div>`);
       if (r.acidentes && r.acidentes.length) toast('Atenção: ' + r.acidentes.length + ' placa(s) com processo de acidente em aberto.', true);
     },
-    e => { btn.disabled = false; btn.textContent = 'Gerar PDF'; if (status) status.textContent = ''; falhaNoCartao('aceites-result', e); });
+    e => { btn.disabled = false; btn.textContent = rotulo; if (status) status.textContent = ''; falhaNoCartao(ids.result, e); });
   if (run) run.gerarRelatorioAceites(ESTADO.token, comp);
 }
 
@@ -3352,16 +3361,37 @@ function desenharProcesso(c, r) {
         <div class="cartao-dica">Por extenso: ${esc(extensoLocal(res.liquido))}</div>
       </div>
 
-      ${r.tipo === 'Abastecimento' ? `<div class="cartao">
-        <div class="cartao-cab"><h3>Relatório de glosa</h3><small>preços acima do teto da ANP em ${esc(r.competencia)}</small></div>
-        <div class="cartao-dica" style="margin:0 0 8px">Cruza os abastecimentos da competência com o preço máximo de revenda publicado pela ANP. O valor apurado é o que entra como <b>Glosa Preços Abusivos</b> na composição.</div>
-        <div class="acao-opcoes" id="proc-glosa-combs" style="max-height:150px; overflow:auto">
-          <span class="foto-data">Lendo os combustíveis da competência…</span>
+      <div class="cartao">
+        <div class="cartao-cab"><h3>Relatórios da competência</h3><small>${esc(r.competencia)} • PDF para anexar ao processo</small></div>
+        ${r.tipo === 'Abastecimento' ? `
+        <div class="proc-rel">
+          <h4>Relatório de Abastecimento</h4>
+          <div class="cartao-dica" style="margin:0 0 6px">Totais, consolidados por unidade e combustível, rankings e alertas da competência.</div>
+          <button class="btn amarelo" id="btn-proc-abast">Gerar PDF</button>
+          <div class="foto-data" id="proc-abast-status"></div><div id="proc-abast-result"></div>
         </div>
-        <button class="btn amarelo" id="btn-proc-glosa" style="margin-top:8px">Gerar relatório de glosa</button>
-        <div class="foto-data" id="proc-glosa-status"></div>
-        <div id="proc-glosa-result"></div>
-      </div>` : ''}
+        <div class="proc-rel">
+          <h4>Relatório de Glosa de Abastecimento</h4>
+          <div class="cartao-dica" style="margin:0 0 6px">Preços acima do teto da ANP. O valor apurado é o que entra como <b>Glosa Preços Abusivos</b> na composição.</div>
+          <div class="acao-opcoes" id="proc-glosa-combs" style="max-height:150px; overflow:auto">
+            <span class="foto-data">Lendo os combustíveis da competência…</span>
+          </div>
+          <button class="btn amarelo" id="btn-proc-glosa" style="margin-top:8px">Gerar PDF</button>
+          <div class="foto-data" id="proc-glosa-status"></div><div id="proc-glosa-result"></div>
+        </div>` : `
+        <div class="proc-rel">
+          <h4>Relatório de Ordens de Serviço — Resumo</h4>
+          <div class="cartao-dica" style="margin:0 0 6px">OS aceitas na competência, por unidade e tipo de aceite (OrçamentosDB e AceitesDB).</div>
+          <button class="btn amarelo" id="btn-proc-aceites">Gerar PDF</button>
+          <div class="foto-data" id="proc-aceites-status"></div><div id="proc-aceites-result"></div>
+        </div>
+        <div class="proc-rel">
+          <h4>Relatório de Ordens de Serviço — Analítico</h4>
+          <div class="cartao-dica" style="margin:0 0 6px">Peças e serviços por veículo e família (DetalhamentoDB).</div>
+          <button class="btn amarelo" id="btn-proc-pecas">Gerar PDF</button>
+          <div class="foto-data" id="proc-pecas-status"></div><div id="proc-pecas-result"></div>
+        </div>`}
+      </div>
 
       <div class="cartao">
         <div class="cartao-cab"><h3>Documentos do processo</h3><small>gerados a partir dos modelos</small></div>
@@ -3418,6 +3448,12 @@ function desenharProcesso(c, r) {
   if (r.tipo === 'Abastecimento') {
     carregarGlosaDoProcesso(r.competencia);
     ouvir('btn-proc-glosa', 'click', () => gerarGlosaDoProcesso(r.competencia));
+    // o relatório de abastecimento recebe a competência como AAAA-MM
+    const iso = r.competencia.substring(3) + '-' + r.competencia.substring(0, 2);
+    ouvir('btn-proc-abast', 'click', () => gerarRelAbastecimento(iso, iso, { btn: 'btn-proc-abast', status: 'proc-abast-status', result: 'proc-abast-result' }));
+  } else {
+    ouvir('btn-proc-aceites', 'click', () => gerarAceites(r.competencia, { btn: 'btn-proc-aceites', status: 'proc-aceites-status', result: 'proc-aceites-result' }));
+    ouvir('btn-proc-pecas', 'click', () => gerarPecas(r.competencia, { btn: 'btn-proc-pecas', status: 'proc-pecas-status', result: 'proc-pecas-result' }));
   }
   ajustarKpis();
 }
@@ -6823,7 +6859,7 @@ function gerarGlosaDoProcesso(competencia) {
   if (resultado) resultado.innerHTML = '';
   const run = servidor('gerarRelatorioGlosa',
     r => {
-      if (btn) { btn.disabled = false; btn.textContent = 'Gerar relatório de glosa'; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Gerar PDF'; }
       if (!r || !r.ok) { if (status) status.textContent = ''; falhaNoCartao('proc-glosa-result', (r && r.erro) || 'Falha ao gerar.'); return; }
       if (status) status.innerHTML = entregarPdf(r);
       if (resultado) resultado.innerHTML = `
@@ -6838,7 +6874,7 @@ function gerarGlosaDoProcesso(competencia) {
           para que a composição do processo passe a descontar esse valor.</div>` : avisoGlosaZerada(r, competencia)}
         ${r.semTeto && r.semTeto.length ? `<div class="cartao-dica">Sem teto publicado na ANP: ${esc(r.semTeto.join('; '))}</div>` : ''}`;
     },
-    e => { if (btn) { btn.disabled = false; btn.textContent = 'Gerar relatório de glosa'; } if (status) status.textContent = ''; falhaNoCartao('proc-glosa-result', e); });
+    e => { if (btn) { btn.disabled = false; btn.textContent = 'Gerar PDF'; } if (status) status.textContent = ''; falhaNoCartao('proc-glosa-result', e); });
   if (run) run.gerarRelatorioGlosa(ESTADO.token, competencia, escolhidos);
 }
 
