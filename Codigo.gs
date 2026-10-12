@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.89.2';
+const CODIGO_VERSAO = '2.89.3';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -6111,7 +6111,8 @@ function _serieContratual_(tipo, cab, valores) {
   });
   linhas.sort((a, b) => (a.comp.substring(3) + a.comp.substring(0, 2)).localeCompare(b.comp.substring(3) + b.comp.substring(0, 2)));
   const total = linhas.reduce((s, x) => s + x.bruto, 0);
-  return { linhas: linhas.slice(-12), totalAcumulado: Math.round(total * 100) / 100 };
+  const limite = tipo === 'Abastecimento' ? CONTRATO.limites.abastecimento : CONTRATO.limites.pecas + CONTRATO.limites.servicos;
+  return { linhas: linhas.slice(-12), todas: linhas, limite: limite, totalAcumulado: Math.round(total * 100) / 100 };
 }
 
 /** Grava alterações no título. Colunas com fórmula são recusadas. */
@@ -6287,7 +6288,9 @@ function _preencherTabelas_(corpo, resumo, serie) {
   const tabelas = corpo.getTables();
   for (let t = 0; t < tabelas.length; t++) {
     const tab = tabelas[t];
-    for (let r = 0; r < tab.getNumRows(); r++) {
+    // a tabela de execução contratual é preenchida mais abaixo, por mês; não é composição
+    const ehExecucao = /mes de referencia/.test(normaliza(tab.getRow(0).getCell(0).getText()));
+    for (let r = 0; r < tab.getNumRows() && !ehExecucao; r++) {
       const linha = tab.getRow(r);
       if (linha.getNumCells() < 2) continue;
       const rotulo = normaliza(linha.getCell(0).getText());
@@ -6309,7 +6312,50 @@ function _preencherTabelas_(corpo, resumo, serie) {
     }
     // tabela de execução contratual: cabeçalho com "MÊS DE REFERÊNCIA"
     const cabecalho = normaliza(tab.getRow(0).getCell(0).getText());
-    if (serie && serie.linhas.length && /mes de referencia/.test(cabecalho) && tab.getNumRows() > 2) {
+    const mesDaLinha = txt => {
+      const m = String(txt || '').match(/(?:\d{1,2}\/)?(\d{1,2})\/(\d{4})/);
+      return m ? ('0' + m[1]).slice(-2) + '/' + m[2] : '';
+    };
+    const ancorada = ehExecucao && serie && serie.todas && serie.limite &&
+      Array.from({ length: tab.getNumRows() - 1 }, (_, i) => mesDaLinha(tab.getRow(i + 1).getCell(0).getText())).filter(Boolean).length >= 2;
+    if (ancorada) {
+      // cada linha já traz o mês da vigência; o valor daquele mês entra na própria linha,
+      // e o percentual é sobre o limite do contrato — como no modelo
+      const porComp = {};
+      serie.todas.forEach(x => { porComp[x.comp] = x; });
+      const pct = v => _decBR_(v / serie.limite * 100) + '%';
+      let usado = 0;
+      for (let r = 1; r < tab.getNumRows(); r++) {
+        const linha = tab.getRow(r);
+        const n = linha.getNumCells();
+        const comp = mesDaLinha(linha.getCell(0).getText());
+        if (!comp || n < 2) continue;
+        const item = porComp[comp];
+        const bruto = item ? item.bruto : 0;
+        usado += bruto;
+        if (n >= 4) {
+          linha.getCell(1).editAsText().setText(item ? item.nf : '');
+          linha.getCell(2).editAsText().setText(item ? item.notaPagamento : '');
+          linha.getCell(3).editAsText().setText('R$ ' + _decBR_(bruto));
+        }
+        linha.getCell(n - 1).editAsText().setText(pct(bruto));
+        ajustadas++;
+      }
+      for (let r = 1; r < tab.getNumRows(); r++) {
+        const linha = tab.getRow(r);
+        const n = linha.getNumCells();
+        const rot = normaliza(linha.getCell(0).getText());
+        let valor = null;
+        if (/saldo utilizado/.test(rot)) valor = usado;
+        else if (/saldo restante|saldo a utilizar|saldo disponivel/.test(rot)) valor = serie.limite - usado;
+        else continue;
+        for (let c = 1; c < n - 1; c++) {
+          if (/R\$/.test(linha.getCell(c).getText())) linha.getCell(c).editAsText().setText('R$ ' + _decBR_(valor));
+        }
+        linha.getCell(n - 1).editAsText().setText(pct(valor));
+        ajustadas++;
+      }
+    } else if (serie && serie.linhas.length && /mes de referencia/.test(cabecalho) && tab.getNumRows() > 2) {
       const total = serie.linhas.reduce((s, x) => s + x.bruto, 0) || 1;
       for (let r = 1; r < tab.getNumRows(); r++) {
         const linha = tab.getRow(r);
