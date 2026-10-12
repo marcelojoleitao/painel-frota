@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.88.6';
+const CODIGO_VERSAO = '2.89.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -9987,4 +9987,353 @@ function diagnosticarLogin() {
   Logger.log('Administrador encontrado na SGP: ' + (eu ? eu.email + ' (matrícula ' + eu.matricula + ', ' + eu.nome + ')' : 'NÃO — confira COL_LOGIN_* em CONFIG'));
   const semArroba = u.filter(x => !/@prf\.gov\.br$/.test(x.email));
   if (semArroba.length) Logger.log('E-mails fora do padrão @prf.gov.br: ' + semArroba.map(x => x.email).join(', '));
+}
+
+
+/* ============================================================
+   ARQUIVO DA FROTA
+   Documentos que a operação precisa ter à mão: portarias, contratos,
+   termos de referência, normas, CNH de condutores. Cada documento tem
+   uma situação (Vigente, Substituído, Revogado, Desativado) e, quando
+   couber, uma validade — "vencido" é calculado, não gravado.
+
+   Os arquivos ficam numa pasta do Drive, separados por categoria, e NÃO
+   são compartilhados por link: o painel entrega o arquivo a quem está
+   logado. Documentos marcados como restritos (CNH, por padrão) só
+   aparecem para administradores.
+
+   Ler: qualquer usuário do painel. Incluir, alterar, substituir, revogar,
+   desativar e excluir: administradores.
+   ============================================================ */
+
+const ARQUIVO_FROTA = {
+  aba: 'Arquivo',
+  categorias: ['Portaria', 'Contrato', 'Termo aditivo', 'Termo de referência', 'Legislação e normas', 'CNH', 'Outros'],
+  situacoes: ['Vigente', 'Substituído', 'Revogado', 'Desativado'],
+  // antecedência do aviso de vencimento, em dias; contrato pede tempo para prorrogar
+  avisoDias: { 'Contrato': 120, 'Termo aditivo': 120, _padrao: 30 },
+  restritasPorPadrao: ['CNH'],
+  tamanhoMaximoMB: 10,
+  cab: ['ID', 'Categoria', 'Título', 'Número', 'Data do documento', 'Validade', 'Situação', 'Processo SEI',
+        'Referência', 'Descrição', 'Arquivo (ID)', 'Nome do arquivo', 'Tipo', 'Restrito', 'Substitui',
+        'Substituído por', 'Motivo', 'Incluído em', 'Incluído por', 'Atualizado em', 'Atualizado por', 'Histórico']
+};
+// posições (0-based) das colunas acima, para não espalhar números mágicos
+const _ARQ_ = ARQUIVO_FROTA.cab.reduce((o, c, i) => { o[c] = i; return o; }, {});
+
+function _abaArquivo_() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  let aba = ss.getSheetByName(ARQUIVO_FROTA.aba);
+  const n = ARQUIVO_FROTA.cab.length;
+  if (!aba) {
+    aba = ss.insertSheet(ARQUIVO_FROTA.aba);
+    if (aba.getMaxColumns() < n) aba.insertColumnsAfter(aba.getMaxColumns(), n - aba.getMaxColumns());
+    aba.getRange(1, 1, 1, n).setValues([ARQUIVO_FROTA.cab])
+      .setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF');
+    aba.setFrozenRows(1);
+    aba.setColumnWidth(3, 300); aba.setColumnWidth(10, 320); aba.setColumnWidth(22, 420);
+  } else if (aba.getMaxColumns() < n) {
+    aba.insertColumnsAfter(aba.getMaxColumns(), n - aba.getMaxColumns());
+  }
+  return aba;
+}
+
+/**
+ * Pasta do arquivo: a da propriedade PASTA_ARQUIVO ou, na primeira vez, uma
+ * pasta "Arquivo da Frota" criada ao lado da planilha-mãe.
+ */
+function _pastaArquivo_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('PASTA_ARQUIVO');
+  if (id) { try { return DriveApp.getFolderById(id); } catch (e) { Logger.log('PASTA_ARQUIVO inacessível: ' + e); } }
+  let mae = null;
+  try { const pais = DriveApp.getFileById(CONFIG.ID_BASE).getParents(); if (pais.hasNext()) mae = pais.next(); } catch (e) {}
+  const pasta = (mae || DriveApp.getRootFolder()).createFolder('Arquivo da Frota');
+  props.setProperty('PASTA_ARQUIVO', pasta.getId());
+  return pasta;
+}
+function _subpastaArquivo_(categoria) {
+  const raiz = _pastaArquivo_();
+  const nome = String(categoria || 'Outros');
+  const it = raiz.getFoldersByName(nome);
+  return it.hasNext() ? it.next() : raiz.createFolder(nome);
+}
+
+function _linhaArquivo_(aba, id) {
+  const n = aba.getLastRow();
+  if (n < 2) return -1;
+  const ids = aba.getRange(2, 1, n - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) if (String(ids[i][0]) === String(id)) return i + 2;
+  return -1;
+}
+
+function _registroArquivo_(l, linha) {
+  const sim = v => /^(SIM|TRUE|VERDADEIRO|1|X)$/i.test(String(v === true ? 'TRUE' : v || '').trim());
+  return {
+    id: String(l[_ARQ_['ID']] || ''), linha: linha,
+    categoria: String(l[_ARQ_['Categoria']] || 'Outros').trim(),
+    titulo: String(l[_ARQ_['Título']] || '').trim(),
+    numero: String(l[_ARQ_['Número']] || '').trim(),
+    data: _dataBR_(l[_ARQ_['Data do documento']]),
+    validade: _dataBR_(l[_ARQ_['Validade']]),
+    situacao: String(l[_ARQ_['Situação']] || 'Vigente').trim(),
+    sei: String(l[_ARQ_['Processo SEI']] || '').trim(),
+    referencia: String(l[_ARQ_['Referência']] || '').trim(),
+    descricao: String(l[_ARQ_['Descrição']] || '').trim(),
+    arquivoId: String(l[_ARQ_['Arquivo (ID)']] || '').trim(),
+    nomeArquivo: String(l[_ARQ_['Nome do arquivo']] || '').trim(),
+    tipo: String(l[_ARQ_['Tipo']] || '').trim(),
+    restrito: sim(l[_ARQ_['Restrito']]),
+    substitui: String(l[_ARQ_['Substitui']] || '').trim(),
+    substituidoPor: String(l[_ARQ_['Substituído por']] || '').trim(),
+    motivo: String(l[_ARQ_['Motivo']] || '').trim(),
+    incluidoEm: _dataTxt_(l[_ARQ_['Incluído em']]), incluidoPor: String(l[_ARQ_['Incluído por']] || ''),
+    atualizadoEm: _dataTxt_(l[_ARQ_['Atualizado em']]), atualizadoPor: String(l[_ARQ_['Atualizado por']] || ''),
+    historico: String(l[_ARQ_['Histórico']] || '').split('\n').filter(x => x.trim())
+  };
+}
+
+/** Todos os documentos que o usuário pode ver. Restritos só para administradores. */
+function lerArquivo(token) {
+  const sessao = _sessao_(token);
+  if (!sessao) return { expirado: true };
+  try {
+    const aba = _abaArquivo_();
+    const n = aba.getLastRow();
+    const docs = [];
+    let ocultos = 0;
+    if (n > 1) {
+      aba.getRange(2, 1, n - 1, ARQUIVO_FROTA.cab.length).getValues().forEach((l, i) => {
+        if (!String(l[0]).trim()) return;
+        const d = _registroArquivo_(l, i + 2);
+        if (d.restrito && !sessao.admin) { ocultos++; return; }
+        docs.push(d);
+      });
+    }
+    // as categorias da planilha entram na lista, mesmo que não estejam no padrão
+    const categorias = ARQUIVO_FROTA.categorias.slice();
+    docs.forEach(d => { if (categorias.indexOf(d.categoria) < 0) categorias.push(d.categoria); });
+    return { ok: true, documentos: docs, categorias: categorias, situacoes: ARQUIVO_FROTA.situacoes,
+      avisoDias: ARQUIVO_FROTA.avisoDias, restritasPorPadrao: ARQUIVO_FROTA.restritasPorPadrao,
+      tamanhoMaximoMB: ARQUIVO_FROTA.tamanhoMaximoMB, ocultos: ocultos, admin: !!sessao.admin };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/**
+ * Entrega o arquivo ao navegador. É o painel que controla o acesso: o arquivo
+ * não fica aberto por link no Drive.
+ */
+function baixarDocumentoArquivo(token, id) {
+  const sessao = _sessao_(token);
+  if (!sessao) return { expirado: true };
+  try {
+    const aba = _abaArquivo_();
+    const linha = _linhaArquivo_(aba, id);
+    if (linha < 0) return { ok: false, erro: 'Documento não encontrado.' };
+    const d = _registroArquivo_(aba.getRange(linha, 1, 1, ARQUIVO_FROTA.cab.length).getValues()[0], linha);
+    if (d.restrito && !sessao.admin) return { ok: false, erro: 'Documento restrito.' };
+    if (!d.arquivoId) return { ok: false, erro: 'Este registro não tem arquivo anexado.' };
+    const blob = DriveApp.getFileById(d.arquivoId).getBlob();
+    return { ok: true, nome: d.nomeArquivo || blob.getName(), tipo: blob.getContentType(),
+             base64: Utilities.base64Encode(blob.getBytes()) };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Grava o arquivo enviado pelo navegador na subpasta da categoria. */
+function _gravarArquivoDrive_(categoria, titulo, numero, arquivo) {
+  if (!arquivo || !arquivo.base64) return null;
+  const bytes = Utilities.base64Decode(arquivo.base64);
+  if (bytes.length > ARQUIVO_FROTA.tamanhoMaximoMB * 1024 * 1024) throw new Error('Arquivo acima de ' + ARQUIVO_FROTA.tamanhoMaximoMB + ' MB.');
+  const original = String(arquivo.nome || 'documento');
+  const ext = (original.match(/\.[A-Za-z0-9]{2,5}$/) || [''])[0];
+  const limpa = t => String(t || '').replace(/[\\\/:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim();
+  const nome = (limpa(titulo) + (numero ? ' - ' + limpa(numero) : '')).substring(0, 150) + ext;
+  const blob = Utilities.newBlob(bytes, arquivo.tipo || 'application/octet-stream', nome);
+  const arq = _subpastaArquivo_(categoria).createFile(blob);
+  return { id: arq.getId(), nome: nome, tipo: blob.getContentType() };
+}
+
+/**
+ * Inclui ou altera um documento.
+ *   id vazio     → novo documento (arquivo opcional, mas recomendado)
+ *   id preenchido → altera os dados; se vier arquivo, troca o anexo (correção,
+ *                   não nova versão — para nova versão use substituirDocumentoArquivo)
+ */
+function salvarDocumentoArquivo(token, id, dados, arquivo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  dados = dados || {};
+  const titulo = String(dados.titulo || '').trim();
+  if (!titulo) return { ok: false, erro: 'Informe o título.' };
+  const categoria = String(dados.categoria || 'Outros').trim();
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Arquivo ocupado. Tente de novo.' }; }
+  try {
+    const aba = _abaArquivo_();
+    const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm');
+    const quem = p.sessao.email;
+    const restrito = dados.restrito === undefined
+      ? ARQUIVO_FROTA.restritasPorPadrao.indexOf(categoria) >= 0 : !!dados.restrito;
+
+    if (!id) {
+      const novoId = 'A' + Utilities.formatDate(new Date(), CONFIG.FUSO, 'yyMMddHHmmss');
+      const gravado = _gravarArquivoDrive_(categoria, titulo, dados.numero, arquivo);
+      const linha = new Array(ARQUIVO_FROTA.cab.length).fill('');
+      linha[_ARQ_['ID']] = novoId;
+      linha[_ARQ_['Categoria']] = categoria;
+      linha[_ARQ_['Título']] = titulo;
+      linha[_ARQ_['Número']] = String(dados.numero || '').trim();
+      linha[_ARQ_['Data do documento']] = _dataBR_(dados.data);
+      linha[_ARQ_['Validade']] = _dataBR_(dados.validade);
+      linha[_ARQ_['Situação']] = 'Vigente';
+      linha[_ARQ_['Processo SEI']] = _seiLimpo_(dados.sei);
+      linha[_ARQ_['Referência']] = String(dados.referencia || '').trim();
+      linha[_ARQ_['Descrição']] = String(dados.descricao || '').trim();
+      if (gravado) { linha[_ARQ_['Arquivo (ID)']] = gravado.id; linha[_ARQ_['Nome do arquivo']] = gravado.nome; linha[_ARQ_['Tipo']] = gravado.tipo; }
+      linha[_ARQ_['Restrito']] = restrito ? 'Sim' : '';
+      linha[_ARQ_['Incluído em']] = agora; linha[_ARQ_['Incluído por']] = quem;
+      linha[_ARQ_['Atualizado em']] = agora; linha[_ARQ_['Atualizado por']] = quem;
+      linha[_ARQ_['Histórico']] = agora + ' • ' + quem + ': documento incluído' + (gravado ? ' (' + gravado.nome + ')' : ' sem arquivo');
+      const destino = Math.max(aba.getLastRow() + 1, 2);
+      aba.getRange(destino, 1, 1, linha.length).setNumberFormat('@').setValues([linha]);
+      SpreadsheetApp.flush();
+      _logAcao_(p.ss, quem, 'Arquivo: incluir', '', novoId, categoria + ' • ' + titulo);
+      return { ok: true, novo: true, id: novoId };
+    }
+
+    const linhaN = _linhaArquivo_(aba, id);
+    if (linhaN < 0) return { ok: false, erro: 'Documento não encontrado.' };
+    const atual = aba.getRange(linhaN, 1, 1, ARQUIVO_FROTA.cab.length).getValues()[0];
+    const mudancas = [];
+    const campo = (col, valor, rotulo) => {
+      const antes = String(atual[_ARQ_[col]] instanceof Date ? _dataBR_(atual[_ARQ_[col]]) : (atual[_ARQ_[col]] || '')).trim();
+      const depois = String(valor === null || valor === undefined ? '' : valor).trim();
+      if (antes !== depois) { mudancas.push(rotulo + ': "' + antes + '" → "' + depois + '"'); atual[_ARQ_[col]] = depois; }
+    };
+    campo('Categoria', categoria, 'categoria');
+    campo('Título', titulo, 'título');
+    campo('Número', dados.numero, 'número');
+    campo('Data do documento', _dataBR_(dados.data), 'data');
+    campo('Validade', _dataBR_(dados.validade), 'validade');
+    campo('Processo SEI', _seiLimpo_(dados.sei), 'processo SEI');
+    campo('Referência', dados.referencia, 'referência');
+    campo('Descrição', dados.descricao, 'descrição');
+    campo('Restrito', restrito ? 'Sim' : '', 'restrito');
+    if (arquivo && arquivo.base64) {
+      const antigo = String(atual[_ARQ_['Arquivo (ID)']] || '');
+      const gravado = _gravarArquivoDrive_(categoria, titulo, dados.numero, arquivo);
+      atual[_ARQ_['Arquivo (ID)']] = gravado.id; atual[_ARQ_['Nome do arquivo']] = gravado.nome; atual[_ARQ_['Tipo']] = gravado.tipo;
+      if (antigo) { try { DriveApp.getFileById(antigo).setTrashed(true); } catch (e) {} }
+      mudancas.push('arquivo trocado por ' + gravado.nome + (antigo ? ' (o anterior foi para a lixeira do Drive)' : ''));
+    }
+    if (!mudancas.length) return { ok: true, novo: false, id: id, semMudanca: true };
+    atual[_ARQ_['Atualizado em']] = agora; atual[_ARQ_['Atualizado por']] = quem;
+    atual[_ARQ_['Histórico']] = String(atual[_ARQ_['Histórico']] || '') + '\n' + agora + ' • ' + quem + ': ' + mudancas.join('; ');
+    aba.getRange(linhaN, 1, 1, atual.length).setNumberFormat('@').setValues([atual.map(v => v instanceof Date ? _dataBR_(v) : v)]);
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, quem, 'Arquivo: alterar', '', id, mudancas.join('; '));
+    return { ok: true, novo: false, id: id };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/**
+ * Nova versão: inclui o documento novo como Vigente e marca o anterior como
+ * Substituído, ligando um ao outro. É o caminho da portaria de gestores que
+ * é reeditada, do contrato que ganha nova vigência etc.
+ */
+function substituirDocumentoArquivo(token, idAntigo, dados, arquivo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const aba = _abaArquivo_();
+  const linhaAntiga = _linhaArquivo_(aba, idAntigo);
+  if (linhaAntiga < 0) return { ok: false, erro: 'Documento a substituir não encontrado.' };
+  const novo = salvarDocumentoArquivo(token, '', dados, arquivo);
+  if (!novo || !novo.ok) return novo;
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'O novo documento foi incluído, mas não consegui marcar o anterior. Marque-o como substituído manualmente.' }; }
+  try {
+    const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm');
+    const quem = p.sessao.email;
+    const linhaNova = _linhaArquivo_(aba, novo.id);
+    const ant = aba.getRange(linhaAntiga, 1, 1, ARQUIVO_FROTA.cab.length).getValues()[0];
+    const tituloAnt = String(ant[_ARQ_['Título']] || '') + (ant[_ARQ_['Número']] ? ' (' + ant[_ARQ_['Número']] + ')' : '');
+    aba.getRange(linhaAntiga, _ARQ_['Situação'] + 1).setValue('Substituído');
+    aba.getRange(linhaAntiga, _ARQ_['Substituído por'] + 1).setValue(novo.id);
+    aba.getRange(linhaAntiga, _ARQ_['Motivo'] + 1).setValue(String(dados.motivo || 'Substituído por nova versão').trim());
+    aba.getRange(linhaAntiga, _ARQ_['Atualizado em'] + 1).setValue(agora);
+    aba.getRange(linhaAntiga, _ARQ_['Atualizado por'] + 1).setValue(quem);
+    aba.getRange(linhaAntiga, _ARQ_['Histórico'] + 1).setValue(String(ant[_ARQ_['Histórico']] || '') + '\n' + agora + ' • ' + quem + ': substituído por ' + novo.id);
+    if (linhaNova > 0) {
+      aba.getRange(linhaNova, _ARQ_['Substitui'] + 1).setValue(String(idAntigo));
+      const h = String(aba.getRange(linhaNova, _ARQ_['Histórico'] + 1).getValue() || '');
+      aba.getRange(linhaNova, _ARQ_['Histórico'] + 1).setValue(h + '\n' + agora + ' • ' + quem + ': substitui ' + idAntigo + ' — ' + tituloAnt);
+    }
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, quem, 'Arquivo: substituir', '', idAntigo + ' → ' + novo.id, tituloAnt);
+    return { ok: true, id: novo.id, substituido: idAntigo };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/**
+ * Muda a situação: Revogado, Desativado ou de volta a Vigente.
+ * Revogar e desativar pedem motivo, que fica no registro e no histórico.
+ */
+function mudarSituacaoArquivo(token, id, situacao, motivo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  if (ARQUIVO_FROTA.situacoes.indexOf(situacao) < 0) return { ok: false, erro: 'Situação inválida.' };
+  const texto = String(motivo || '').trim();
+  if ((situacao === 'Revogado' || situacao === 'Desativado') && !texto) return { ok: false, erro: 'Informe o motivo.' };
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Arquivo ocupado.' }; }
+  try {
+    const aba = _abaArquivo_();
+    const linha = _linhaArquivo_(aba, id);
+    if (linha < 0) return { ok: false, erro: 'Documento não encontrado.' };
+    const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm');
+    const quem = p.sessao.email;
+    const anterior = String(aba.getRange(linha, _ARQ_['Situação'] + 1).getValue() || 'Vigente').trim();
+    if (anterior === situacao) return { ok: true, id: id, situacao: situacao };
+    aba.getRange(linha, _ARQ_['Situação'] + 1).setValue(situacao);
+    aba.getRange(linha, _ARQ_['Motivo'] + 1).setValue(situacao === 'Vigente' ? '' : texto);
+    aba.getRange(linha, _ARQ_['Atualizado em'] + 1).setValue(agora);
+    aba.getRange(linha, _ARQ_['Atualizado por'] + 1).setValue(quem);
+    const h = String(aba.getRange(linha, _ARQ_['Histórico'] + 1).getValue() || '');
+    aba.getRange(linha, _ARQ_['Histórico'] + 1).setValue(h + '\n' + agora + ' • ' + quem + ': ' + anterior + ' → ' + situacao + (texto ? ' (' + texto + ')' : ''));
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, quem, 'Arquivo: ' + situacao.toLowerCase(), '', id, anterior + ' → ' + situacao + (texto ? ' | ' + texto : ''));
+    return { ok: true, id: id, situacao: situacao };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/**
+ * Exclusão definitiva: o registro sai da aba e o arquivo vai para a lixeira do
+ * Drive (recuperável por 30 dias). O log de ações guarda o que foi excluído.
+ * Para documento que perdeu vigência, prefira revogar ou desativar.
+ */
+function excluirDocumentoArquivo(token, id) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Arquivo ocupado.' }; }
+  try {
+    const aba = _abaArquivo_();
+    const linha = _linhaArquivo_(aba, id);
+    if (linha < 0) return { ok: false, erro: 'Documento não encontrado.' };
+    const d = _registroArquivo_(aba.getRange(linha, 1, 1, ARQUIVO_FROTA.cab.length).getValues()[0], linha);
+    if (d.arquivoId) { try { DriveApp.getFileById(d.arquivoId).setTrashed(true); } catch (e) {} }
+    aba.deleteRow(linha);
+    // quem apontava para ele perde a ligação, mas mantém o texto no histórico
+    const n = aba.getLastRow();
+    if (n > 1) {
+      const faixa = aba.getRange(2, 1, n - 1, ARQUIVO_FROTA.cab.length);
+      const vals = faixa.getValues();
+      let mexeu = false;
+      vals.forEach(l => {
+        if (String(l[_ARQ_['Substitui']]) === id) { l[_ARQ_['Substitui']] = ''; mexeu = true; }
+        if (String(l[_ARQ_['Substituído por']]) === id) { l[_ARQ_['Substituído por']] = ''; mexeu = true; }
+      });
+      if (mexeu) faixa.setValues(vals);
+    }
+    SpreadsheetApp.flush();
+    _logAcao_(p.ss, p.sessao.email, 'Arquivo: excluir', '', id,
+      d.categoria + ' • ' + d.titulo + (d.numero ? ' (' + d.numero + ')' : '') + (d.nomeArquivo ? ' | arquivo ' + d.nomeArquivo + ' na lixeira do Drive' : ''));
+    return { ok: true, id: id };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
 }

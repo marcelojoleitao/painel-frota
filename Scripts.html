@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.88.6';
+const VERSAO_PAINEL = '2.89.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -85,6 +85,7 @@ const ESTADO = {
   subMultas: 'acompanhar', multas: null, contrato: null, contratoFoco: 'manutencao', projecao: null, cobranca: null, filtroCobranca: { registro: '', unidade: '', busca: '' }, filtroMulta: { status: '', orgao: '', busca: '', especial: '' },
   filtroAceite: '', filtroOS: { unidade: '', oficina: '' }, filtroAceites: { unidade: '', oficina: '', busca: '' },
   subGestao: 'quadro', demandas: null, notas: null, soComDemanda: false, sinistros: null, filtroSinistro: { status: '', busca: '' },
+  arquivo: null, filtroArquivo: { categoria: '', situacao: 'emVigor', busca: '' },
   preventiva: null, prevReal: null, prevVisao: 'viatura', prevAberta: {},
   filtroPrev: { situacao: '', grupo: '', unidade: '', busca: '', detalhe: '' },
   filtroGestao: { placa: '', responsavel: '', busca: '' }, filtroNotas: { categoria: '', busca: '' },
@@ -4838,6 +4839,7 @@ function renderGestao() {
   if (ESTADO.subGestao === 'sinistros') return renderSinistros(c);
   if (ESTADO.subGestao === 'preventiva') return renderPreventiva(c);
   if (ESTADO.subGestao === 'contrato') return renderContrato(c);
+  if (ESTADO.subGestao === 'arquivo') return renderArquivo(c);
   if (!ESTADO.demandas) {
     c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Carregando o quadro…</div></div>';
     const run = servidor('lerDemandas',
@@ -6823,6 +6825,345 @@ function gerarGlosaDoProcesso(competencia) {
     },
     e => { if (btn) { btn.disabled = false; btn.textContent = 'Gerar relatório de glosa'; } if (status) status.textContent = ''; falhaNoCartao('proc-glosa-result', e); });
   if (run) run.gerarRelatorioGlosa(ESTADO.token, competencia, escolhidos);
+}
+
+
+/* ============================================================
+   ARQUIVO DA FROTA — portarias, contratos, normas, CNH
+   Leitura para todos; inclusão e mudanças só para administradores.
+   ============================================================ */
+
+/** Dias até uma data dd/mm/aaaa (negativo = já passou). null se não houver data. */
+function diasAteData(br) {
+  const m = String(br || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (!m) return null;
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  return Math.round((new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])) - hoje) / 86400000);
+}
+
+/** Situação mostrada: a gravada e, para os vigentes com validade, o prazo. */
+function situacaoArq(d) {
+  const ad = (ESTADO.arquivo && ESTADO.arquivo.avisoDias) || {};
+  if (d.situacao === 'Substituído') return { k: 'fora', rotulo: 'Substituído', cls: 'indeferido' };
+  if (d.situacao === 'Revogado') return { k: 'fora', rotulo: 'Revogado', cls: 'indeferido' };
+  if (d.situacao === 'Desativado') return { k: 'fora', rotulo: 'Desativado', cls: 'indeferido' };
+  const dias = diasAteData(d.validade);
+  if (dias === null) return { k: 'vigente', rotulo: 'Vigente', cls: 'deferido' };
+  if (dias < 0) return { k: 'vencido', rotulo: 'Vencido há ' + (-dias) + ' dia(s)', cls: 'indeferido', dias: dias };
+  const aviso = ad[d.categoria] || ad._padrao || 30;
+  if (dias <= aviso) return { k: 'vencendo', rotulo: dias === 0 ? 'Vence hoje' : 'Vence em ' + dias + ' dia(s)', cls: 'andamento', dias: dias };
+  return { k: 'vigente', rotulo: 'Vigente', cls: 'deferido', dias: dias };
+}
+
+function renderArquivo(c) {
+  if (!ESTADO.arquivo) {
+    c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Carregando o arquivo…</div></div>';
+    const run = servidor('lerArquivo',
+      r => {
+        if (!r || !r.ok) { c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha ao ler.') + '</div></div>'; return; }
+        ESTADO.arquivo = r; renderArquivo(c);
+      },
+      e => { c.innerHTML = '<div class="cartao largo"><div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div></div>'; });
+    if (run) run.lerArquivo(ESTADO.token);
+    return;
+  }
+  const dados = ESTADO.arquivo, f = ESTADO.filtroArquivo;
+  const docs = dados.documentos.map(d => Object.assign(d, { _sit: situacaoArq(d) }));
+  const emVigor = docs.filter(d => d._sit.k !== 'fora');
+  const vencendo = docs.filter(d => d._sit.k === 'vencendo');
+  const vencidos = docs.filter(d => d._sit.k === 'vencido');
+  const fora = docs.filter(d => d._sit.k === 'fora');
+
+  const passa = d => {
+    if (f.categoria && d.categoria !== f.categoria) return false;
+    if (f.situacao === 'emVigor' && d._sit.k === 'fora') return false;
+    if (f.situacao === 'vencendo' && d._sit.k !== 'vencendo') return false;
+    if (f.situacao === 'vencido' && d._sit.k !== 'vencido') return false;
+    if (f.situacao === 'fora' && d._sit.k !== 'fora') return false;
+    if (f.busca) {
+      const alvo = [d.titulo, d.numero, d.categoria, d.referencia, d.descricao, d.sei, (d.sei || '').replace(/\D/g, ''), d.nomeArquivo].join(' ').toLowerCase();
+      if (alvo.indexOf(f.busca.toLowerCase()) < 0) return false;
+    }
+    return true;
+  };
+  const lista = docs.filter(passa);
+  const peso = { vencido: 0, vencendo: 1, vigente: 2, fora: 3 };
+  const ordenar = arr => arr.sort((a, b) => peso[a._sit.k] - peso[b._sit.k] ||
+    String(chaveData(b.data)).localeCompare(String(chaveData(a.data))) || a.titulo.localeCompare(b.titulo));
+
+  const kpiA = (chave, rotulo, arr, sub, cor) =>
+    `<div class="kpi ${cor || ''} ${f.situacao === chave ? 'selecionado' : ''}" data-farq="${chave}" style="cursor:pointer">
+      <div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${fmtInt(arr.length)}</div><div class="kpi-sub">${sub}</div></div>`;
+
+  const nomeDoc = id => { const x = dados.documentos.find(y => y.id === id); return x ? x.titulo + (x.numero ? ' (' + x.numero + ')' : '') : id; };
+  const cartao = d => `<article class="arq-doc ${d._sit.k === 'fora' ? 'arq-fora' : ''}" data-arq="${escAttr(d.id)}">
+      <div class="arq-doc-topo">
+        <span class="status-chip ${d._sit.cls}">${esc(d._sit.rotulo)}</span>
+        ${d.restrito ? '<span class="arq-restrito" title="Visível só para administradores">🔒 restrito</span>' : ''}
+      </div>
+      <h4>${esc(d.titulo)}</h4>
+      ${d.numero ? `<div class="arq-num">${esc(d.numero)}</div>` : ''}
+      <div class="arq-meta">
+        ${d.data ? `<span>de ${esc(d.data)}</span>` : ''}
+        ${d.validade ? `<span>validade ${esc(d.validade)}</span>` : ''}
+        ${d.referencia ? `<span>${esc(d.referencia)}</span>` : ''}
+      </div>
+      ${d.substitui ? `<div class="arq-elo">substitui: ${esc(nomeDoc(d.substitui))}</div>` : ''}
+      ${d.substituidoPor ? `<div class="arq-elo">substituído por: ${esc(nomeDoc(d.substituidoPor))}</div>` : ''}
+      ${d.situacao !== 'Vigente' && d.situacao !== 'Substituído' && d.motivo ? `<div class="arq-elo">motivo: ${esc(d.motivo)}</div>` : ''}
+      <div class="arq-rodape">${d.arquivoId ? `${icoPdf()} ${esc(d.nomeArquivo || 'arquivo')}` : '<span style="color:var(--ambar)">sem arquivo anexado</span>'}</div>
+    </article>`;
+
+  const categoriasComDocs = dados.categorias.filter(cat => lista.some(d => d.categoria === cat));
+  const grupos = categoriasComDocs.map(cat => {
+    const doGrupo = ordenar(lista.filter(d => d.categoria === cat));
+    return `<section class="arq-grupo"><header><h3>${esc(cat)}</h3><span class="conta">${doGrupo.length}</span></header>
+      <div class="arq-grade">${doGrupo.map(cartao).join('')}</div></section>`;
+  }).join('');
+
+  c.innerHTML = `
+    <div class="kpis">
+      ${kpiA('emVigor', 'Em vigor', emVigor, 'vigentes, inclusive vencidos', '')}
+      ${kpiA('vencendo', 'A vencer', vencendo, 'dentro do prazo de aviso', vencendo.length ? 'ambar' : 'verde')}
+      ${kpiA('vencido', 'Vencidos', vencidos, 'validade expirada', vencidos.length ? 'vermelho' : 'verde')}
+      ${kpiA('fora', 'Fora de vigor', fora, 'substituídos, revogados, desativados', '')}
+      ${kpiA('todos', 'Todos', docs, 'no arquivo', '')}
+    </div>
+
+    <div class="cartao largo" style="margin-bottom:12px">
+      <div class="os-barra-acoes">
+        <div class="busca" style="max-width:300px"><input id="arq-busca" type="search" placeholder="título, número, SEI, pessoa…" value="${escAttr(f.busca)}"></div>
+        <select id="arq-cat" style="max-width:220px">
+          <option value="">Todas as categorias</option>
+          ${dados.categorias.map(cat => `<option value="${escAttr(cat)}" ${f.categoria === cat ? 'selected' : ''}>${esc(cat)} (${docs.filter(d => d.categoria === cat).length})</option>`).join('')}
+        </select>
+        ${(f.categoria || f.busca || f.situacao !== 'emVigor') ? '<button class="btn claro" id="arq-limpar">Limpar</button>' : ''}
+        <div style="flex:1"></div>
+        ${ESTADO.admin ? '<button class="btn amarelo" id="btn-novo-arq">+ Novo documento</button>' : ''}
+      </div>
+      <div class="cartao-dica">Documentos de referência da frota. Clique num documento para ver, baixar${ESTADO.admin ? ', substituir por nova versão, revogar ou desativar' : ''}.
+        O aviso de vencimento começa ${(dados.avisoDias && dados.avisoDias['Contrato']) || 120} dias antes para contratos e aditivos, e ${(dados.avisoDias && dados.avisoDias._padrao) || 30} para os demais.
+        ${dados.ocultos ? `<br>${dados.ocultos} documento(s) restrito(s) não aparecem para o seu perfil.` : ''}</div>
+    </div>
+
+    ${grupos || `<div class="cartao largo"><div class="vazio">${docs.length ? 'Nenhum documento nesta seleção.' : 'O arquivo ainda está vazio.' + (ESTADO.admin ? ' Use “+ Novo documento” para começar.' : '')}</div></div>`}`;
+
+  c.querySelectorAll('[data-farq]').forEach(k => k.addEventListener('click', () => { f.situacao = k.dataset.farq; renderArquivo(c); }));
+  c.querySelectorAll('.arq-doc').forEach(a => a.addEventListener('click', () => abrirDocArq(a.dataset.arq)));
+  ouvir('arq-cat', 'change', () => { f.categoria = val('arq-cat'); renderArquivo(c); });
+  ouvir('arq-limpar', 'click', () => { ESTADO.filtroArquivo = { categoria: '', situacao: 'emVigor', busca: '' }; renderArquivo(c); });
+  ouvir('btn-novo-arq', 'click', () => formDocArq(null, null));
+  const busca = el('arq-busca');
+  if (busca) busca.addEventListener('input', () => {
+    f.busca = busca.value;
+    clearTimeout(ESTADO._ta);
+    ESTADO._ta = setTimeout(() => { const pos = busca.selectionStart; renderArquivo(c);
+      const n = el('arq-busca'); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} } }, 350);
+  });
+}
+
+function recarregarArquivo() { ESTADO.arquivo = null; renderGestao(); }
+
+/** Relê o arquivo e reabre a ficha do documento, sem voltar à lista. */
+function recarregarArquivoEAbrir(id) {
+  ESTADO.arquivo = null;
+  const run = servidor('lerArquivo',
+    r => { if (r && r.ok) { ESTADO.arquivo = r; renderGestao(); if (id) abrirDocArq(id); } else renderGestao(); },
+    () => renderGestao());
+  if (run) run.lerArquivo(ESTADO.token);
+}
+
+/** Ficha do documento: visualização, dados, histórico e ações. */
+function abrirDocArq(id) {
+  const dados = ESTADO.arquivo;
+  const d = dados.documentos.find(x => x.id === id);
+  if (!d) return;
+  const sit = situacaoArq(d);
+  const nomeDoc = i => { const x = dados.documentos.find(y => y.id === i); return x ? x.titulo + (x.numero ? ' (' + x.numero + ')' : '') : i; };
+  const elo = (rot, i) => i ? `<div class="dado largo"><div class="k">${rot}</div><div class="v" style="font-size:13px">
+      ${dados.documentos.some(y => y.id === i) ? `<a class="link-btn" onclick="abrirDocArq('${escAttr(i)}')">${esc(nomeDoc(i))}</a>` : esc(i)}</div></div>` : '';
+
+  htm('gaveta-cab', `<div class="titulo"><h2>${esc(d.titulo)}</h2>
+    <div class="sub">${esc(d.categoria)}${d.numero ? ' • ' + esc(d.numero) : ''} • <span class="status-chip ${sit.cls}">${esc(sit.rotulo)}</span></div></div>
+    <button class="gaveta-fechar" onclick="fecharFicha()">×</button>`);
+  htm('gaveta-corpo',
+    secao('Arquivo', d.arquivoId ? `<div id="arq-visor" class="arq-visor"><div class="foto-data">Carregando o arquivo…</div></div>
+        <div class="form-acoes" style="margin-top:8px" id="arq-botoes"></div>`
+      : '<div class="nao">Nenhum arquivo anexado a este registro.</div>') +
+    secao('Dados', `<div class="grade-dados">
+      ${[['Categoria', d.categoria], ['Número', d.numero], ['Data do documento', d.data], ['Validade', d.validade],
+         ['Processo SEI', d.sei], ['Referência', d.referencia], ['Situação', d.situacao + (d.motivo ? ' — ' + d.motivo : '')],
+         ['Incluído', (d.incluidoEm || '') + (d.incluidoPor ? ' por ' + d.incluidoPor.split('@')[0] : '')]]
+        .filter(x => x[1]).map(x => `<div class="dado"><div class="k">${x[0]}</div><div class="v" style="font-size:13px">${esc(x[1])}</div></div>`).join('')}
+      ${elo('Substitui', d.substitui)}${elo('Substituído por', d.substituidoPor)}
+      ${d.descricao ? `<div class="dado largo"><div class="k">Descrição</div><div class="v" style="font-size:13px; white-space:pre-wrap">${esc(d.descricao)}</div></div>` : ''}
+    </div>`) +
+    (ESTADO.admin ? secao('Ações', `<div class="form-acoes" style="flex-wrap:wrap">
+        <button class="btn claro" id="arq-editar">Editar dados</button>
+        ${d.situacao === 'Vigente' ? `<button class="btn amarelo" id="arq-substituir">Substituir por nova versão</button>
+          <button class="btn claro" id="arq-revogar">Revogar</button>
+          <button class="btn claro" id="arq-desativar">Desativar</button>`
+        : `<button class="btn claro" id="arq-reativar">Voltar a vigente</button>`}
+        <div style="flex:1"></div>
+        <button class="btn claro" id="arq-excluir" style="color:var(--vermelho)">Excluir</button>
+      </div>
+      <div class="cartao-dica">Substituir mantém o anterior no arquivo, marcado e ligado ao novo. Revogar e desativar tiram de vigor sem apagar.
+        Excluir apaga o registro e manda o arquivo para a lixeira do Drive — use só para lançamento errado.</div>`) : '') +
+    (d.historico.length ? secao('Histórico', `<div class="arq-hist">${d.historico.slice().reverse().map(h => `<div>${esc(h)}</div>`).join('')}</div>`) : ''));
+  cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
+  const corpo = el('gaveta-corpo'); if (corpo) corpo.scrollTop = 0;
+  document.body.style.overflow = 'hidden';
+
+  if (d.arquivoId) carregarVisorArq(d);
+  ouvir('arq-editar', 'click', () => formDocArq(d, 'editar'));
+  ouvir('arq-substituir', 'click', () => formDocArq(d, 'substituir'));
+  ouvir('arq-revogar', 'click', () => situacaoDocArq(d, 'Revogado'));
+  ouvir('arq-desativar', 'click', () => situacaoDocArq(d, 'Desativado'));
+  ouvir('arq-reativar', 'click', () => situacaoDocArq(d, 'Vigente'));
+  ouvir('arq-excluir', 'click', () => excluirDocArq(d));
+}
+
+/** Busca o arquivo pelo painel (não depende de compartilhamento no Drive) e mostra na ficha. */
+function carregarVisorArq(d) {
+  const visor = el('arq-visor'), botoes = el('arq-botoes');
+  const run = servidor('baixarDocumentoArquivo',
+    r => {
+      if (!visor) return;
+      if (!r || !r.ok) { visor.innerHTML = '<div class="nao">' + esc((r && r.erro) || 'Não consegui abrir o arquivo.') + '</div>'; return; }
+      const bytes = atob(r.base64), arr = new Uint8Array(bytes.length);
+      for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([arr], { type: r.tipo || 'application/octet-stream' }));
+      if (/pdf/i.test(r.tipo)) visor.innerHTML = `<iframe src="${escAttr(url)}" title="${escAttr(r.nome)}"></iframe>`;
+      else if (/^image\//i.test(r.tipo)) visor.innerHTML = `<img src="${escAttr(url)}" alt="${escAttr(r.nome)}">`;
+      else visor.innerHTML = `<div class="nao">Pré-visualização indisponível para este tipo de arquivo. Use os botões abaixo.</div>`;
+      if (botoes) botoes.innerHTML = `<a class="btn amarelo" href="${escAttr(url)}" download="${escAttr(r.nome)}" style="text-decoration:none">⤓ Baixar</a>
+        <a class="btn claro" href="${escAttr(url)}" target="_blank" rel="noopener" style="text-decoration:none">Abrir em nova aba</a>
+        <span class="foto-data">${esc(r.nome)}</span>`;
+    },
+    e => { if (visor) visor.innerHTML = '<div class="nao">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div>'; });
+  if (run) run.baixarDocumentoArquivo(ESTADO.token, d.id);
+}
+
+/**
+ * Formulário de documento.
+ *   base nulo                → novo documento
+ *   modo 'editar'            → altera os dados (e, se quiser, corrige o anexo)
+ *   modo 'substituir'        → nova versão: herda categoria e título, e marca o anterior
+ */
+function formDocArq(base, modo) {
+  const dados = ESTADO.arquivo;
+  const editar = modo === 'editar', substituir = modo === 'substituir';
+  const v = k => (base && !substituir) ? (base[k] || '') : '';
+  const cat = base ? base.categoria : (ESTADO.filtroArquivo.categoria || dados.categorias[0]);
+  const restritoPadrao = base && !substituir ? base.restrito : (dados.restritasPorPadrao || []).indexOf(cat) >= 0;
+
+  htm('gaveta-cab', `<div class="titulo"><h2>${editar ? 'Editar documento' : substituir ? 'Nova versão' : 'Novo documento'}</h2>
+    <div class="sub">${substituir ? 'substitui: ' + esc(base.titulo) + (base.numero ? ' (' + esc(base.numero) + ')' : '') : editar ? esc(base.titulo) : 'arquivo da frota'}</div></div>
+    <button class="gaveta-fechar" onclick="fecharFicha()">×</button>`);
+  htm('gaveta-corpo',
+    secao('Documento', `<div class="form-grade">
+      <div class="form-campo"><label>Categoria</label><select id="arqf-cat">
+        ${dados.categorias.map(x => `<option value="${escAttr(x)}" ${x === cat ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div>
+      <div class="form-campo"><label>Número / identificação</label><input type="text" id="arqf-num" value="${escAttr(v('numero'))}" placeholder="ex.: Portaria SPRF-CE nº 72/2025"></div>
+      <div class="form-campo largo"><label>Título</label><input type="text" id="arqf-tit" value="${escAttr(substituir ? base.titulo : v('titulo'))}" placeholder="ex.: Gestores de frota da 16ª SPRF"></div>
+      <div class="form-campo"><label>Data do documento</label><input type="text" id="arqf-data" value="${escAttr(v('data'))}" placeholder="dd/mm/aaaa"></div>
+      <div class="form-campo"><label>Validade <small>(se houver)</small></label><input type="text" id="arqf-val" value="${escAttr(v('validade'))}" placeholder="dd/mm/aaaa"></div>
+      <div class="form-campo"><label>Processo SEI</label><input type="text" id="arqf-sei" value="${escAttr(v('sei') || (substituir ? base.sei : ''))}" style="font-family:var(--fonte-dados)"></div>
+      <div class="form-campo"><label>Referência <small>(pessoa, contrato, viatura…)</small></label><input type="text" id="arqf-ref" value="${escAttr(substituir ? base.referencia : v('referencia'))}"></div>
+      <div class="form-campo largo"><label>Descrição</label><textarea id="arqf-desc" rows="3">${esc(v('descricao'))}</textarea></div>
+      <div class="form-campo largo"><label class="opcao" style="display:flex; gap:8px; align-items:center">
+        <input type="checkbox" id="arqf-restrito" ${restritoPadrao ? 'checked' : ''}> Restrito — visível só para administradores (dados pessoais, como CNH)</label></div>
+      ${substituir ? `<div class="form-campo largo"><label>Motivo da substituição <small>(fica registrado no anterior)</small></label>
+        <input type="text" id="arqf-motivo" placeholder="ex.: nova portaria de designação"></div>` : ''}
+    </div>`) +
+    secao(editar ? 'Corrigir o arquivo anexado' : 'Arquivo', `
+      <label class="btn claro" style="cursor:pointer; display:inline-flex">Escolher arquivo
+        <input type="file" id="arqf-arquivo" class="oculto" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.odt"></label>
+      <span class="foto-data" id="arqf-nome" style="margin-left:8px">${editar && base.nomeArquivo ? 'atual: ' + esc(base.nomeArquivo) : 'nenhum arquivo escolhido'}</span>
+      <div class="cartao-dica">PDF, imagem ou documento de escritório, até ${dados.tamanhoMaximoMB || 10} MB.
+        ${editar ? 'Trocar o arquivo aqui é para corrigir um anexo errado; uma versão nova do documento deve entrar por “Substituir por nova versão”.' : ''}</div>`) +
+    `<div class="form-acoes">
+      <button class="btn amarelo" id="arqf-salvar">${editar ? 'Salvar' : substituir ? 'Incluir nova versão' : 'Incluir no arquivo'}</button>
+      <button class="btn claro" id="arqf-cancelar">Cancelar</button>
+    </div>`);
+  cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
+  document.body.style.overflow = 'hidden';
+
+  // CNH e outras categorias sensíveis já sugerem "restrito"
+  ouvir('arqf-cat', 'change', () => {
+    const chk = el('arqf-restrito');
+    if (chk && !editar) chk.checked = (dados.restritasPorPadrao || []).indexOf(val('arqf-cat')) >= 0;
+  });
+  ouvir('arqf-cancelar', 'click', () => base ? abrirDocArq(base.id) : fecharFicha());
+  let escolhido = null;
+  ouvir('arqf-arquivo', 'change', ev => {
+    const a = ev.target.files && ev.target.files[0];
+    if (!a) return;
+    if (a.size > (dados.tamanhoMaximoMB || 10) * 1024 * 1024) { toast('Arquivo acima de ' + (dados.tamanhoMaximoMB || 10) + ' MB.', true); ev.target.value = ''; return; }
+    escolhido = a; txt('arqf-nome', a.name + ' • ' + (a.size / 1024 / 1024).toFixed(1).replace('.', ',') + ' MB');
+  });
+
+  ouvir('arqf-salvar', 'click', () => {
+    const campos = { categoria: val('arqf-cat'), titulo: val('arqf-tit').trim(), numero: val('arqf-num').trim(),
+      data: val('arqf-data').trim(), validade: val('arqf-val').trim(), sei: val('arqf-sei').trim(),
+      referencia: val('arqf-ref').trim(), descricao: (el('arqf-desc') || {}).value || '',
+      restrito: !!(el('arqf-restrito') || {}).checked, motivo: substituir ? val('arqf-motivo').trim() : '' };
+    if (!campos.titulo) { toast('Informe o título.'); return; }
+    const dataRuim = t => t && !/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(t);
+    if (dataRuim(campos.data) || dataRuim(campos.validade)) { toast('Datas no formato dd/mm/aaaa.'); return; }
+    if (!editar && !escolhido && !confirm('Incluir sem arquivo anexado?')) return;
+    const btn = el('arqf-salvar'); btn.disabled = true; btn.textContent = escolhido ? 'Enviando o arquivo…' : 'Gravando…';
+    const enviar = arquivo => {
+      const fn = substituir ? 'substituirDocumentoArquivo' : 'salvarDocumentoArquivo';
+      const run = servidor(fn,
+        r => {
+          if (!r || !r.ok) { btn.disabled = false; btn.textContent = 'Tentar de novo'; toast((r && r.erro) || 'Falha ao gravar.', true); return; }
+          toast(substituir ? 'Nova versão incluída; a anterior ficou como substituída.' : r.novo ? 'Documento incluído no arquivo.' : (r.semMudanca ? 'Nada mudou.' : 'Documento atualizado.'));
+          recarregarArquivoEAbrir(r.id);
+        },
+        e => { btn.disabled = false; btn.textContent = 'Tentar de novo'; toast('Erro: ' + (e && e.message ? e.message : e), true); });
+      if (!run) return;
+      if (substituir) run.substituirDocumentoArquivo(ESTADO.token, base.id, campos, arquivo);
+      else run.salvarDocumentoArquivo(ESTADO.token, editar ? base.id : '', campos, arquivo);
+    };
+    if (!escolhido) { enviar(null); return; }
+    const leitor = new FileReader();
+    leitor.onerror = () => { btn.disabled = false; btn.textContent = 'Tentar de novo'; toast('Falha ao ler o arquivo.', true); };
+    leitor.onload = () => {
+      const r = String(leitor.result);
+      enviar({ base64: r.substring(r.indexOf(',') + 1), nome: escolhido.name, tipo: escolhido.type || '' });
+    };
+    leitor.readAsDataURL(escolhido);
+  });
+}
+
+function situacaoDocArq(d, situacao) {
+  let motivo = '';
+  if (situacao !== 'Vigente') {
+    motivo = prompt((situacao === 'Revogado' ? 'Revogar' : 'Desativar') + ' "' + d.titulo + '".\n\nMotivo (fica registrado):', '');
+    if (motivo === null) return;
+    if (!motivo.trim()) { toast('Informe o motivo.'); return; }
+  } else if (!confirm('Voltar "' + d.titulo + '" para vigente?')) return;
+  const run = servidor('mudarSituacaoArquivo',
+    r => {
+      if (!r || !r.ok) { toast((r && r.erro) || 'Falha.', true); return; }
+      toast(d.titulo + ' → ' + situacao);
+      recarregarArquivoEAbrir(d.id);
+    },
+    e => toast('Erro: ' + (e && e.message ? e.message : e), true));
+  if (run) run.mudarSituacaoArquivo(ESTADO.token, d.id, situacao, motivo);
+}
+
+function excluirDocArq(d) {
+  if (!confirm('EXCLUIR "' + d.titulo + '"?\n\nO registro sai do arquivo e o arquivo vai para a lixeira do Drive.\n' +
+               'Se o documento só perdeu a vigência, use Revogar ou Desativar.')) return;
+  const run = servidor('excluirDocumentoArquivo',
+    r => {
+      if (!r || !r.ok) { toast((r && r.erro) || 'Falha.', true); return; }
+      toast('Documento excluído.'); fecharFicha(); recarregarArquivo();
+    },
+    e => toast('Erro: ' + (e && e.message ? e.message : e), true));
+  if (run) run.excluirDocumentoArquivo(ESTADO.token, d.id);
 }
 
 </script>
