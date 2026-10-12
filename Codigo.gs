@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.89.8';
+const CODIGO_VERSAO = '2.89.9';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -2903,8 +2903,11 @@ function importarDetalhamento(token, arquivo, titulo, competencia) {
     if (!aba) return { ok: false, erro: 'Aba "' + CONFIG.ABA_DETALHE + '" não encontrada.' };
     const grid = _lerTabelaArquivo_(arquivo);
     if (!grid || grid.length <= 2) return { ok: false, erro: 'Não encontrei linhas de dados no arquivo.' };
-    const comp = _formatarCompetencia_(competencia || '', false);
+    // título e competência: na planilha antiga eram digitados em AC/AD e disparavam o
+    // preenchimento das outras colunas; sem eles, a competência some do AceitesDB (K)
+    const comp = _formatarCompetencia_(competencia || '', true);
     const tit = String(titulo || '').trim();
+    if (!tit) return { ok: false, erro: 'Informe o título (coluna AC) — é o número do título da Ticket desta competência.' };
     const linhas = [];
     grid.slice(2).forEach(linha => {
       if (!linha.some(c => String(c).trim() !== '')) return;
@@ -10709,3 +10712,43 @@ function _preencherUnidadeGestorBases_(ss, simular, linhaIni, qtd) {
 
 /** Para rodar pelo botão Executar do editor, que não aceita argumentos: aplica o conserto. */
 function aplicarConsertoFormulas() { return consertarFormulasMigradas(true); }
+
+
+/**
+ * Raio-X das três bases de manutenção, para entender uma importação que
+ * "não apareceu" ou "bagunçou": cabeçalho, uma linha antiga, as últimas linhas,
+ * onde a próxima importação gravaria e o que o log registrou. Não altera nada.
+ */
+function diagnosticarBasesManutencao() {
+  const ss = SpreadsheetApp.openById(CONFIG.ID_BASE);
+  const mostrar = (aba, r, ate) => {
+    const v = aba.getRange(r, 1, 1, ate).getDisplayValues()[0];
+    const f = aba.getRange(r, 1, 1, ate).getFormulas()[0];
+    return v.map((x, i) => _letraColuna_(i + 1) + '=' + (f[i] ? '[fx]' : '') + String(x).substring(0, 22)).filter(t => !/=$/.test(t)).join(' | ');
+  };
+  [[CONFIG.ABA_DETALHE, 31, 6], [CONFIG.ABA_ACEITES, 12, 1], [CONFIG.ABA_ORCAMENTOS, 13, 1]].forEach(([nome, largura, colChave]) => {
+    const aba = ss.getSheetByName(nome);
+    Logger.log('');
+    if (!aba) { Logger.log('▶ ' + nome + ': NÃO EXISTE'); return; }
+    const n = aba.getLastRow();
+    Logger.log('▶ ' + nome + ' — última linha usada: ' + n + ' | linhas na grade: ' + aba.getMaxRows() +
+      ' | a próxima importação gravaria na linha ' + _proximaLinhaAppend_(aba, colChave, 3));
+    for (let r = 1; r <= Math.min(4, n); r++) Logger.log('   linha ' + r + ': ' + mostrar(aba, r, largura));
+    Logger.log('   …');
+    for (let r = Math.max(5, n - 3); r <= n; r++) Logger.log('   linha ' + r + ': ' + mostrar(aba, r, largura));
+    // tipos da chave (número × texto) — VLOOKUP não casa um com o outro
+    const chaveCol = nome === CONFIG.ABA_DETALHE ? 12 : 1;
+    const vals = aba.getRange(4, chaveCol, Math.max(1, n - 3), 1).getValues().map(l => l[0]).filter(x => x !== '');
+    const nums = vals.filter(x => typeof x === 'number').length;
+    Logger.log('   coluna ' + _letraColuna_(chaveCol) + ' (OS): ' + nums + ' como número, ' + (vals.length - nums) + ' como texto');
+  });
+  Logger.log('');
+  Logger.log('▶ Últimas importações registradas no log:');
+  try {
+    const log = ss.getSheetByName(CONFIG.ABA_LOG);
+    const n = log.getLastRow();
+    log.getRange(Math.max(2, n - 300), 1, Math.min(300, n - 1), 6).getDisplayValues()
+      .filter(l => /^Importar/i.test(l[2])).slice(-12)
+      .forEach(l => Logger.log('   ' + l[0] + ' | ' + l[2] + ' | ' + l[4] + ' | ' + String(l[5]).substring(0, 160)));
+  } catch (e) { Logger.log('   log indisponível: ' + e); }
+}

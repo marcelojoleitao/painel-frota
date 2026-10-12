@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.89.8';
+const VERSAO_PAINEL = '2.89.9';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2471,8 +2471,8 @@ function renderImportar(c) {
       ${cartao('titManut', 'Título de manutenção', 'Títulos Manut.', 'PDF da NFS-e, incluindo a separação entre peças e mão de obra (o par de valores que soma o total da nota).', '', '.pdf')}
       ${cartao('detalhe', 'Detalhamento de itens', 'DetalhamentoDB (F:AB)', 'Tabela HTML ou Excel do detalhamento. Título e competência são gravados em AC e AD.',
         `<div class="form-grade" style="grid-template-columns:1fr 1fr; margin-bottom:10px">
-           <div class="form-campo"><label>Título (AC)</label><input type="text" id="det-titulo" placeholder="opcional"></div>
-           <div class="form-campo"><label>Competência (AD)</label><input type="text" id="det-comp" placeholder="MM/AAAA"></div>
+           <div class="form-campo"><label>Título (AC) — obrigatório</label><input type="text" id="det-titulo" placeholder="nº do título"></div>
+           <div class="form-campo"><label>Competência (AD) — obrigatória</label><input type="text" id="det-comp" placeholder="MM/AAAA"></div>
          </div>`, '.html,.htm,.xls,.xlsx')}
     </div>
 
