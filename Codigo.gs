@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.89.0';
+const CODIGO_VERSAO = '2.89.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -9998,12 +9998,10 @@ function diagnosticarLogin() {
    couber, uma validade — "vencido" é calculado, não gravado.
 
    Os arquivos ficam numa pasta do Drive, separados por categoria, e NÃO
-   são compartilhados por link: o painel entrega o arquivo a quem está
-   logado. Documentos marcados como restritos (CNH, por padrão) só
-   aparecem para administradores.
+   são compartilhados por link: o painel entrega o arquivo ao administrador
+   logado.
 
-   Ler: qualquer usuário do painel. Incluir, alterar, substituir, revogar,
-   desativar e excluir: administradores.
+   Acesso: somente administradores (CONFIG.ADMINS), para ler e para mexer.
    ============================================================ */
 
 const ARQUIVO_FROTA = {
@@ -10095,8 +10093,8 @@ function _registroArquivo_(l, linha) {
 
 /** Todos os documentos que o usuário pode ver. Restritos só para administradores. */
 function lerArquivo(token) {
-  const sessao = _sessao_(token);
-  if (!sessao) return { expirado: true };
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const sessao = p.sessao;
   try {
     const aba = _abaArquivo_();
     const n = aba.getLastRow();
@@ -10124,8 +10122,8 @@ function lerArquivo(token) {
  * não fica aberto por link no Drive.
  */
 function baixarDocumentoArquivo(token, id) {
-  const sessao = _sessao_(token);
-  if (!sessao) return { expirado: true };
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const sessao = p.sessao;
   try {
     const aba = _abaArquivo_();
     const linha = _linhaArquivo_(aba, id);

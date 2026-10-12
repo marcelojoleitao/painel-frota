@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.89.0';
+const VERSAO_PAINEL = '2.89.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4839,7 +4839,11 @@ function renderGestao() {
   if (ESTADO.subGestao === 'sinistros') return renderSinistros(c);
   if (ESTADO.subGestao === 'preventiva') return renderPreventiva(c);
   if (ESTADO.subGestao === 'contrato') return renderContrato(c);
-  if (ESTADO.subGestao === 'arquivo') return renderArquivo(c);
+  if (ESTADO.subGestao === 'arquivo') {
+    if (ESTADO.admin) return renderArquivo(c);
+    ESTADO.subGestao = 'quadro';
+    document.querySelectorAll('#subabas-gestao .subaba').forEach(x => x.classList.toggle('ativa', x.dataset.sub === 'quadro'));
+  }
   if (!ESTADO.demandas) {
     c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Carregando o quadro…</div></div>';
     const run = servidor('lerDemandas',
@@ -6899,7 +6903,6 @@ function renderArquivo(c) {
   const cartao = d => `<article class="arq-doc ${d._sit.k === 'fora' ? 'arq-fora' : ''}" data-arq="${escAttr(d.id)}">
       <div class="arq-doc-topo">
         <span class="status-chip ${d._sit.cls}">${esc(d._sit.rotulo)}</span>
-        ${d.restrito ? '<span class="arq-restrito" title="Visível só para administradores">🔒 restrito</span>' : ''}
       </div>
       <h4>${esc(d.titulo)}</h4>
       ${d.numero ? `<div class="arq-num">${esc(d.numero)}</div>` : ''}
@@ -6941,9 +6944,9 @@ function renderArquivo(c) {
         <div style="flex:1"></div>
         ${ESTADO.admin ? '<button class="btn amarelo" id="btn-novo-arq">+ Novo documento</button>' : ''}
       </div>
-      <div class="cartao-dica">Documentos de referência da frota. Clique num documento para ver, baixar${ESTADO.admin ? ', substituir por nova versão, revogar ou desativar' : ''}.
+      <div class="cartao-dica">Documentos de referência da frota, visíveis só para administradores. Clique num documento para ver, baixar, substituir por nova versão, revogar ou desativar.
         O aviso de vencimento começa ${(dados.avisoDias && dados.avisoDias['Contrato']) || 120} dias antes para contratos e aditivos, e ${(dados.avisoDias && dados.avisoDias._padrao) || 30} para os demais.
-        ${dados.ocultos ? `<br>${dados.ocultos} documento(s) restrito(s) não aparecem para o seu perfil.` : ''}</div>
+</div>
     </div>
 
     ${grupos || `<div class="cartao largo"><div class="vazio">${docs.length ? 'Nenhum documento nesta seleção.' : 'O arquivo ainda está vazio.' + (ESTADO.admin ? ' Use “+ Novo documento” para começar.' : '')}</div></div>`}`;
@@ -7055,7 +7058,6 @@ function formDocArq(base, modo) {
   const editar = modo === 'editar', substituir = modo === 'substituir';
   const v = k => (base && !substituir) ? (base[k] || '') : '';
   const cat = base ? base.categoria : (ESTADO.filtroArquivo.categoria || dados.categorias[0]);
-  const restritoPadrao = base && !substituir ? base.restrito : (dados.restritasPorPadrao || []).indexOf(cat) >= 0;
 
   htm('gaveta-cab', `<div class="titulo"><h2>${editar ? 'Editar documento' : substituir ? 'Nova versão' : 'Novo documento'}</h2>
     <div class="sub">${substituir ? 'substitui: ' + esc(base.titulo) + (base.numero ? ' (' + esc(base.numero) + ')' : '') : editar ? esc(base.titulo) : 'arquivo da frota'}</div></div>
@@ -7071,8 +7073,6 @@ function formDocArq(base, modo) {
       <div class="form-campo"><label>Processo SEI</label><input type="text" id="arqf-sei" value="${escAttr(v('sei') || (substituir ? base.sei : ''))}" style="font-family:var(--fonte-dados)"></div>
       <div class="form-campo"><label>Referência <small>(pessoa, contrato, viatura…)</small></label><input type="text" id="arqf-ref" value="${escAttr(substituir ? base.referencia : v('referencia'))}"></div>
       <div class="form-campo largo"><label>Descrição</label><textarea id="arqf-desc" rows="3">${esc(v('descricao'))}</textarea></div>
-      <div class="form-campo largo"><label class="opcao" style="display:flex; gap:8px; align-items:center">
-        <input type="checkbox" id="arqf-restrito" ${restritoPadrao ? 'checked' : ''}> Restrito — visível só para administradores (dados pessoais, como CNH)</label></div>
       ${substituir ? `<div class="form-campo largo"><label>Motivo da substituição <small>(fica registrado no anterior)</small></label>
         <input type="text" id="arqf-motivo" placeholder="ex.: nova portaria de designação"></div>` : ''}
     </div>`) +
@@ -7089,11 +7089,6 @@ function formDocArq(base, modo) {
   cls('gaveta-fundo', 'aberta', true); cls('gaveta', 'aberta', true);
   document.body.style.overflow = 'hidden';
 
-  // CNH e outras categorias sensíveis já sugerem "restrito"
-  ouvir('arqf-cat', 'change', () => {
-    const chk = el('arqf-restrito');
-    if (chk && !editar) chk.checked = (dados.restritasPorPadrao || []).indexOf(val('arqf-cat')) >= 0;
-  });
   ouvir('arqf-cancelar', 'click', () => base ? abrirDocArq(base.id) : fecharFicha());
   let escolhido = null;
   ouvir('arqf-arquivo', 'change', ev => {
@@ -7107,7 +7102,7 @@ function formDocArq(base, modo) {
     const campos = { categoria: val('arqf-cat'), titulo: val('arqf-tit').trim(), numero: val('arqf-num').trim(),
       data: val('arqf-data').trim(), validade: val('arqf-val').trim(), sei: val('arqf-sei').trim(),
       referencia: val('arqf-ref').trim(), descricao: (el('arqf-desc') || {}).value || '',
-      restrito: !!(el('arqf-restrito') || {}).checked, motivo: substituir ? val('arqf-motivo').trim() : '' };
+      motivo: substituir ? val('arqf-motivo').trim() : '' };
     if (!campos.titulo) { toast('Informe o título.'); return; }
     const dataRuim = t => t && !/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(t);
     if (dataRuim(campos.data) || dataRuim(campos.validade)) { toast('Datas no formato dd/mm/aaaa.'); return; }
