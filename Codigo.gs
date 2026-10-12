@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.89.6';
+const CODIGO_VERSAO = '2.89.7';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -2913,6 +2913,10 @@ function importarDetalhamento(token, arquivo, titulo, competencia) {
       linhas.push(saida);
     });
     if (!linhas.length) return { ok: false, erro: 'Nenhuma linha aproveitável.' };
+    // O relatório traz placa, modelo… OS e conclusão (F a M) só na 1ª linha de cada OS.
+    // A planilha antiga completava para baixo num onEdit; aqui é feito na importação.
+    const ultimo = new Array(8).fill('');
+    linhas.forEach(l => { for (let j = 0; j < 8; j++) { if (String(l[j]).trim() !== '') ultimo[j] = l[j]; else l[j] = ultimo[j]; } });
     const inicio = _proximaLinhaAppend_(aba, 6, 3);
     aba.getRange(inicio, 6, linhas.length, 23).setValues(linhas);
     if (tit) aba.getRange(inicio, 29, linhas.length, 1).setValues(linhas.map(() => [tit]));
@@ -10572,12 +10576,42 @@ function consertarFormulasMigradas(aplicar) {
     }
   });
   Logger.log('');
+  Logger.log('▶ DetalhamentoDB — F a M completados para baixo (o que o onEdit da planilha antiga fazia): ' +
+    _completarDetalhamento_(destino, !aplicar) + ' célula(s) ' + (aplicar ? 'preenchidas' : 'seriam preenchidas'));
   const preenchidos = _preencherUnidadeGestorBases_(destino, !aplicar);
   Logger.log('▶ Unidade e gestor calculados pelo painel (ConsultaBD → Unidade SIPAC; Gestores → gestor da unidade):');
   preenchidos.forEach(l => Logger.log('   ' + l));
   if (aplicar) limparCache();
   Logger.log('');
   Logger.log(aplicar ? 'Pronto. As próximas importações já encontram as fórmulas.' : 'Fim da simulação.');
+}
+
+/**
+ * Repete para baixo, em F a M do DetalhamentoDB (placa, modelo, fabricante, cor,
+ * ano, família, OS, conclusão), o último valor preenchido — o relatório só traz
+ * esses dados na primeira linha de cada OS. Só preenche célula vazia, até a
+ * última linha com peça (coluna O). Porte do onEdit da planilha antiga.
+ */
+function _completarDetalhamento_(ss, simular) {
+  const aba = ss.getSheetByName(CONFIG.ABA_DETALHE);
+  if (!aba || aba.getLastRow() < 4) return 0;
+  const n = aba.getLastRow() - 3;
+  const pecas = aba.getRange(4, 15, n, 1).getValues();
+  let fim = -1;
+  for (let i = n - 1; i >= 0; i--) if (String(pecas[i][0]).trim() !== '') { fim = i; break; }
+  if (fim < 0) return 0;
+  const faixa = aba.getRange(4, 6, fim + 1, 8);
+  const vals = faixa.getValues();
+  const ultimo = new Array(8).fill('');
+  let preenchidas = 0;
+  vals.forEach(l => {
+    for (let j = 0; j < 8; j++) {
+      if (String(l[j]).trim() !== '') ultimo[j] = l[j];
+      else if (ultimo[j] !== '') { l[j] = ultimo[j]; preenchidas++; }
+    }
+  });
+  if (!simular && preenchidas) faixa.setValues(vals);
+  return preenchidas;
 }
 
 /**
@@ -10631,12 +10665,13 @@ function _preencherUnidadeGestorBases_(ss, simular, linhaIni, qtd) {
   const det = ss.getSheetByName(CONFIG.ABA_DETALHE);
   if (det && det.getLastRow() >= 4) {
     const ini = linhaIni || 4, n = qtd || (det.getLastRow() - 3);
-    const faixa = det.getRange(ini, 1, n, 12);
+    const faixa = det.getRange(ini, 1, n, 14);
     const vals = faixa.getValues();
     let mudou = 0, semPlaca = 0;
     const novos = vals.map(l => {
       const placa = String(l[5] || '').trim().toUpperCase();
-      if (!placa) return [l[0], l[1], l[2], l[4]];
+      // linha sem grupo de peça (N) não é item: o script antigo deixava A e E vazios
+      if (!placa || !String(l[13] || '').trim()) return [l[0], l[1], l[2], l[4]];
       const m = mapa[placa];
       if (!m) semPlaca++;
       // só preenche o que está vazio ou com erro: as linhas antigas guardam a unidade e o gestor da época
