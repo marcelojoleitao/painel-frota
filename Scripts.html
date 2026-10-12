@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.89.1';
+const VERSAO_PAINEL = '2.89.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -7026,6 +7026,67 @@ function abrirDocArq(id) {
   ouvir('arq-excluir', 'click', () => excluirDocArq(d));
 }
 
+/**
+ * Leitor de PDF próprio. O Chrome não abre o visualizador de PDF dentro da
+ * moldura isolada em que o Apps Script roda o painel ("Esta página foi
+ * bloqueada pelo Chrome"), então as páginas são desenhadas em canvas pelo
+ * PDF.js, carregado só na primeira vez que alguém abre um documento.
+ */
+const PDFJS_VERSAO = '3.11.174';
+const PDFJS_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/' + PDFJS_VERSAO + '/';
+let _pdfjsPromessa = null;
+function carregarPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (_pdfjsPromessa) return _pdfjsPromessa;
+  _pdfjsPromessa = new Promise((ok, falha) => {
+    const sc = document.createElement('script');
+    sc.src = PDFJS_BASE + 'pdf.min.js';
+    sc.onload = () => {
+      const lib = window.pdfjsLib;
+      if (!lib) { falha(new Error('PDF.js não carregou.')); return; }
+      // o worker precisa ser da mesma origem da página: busca o código e cria um blob
+      fetch(PDFJS_BASE + 'pdf.worker.min.js')
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+        .then(codigo => { lib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([codigo], { type: 'text/javascript' })); ok(lib); })
+        .catch(() => { lib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.js'; ok(lib); });
+    };
+    sc.onerror = () => { _pdfjsPromessa = null; falha(new Error('Não consegui carregar o leitor de PDF (cdnjs).')); };
+    document.head.appendChild(sc);
+  });
+  return _pdfjsPromessa;
+}
+
+/** Desenha as páginas do PDF no visor, na largura disponível. */
+function desenharPdfNoVisor(visor, bytes) {
+  visor.innerHTML = '<div class="foto-data">Abrindo o PDF…</div>';
+  return carregarPdfJs()
+    .then(lib => lib.getDocument({ data: bytes }).promise)
+    .then(pdf => {
+      const LIMITE = 40;
+      const total = pdf.numPages, mostrar = Math.min(total, LIMITE);
+      visor.innerHTML = '';
+      visor.classList.add('arq-visor-paginas');
+      const largura = Math.max(320, visor.clientWidth - 16);
+      const escalaTela = window.devicePixelRatio || 1;
+      let cadeia = Promise.resolve();
+      for (let n = 1; n <= mostrar; n++) {
+        cadeia = cadeia.then(() => pdf.getPage(n)).then(pag => {
+          const base = pag.getViewport({ scale: 1 });
+          const vp = pag.getViewport({ scale: (largura / base.width) * escalaTela });
+          const cv = document.createElement('canvas');
+          cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
+          cv.style.width = Math.floor(vp.width / escalaTela) + 'px';
+          visor.appendChild(cv);
+          return pag.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+        });
+      }
+      return cadeia.then(() => {
+        if (total > mostrar) visor.insertAdjacentHTML('beforeend', `<div class="foto-data">Mostrando ${mostrar} de ${total} páginas — baixe para ver o restante.</div>`);
+      });
+    })
+    .catch(e => { visor.innerHTML = '<div class="nao">Não consegui exibir o PDF aqui (' + esc(String(e && e.message ? e.message : e)) + '). Use o botão Baixar.</div>'; });
+}
+
 /** Busca o arquivo pelo painel (não depende de compartilhamento no Drive) e mostra na ficha. */
 function carregarVisorArq(d) {
   const visor = el('arq-visor'), botoes = el('arq-botoes');
@@ -7033,15 +7094,14 @@ function carregarVisorArq(d) {
     r => {
       if (!visor) return;
       if (!r || !r.ok) { visor.innerHTML = '<div class="nao">' + esc((r && r.erro) || 'Não consegui abrir o arquivo.') + '</div>'; return; }
-      const bytes = atob(r.base64), arr = new Uint8Array(bytes.length);
-      for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+      const bin = atob(r.base64), arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
       const url = URL.createObjectURL(new Blob([arr], { type: r.tipo || 'application/octet-stream' }));
-      if (/pdf/i.test(r.tipo)) visor.innerHTML = `<iframe src="${escAttr(url)}" title="${escAttr(r.nome)}"></iframe>`;
-      else if (/^image\//i.test(r.tipo)) visor.innerHTML = `<img src="${escAttr(url)}" alt="${escAttr(r.nome)}">`;
-      else visor.innerHTML = `<div class="nao">Pré-visualização indisponível para este tipo de arquivo. Use os botões abaixo.</div>`;
       if (botoes) botoes.innerHTML = `<a class="btn amarelo" href="${escAttr(url)}" download="${escAttr(r.nome)}" style="text-decoration:none">⤓ Baixar</a>
-        <a class="btn claro" href="${escAttr(url)}" target="_blank" rel="noopener" style="text-decoration:none">Abrir em nova aba</a>
         <span class="foto-data">${esc(r.nome)}</span>`;
+      if (/pdf/i.test(r.tipo) || /\.pdf$/i.test(r.nome)) desenharPdfNoVisor(visor, arr.slice());   // o PDF.js consome o buffer
+      else if (/^image\//i.test(r.tipo)) visor.innerHTML = `<img src="${escAttr(url)}" alt="${escAttr(r.nome)}">`;
+      else visor.innerHTML = '<div class="nao">Pré-visualização indisponível para este tipo de arquivo. Use o botão Baixar.</div>';
     },
     e => { if (visor) visor.innerHTML = '<div class="nao">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div>'; });
   if (run) run.baixarDocumentoArquivo(ESTADO.token, d.id);
