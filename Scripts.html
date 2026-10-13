@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.90.1';
+const VERSAO_PAINEL = '2.90.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4954,12 +4954,12 @@ function desenharQuadro(c) {
       <div class="dem-titulo">${esc(d.titulo)}</div>
       <div class="dem-meta">
         ${placas.length
-          ? placas.slice(0, 4).map(pl => {
+          ? placas.slice(0, 10).map(pl => {
               const vv = viaturaDaMulta(pl);
               return `<span class="dem-tag placa clicavel" title="${escAttr((vv ? vv.modelo + (vv.unidade ? ' • ' + vv.unidade : '') : 'viatura fora do cadastro') + ' — abrir a ficha da viatura')}"
                 onclick="event.stopPropagation(); abrirFicha('${escAttr(pl)}')">${esc(pl)}</span>`;
             }).join('') +
-            (placas.length > 4 ? `<span class="dem-tag">+${placas.length - 4}</span>` : '') +
+            (placas.length > 10 ? `<span class="dem-tag" title="${escAttr(placas.slice(10).join(', '))}">+${placas.length - 10}</span>` : '') +
             (unica ? `<span class="dem-tag modelo">${esc(unica.modeloCurto || unica.modelo)}</span>` : '')
           : '<span class="dem-tag geral">frota</span>'}
         ${d.prioridade !== 'Normal' ? `<span class="dem-tag prio ${d.prioridade === 'Urgente' ? 'urgente' : ''}">${esc(d.prioridade)}</span>` : ''}
