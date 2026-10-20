@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.90.2';
+const VERSAO_PAINEL = '2.90.3';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2768,7 +2768,7 @@ function carregarCombustiveisGlosa() {
       if (!r || !r.ok) { caixa.innerHTML = '<span class="foto-data">' + esc((r && r.erro) || 'Falha ao ler.') + '</span>'; return; }
       if (!r.combustiveis.length) { caixa.innerHTML = '<span class="foto-data">Nenhum abastecimento em ' + esc(comp) + '.</span>'; return; }
       caixa.innerHTML = r.combustiveis.map(c => `<label title="${c.anp ? 'ANP: ' + escAttr(c.anp) : 'sem produto correspondente na ANP'}">
-        <input type="checkbox" value="${escAttr(c.nome)}" ${c.anp ? 'checked' : 'disabled'}> ${esc(c.nome)}
+        <input type="checkbox" value="${escAttr(c.nome)}" ${!c.anp ? 'disabled' : (c.padrao === false ? '' : 'checked')}> ${esc(c.nome)}
         <small style="color:var(--tinta-suave)">${c.qtd} abast.${c.anp ? '' : ' • sem equivalente na ANP'}</small></label>`).join('');
     },
     e => { caixa.innerHTML = '<span class="foto-data">' + esc(String(e && e.message ? e.message : e)) + '</span>'; });
@@ -6842,7 +6842,7 @@ function carregarGlosaDoProcesso(competencia) {
       if (!r || !r.ok) { caixa.innerHTML = '<span class="foto-data">' + esc((r && r.erro) || 'Falha ao ler.') + '</span>'; return; }
       if (!r.combustiveis.length) { caixa.innerHTML = '<span class="foto-data">Nenhum abastecimento em ' + esc(competencia) + '.</span>'; return; }
       caixa.innerHTML = r.combustiveis.map(c => `<label title="${c.anp ? 'ANP: ' + escAttr(c.anp) : 'sem produto correspondente na ANP'}">
-        <input type="checkbox" value="${escAttr(c.nome)}" ${c.anp ? 'checked' : 'disabled'}> ${esc(c.nome)}
+        <input type="checkbox" value="${escAttr(c.nome)}" ${!c.anp ? 'disabled' : (c.padrao === false ? '' : 'checked')}> ${esc(c.nome)}
         <small style="color:var(--tinta-suave)">${c.qtd} abast.${c.anp ? '' : ' • sem equivalente na ANP'}</small></label>`).join('');
     },
     e => { caixa.innerHTML = '<span class="foto-data">' + esc(String(e && e.message ? e.message : e)) + '</span>'; });

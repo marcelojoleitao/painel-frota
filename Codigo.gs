@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.90.2';
+const CODIGO_VERSAO = '2.90.3';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4655,8 +4655,11 @@ function _rotMesExtenso_(m) {
    ============================================================ */
 
 /** Combustível da Ticket → produto na série da ANP + letra do identificador. */
+// A gasolina aditivada é comparada com o teto da GASOLINA COMUM, como na planilha
+// de glosa: lá o identificador do teto usava só a letra G e a série da ANP entrava
+// apenas com GASOLINA COMUM e OLEO DIESEL S10.
 const MAPA_COMBUSTIVEL_ANP = [
-  { re: /GASOLINA\s+ADITIVADA/i,      anp: 'GASOLINA ADITIVADA', letra: 'G' },
+  { re: /GASOLINA\s+ADITIVADA/i,      anp: 'GASOLINA COMUM',     letra: 'G' },
   { re: /GASOLINA/i,                  anp: 'GASOLINA COMUM',     letra: 'G' },
   { re: /DIESEL\s*S-?\s*10/i,         anp: 'OLEO DIESEL S10',    letra: 'D' },
   { re: /DIESEL/i,                    anp: 'OLEO DIESEL',        letra: 'D' },
@@ -4664,6 +4667,14 @@ const MAPA_COMBUSTIVEL_ANP = [
   { re: /GNV|GAS\s*NATURAL/i,         anp: 'GNV',                letra: 'N' },
   { re: /GLP/i,                       anp: 'GLP',                letra: 'L' }
 ];
+/**
+ * Combustíveis que entram na glosa por padrão — os mesmos da consulta da planilha:
+ * DIESEL S-10 COMUM, GASOLINA COMUM e GASOLINA ADITIVADA. Os demais aparecem
+ * na lista, desmarcados, e podem ser incluídos na hora de gerar.
+ */
+const GLOSA_COMBUSTIVEIS_PADRAO = [/^DIESEL\s*S-?\s*10\s+COMUM$/i, /^GASOLINA\s+COMUM$/i, /^GASOLINA\s+ADITIVADA$/i];
+function _combustivelPadraoGlosa_(nome) { return GLOSA_COMBUSTIVEIS_PADRAO.some(re => re.test(String(nome || '').trim())); }
+
 function _produtoAnp_(combustivel) {
   const c = String(combustivel || '');
   for (let i = 0; i < MAPA_COMBUSTIVEL_ANP.length; i++) if (MAPA_COMBUSTIVEL_ANP[i].re.test(c)) return MAPA_COMBUSTIVEL_ANP[i];
@@ -4930,7 +4941,8 @@ function combustiveisDaCompetencia(token, competencia) {
       const comb = String(tab.valores[r][iComb] || '').trim().toUpperCase();
       if (comb) contagem[comb] = (contagem[comb] || 0) + 1;
     }
-    return { ok: true, combustiveis: Object.keys(contagem).sort().map(k => ({ nome: k, qtd: contagem[k], anp: (_produtoAnp_(k) || {}).anp || '' })) };
+    return { ok: true, combustiveis: Object.keys(contagem).sort().map(k => ({ nome: k, qtd: contagem[k],
+      anp: (_produtoAnp_(k) || {}).anp || '', padrao: _combustivelPadraoGlosa_(k) })) };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 
