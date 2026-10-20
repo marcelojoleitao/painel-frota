@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.90.3';
+const VERSAO_PAINEL = '2.90.4';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -329,7 +329,11 @@ function renderChips() {
 /** Aplica a preferência do usuário sobre o painel de filtros — vale para todas as abas. */
 function ajustarFiltrosLaterais() {
   if (window.innerWidth <= 900) return;
-  cls('corpo', 'sem-filtros', lerGuardado(CHAVE_FILTROS_OCULTOS) === '1');
+  // A escolha vale pela sessão mesmo quando o navegador bloqueia o armazenamento
+  // local (comum em máquinas com cookies de terceiros bloqueados): antes, sem
+  // armazenamento, cada troca de aba lia "vazio" e os filtros reapareciam.
+  if (ESTADO.filtrosOcultos === undefined) ESTADO.filtrosOcultos = lerGuardado(CHAVE_FILTROS_OCULTOS) === '1';
+  cls('corpo', 'sem-filtros', ESTADO.filtrosOcultos);
   const botao = el('btn-filtros');
   if (botao) botao.disabled = false;
 }
@@ -964,8 +968,9 @@ function iniciarApp() {
   ouvir('btn-filtros', 'click', () => {
     const corpo = el('corpo'), painel = el('painel-filtros');
     if (window.innerWidth <= 900) { painel.classList.toggle('aberta'); return; }
-    corpo.classList.toggle('sem-filtros');
-    guardar(CHAVE_FILTROS_OCULTOS, corpo.classList.contains('sem-filtros') ? '1' : '');
+    ESTADO.filtrosOcultos = !corpo.classList.contains('sem-filtros');
+    corpo.classList.toggle('sem-filtros', ESTADO.filtrosOcultos);
+    guardar(CHAVE_FILTROS_OCULTOS, ESTADO.filtrosOcultos ? '1' : '0');
     // a largura da área útil mudou: refaz o conteúdo para tudo reocupar a tela
     requestAnimationFrame(() => {
       renderAba();
@@ -995,7 +1000,10 @@ else iniciarApp();
    SESSÃO E LOGIN
    ============================================================ */
 function guardar(k, v) { try { localStorage.setItem(k, v); } catch (e) { try { sessionStorage.setItem(k, v); } catch (e2) {} } }
-function lerGuardado(k) { try { return localStorage.getItem(k) || sessionStorage.getItem(k); } catch (e) { return null; } }
+function lerGuardado(k) {
+  try { const v = localStorage.getItem(k); if (v !== null) return v; } catch (e) {}
+  try { return sessionStorage.getItem(k); } catch (e) { return null; }
+}
 function apagar(k) { try { localStorage.removeItem(k); sessionStorage.removeItem(k); } catch (e) {} }
 
 function iniciarSessao() {
