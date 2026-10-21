@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.90.4';
+const VERSAO_PAINEL = '2.90.5';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -3061,7 +3061,8 @@ function renderOSAcompanhar(lista) {
     <div class="kpis" id="kpis-projecao"></div>
 
     <div class="os-nivel">
-      ${NIVEIS_OS.filter(n => contagem[n.k]).map(n => `<button class="subaba ${nivel === n.k ? 'ativa' : ''}" data-nivel="${n.k}">${esc(n.rotulo)}<span class="n">${contagem[n.k]}</span></button>`).join('')}
+      ${NIVEIS_OS.map(n => `<button class="subaba ${nivel === n.k ? 'ativa' : ''} ${contagem[n.k] ? '' : 'zerada'}" data-nivel="${n.k}"
+          title="${contagem[n.k] ? '' : 'Nenhuma OS nesta situação no momento'}">${esc(n.rotulo)}<span class="n">${contagem[n.k] || 0}</span></button>`).join('')}
       ${contagem['outros'] ? `<button class="subaba ${nivel === 'outros' ? 'ativa' : ''}" data-nivel="outros">Outros<span class="n">${contagem['outros']}</span></button>` : ''}
       <button class="subaba ${nivel === 'todas' ? 'ativa' : ''}" data-nivel="todas">Todas<span class="n">${todas.length}</span></button>
     </div>
