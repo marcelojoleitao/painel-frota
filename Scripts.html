@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.90.5';
+const VERSAO_PAINEL = '2.90.6';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -4274,15 +4274,17 @@ function girarFoto(placa, ang, botao) {
 }
 
 
-/** Situações existentes na aba OS, para a lista de seleção da tabela. */
+/** Sempre oferecidas na lista de situação, ainda que nenhuma OS esteja nelas. */
+const SITUACOES_OS_FIXAS = ['Pedido de Revisão'];
+
+/** Situações existentes na aba OS (mais as fixas), para a lista de seleção da tabela. */
 function statusOSDisponiveis() {
   if (ESTADO._statusOS) return ESTADO._statusOS;
   const vistos = new Set();
   (ESTADO.dados.os || []).forEach(o => { if (o.status) vistos.add(o.status); });
-  NIVEIS_OS.forEach(n => {
-    const achado = Array.from(vistos).find(s => n.re.test(s));
-    if (!achado) return;
-  });
+  // Situações que podem ser escolhidas mesmo sem nenhuma OS nelas hoje — a lista
+  // vinha só do que existe na aba OS, e "Pedido de Revisão" sumia quando não havia nenhuma.
+  SITUACOES_OS_FIXAS.forEach(s => { if (!Array.from(vistos).some(v => nivelDaOS(v) === nivelDaOS(s))) vistos.add(s); });
   ESTADO._statusOS = Array.from(vistos).sort((a, b) => pesoNivel(nivelDaOS(a)) - pesoNivel(nivelDaOS(b)) || a.localeCompare(b, 'pt-BR'));
   return ESTADO._statusOS;
 }
