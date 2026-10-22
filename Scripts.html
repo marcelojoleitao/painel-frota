@@ -57,6 +57,8 @@ function servidor(nome, aoOk, aoErro) {
 
 /* Erro de JavaScript vira aviso visível — sem isso a tela fica muda e parece "não atualizou". */
 window.addEventListener('error', function (ev) {
+  // aviso inofensivo do navegador (o ResizeObserver só adiou uma medição); não é falha
+  if (/ResizeObserver loop/i.test(String(ev.message || ''))) { ev.stopImmediatePropagation && ev.stopImmediatePropagation(); return; }
   const msg = (ev.message || 'erro') + (ev.filename ? ' — linha ' + ev.lineno : '');
   let caixa = document.getElementById('aviso-erro');
   if (!caixa) {
@@ -72,7 +74,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.91.3';
+const VERSAO_PAINEL = '2.91.4';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -912,9 +914,17 @@ function debounce(fn, ms) { let t; return function () { clearTimeout(t); t = set
 /** Mantém --altura-topo igual à altura real do cabeçalho (os filtros e a gaveta se posicionam por ela). */
 function acompanharAlturaTopo() {
   const topo = document.querySelector('.topo'); if (!topo) return;
-  const aplicar = () => { const h = Math.round(topo.getBoundingClientRect().height); if (h) document.documentElement.style.setProperty('--altura-topo', h + 'px'); };
+  let atual = 0, pedido = 0;
+  const aplicar = () => {
+    const h = Math.round(topo.getBoundingClientRect().height);
+    if (!h || h === atual) return;                 // só mexe quando a altura muda de fato
+    atual = h; document.documentElement.style.setProperty('--altura-topo', h + 'px');
+  };
+  // a medição vai para o próximo quadro, fora do ciclo do observador — evita o
+  // aviso "ResizeObserver loop completed with undelivered notifications"
+  const agendar = () => { cancelAnimationFrame(pedido); pedido = requestAnimationFrame(aplicar); };
   aplicar();
-  try { new ResizeObserver(aplicar).observe(topo); } catch (e) { window.addEventListener('resize', aplicar); }
+  try { new ResizeObserver(agendar).observe(topo); } catch (e) { window.addEventListener('resize', agendar); }
 }
 
 function iniciarApp() {
