@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.91.0';
+const CODIGO_VERSAO = '2.91.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -8084,7 +8084,20 @@ function detalharOS(token, os) {
       for (let i = 0; i < Math.min(8, valores.length); i++) {
         if (valores[i].some(c => /^PLACA/.test(_normCab_(c)))) { cabIdx = i; break; }
       }
-      const nomes = valores[cabIdx].map(c => String(c || '').trim());
+      // O relatório tem cabeçalho em duas linhas, e a de cima repete nomes:
+      // "Peça" é a peça (O) e também o grupo Quantidade/Valor/Total (V a X).
+      // Usado como chave, o último "Peça" apagava o nome da peça. Cada coluna
+      // recebe um nome único: o de cima + o de baixo, quando houver.
+      const sub = valores[cabIdx + 1] || [];
+      let grupoAtual = '';
+      const nomes = valores[cabIdx].map((c, i) => {
+        const cima = String(c || '').trim(), baixo = String(sub[i] || '').trim();
+        if (cima) grupoAtual = cima;
+        if (baixo && baixo !== cima) return (cima || grupoAtual) + ' — ' + baixo;
+        return cima;
+      });
+      const usados = {};
+      nomes.forEach((n, i) => { if (!n) return; if (usados[n]) nomes[i] = n + ' (' + _letraColuna_(i + 1) + ')'; usados[nomes[i]] = true; });
       const norm = nomes.map(c => _normCab_(c));
       const iOs = norm.findIndex(c => /ORDEM DE SERVICO|ORDEM SERVICO|^OS$/.test(c));
       if (iOs >= 0) {
@@ -8129,7 +8142,8 @@ function detalharOS(token, os) {
     } catch (e) { Logger.log('Resumo da OS: ' + e); }
 
     return { ok: true, os: alvo, itens: itens, colunas: cabecalho, resumo: resumo,
-      pdf: (_indexarPdfsOS_() || []).filter(x => String(x.os || '').replace(/\D/g, '') === alvo).map(x => x.url)[0] || '' };
+      // x.os é uma lista: o nome do arquivo pode trazer mais de um número (OS, NF…)
+      pdf: (_indexarPdfsOS_() || []).filter(x => (x.os || []).map(o => String(o).replace(/\D/g, '')).indexOf(alvo) >= 0).map(x => x.url)[0] || '' };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
 

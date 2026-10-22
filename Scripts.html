@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.91.0';
+const VERSAO_PAINEL = '2.91.1';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -6397,7 +6397,8 @@ function abrirDetalheOS(os) {
       const chavesResumo = Object.keys(resumo).filter(k => String(resumo[k]).trim());
       htm('modal-os-conteudo', `
         <h2 style="margin:0 0 4px; font-size:17px; color:var(--azul)">Ordem de serviço ${esc(r.os)}</h2>
-        ${r.pdf ? `<a class="pdf-link" href="${escAttr(r.pdf)}" target="_blank" rel="noopener">${icoPdf()} abrir o PDF da OS</a>` : '<div class="foto-data">sem PDF indexado</div>'}
+        ${r.pdf ? `<a class="pdf-link" href="${escAttr(r.pdf)}" target="_blank" rel="noopener">${icoPdf()} abrir o PDF da OS</a>`
+          : (pdfsDaOS(r.os).length ? pdfLinkHtml(r.os) : '<div class="foto-data">sem PDF indexado</div>')}
         ${chavesResumo.length ? `<div class="grade-dados" style="margin-top:10px">
           ${chavesResumo.slice(0, 12).map(k => `<div class="dado"><div class="k">${esc(k)}</div><div class="v" style="font-size:13.5px">${esc(resumo[k])}</div></div>`).join('')}
         </div>` : ''}
@@ -7349,7 +7350,7 @@ function desenharPrecosOS() {
         <thead><tr><th>Peça</th><th>Tipo</th><th class="num">Vezes</th><th class="num">Menor</th><th class="num">Mediano</th><th class="num">Maior</th><th>Última</th></tr></thead>
         <tbody>${r.resumo.map(g => `<tr><td>${esc(g.peca)}${g.un ? ` <small style="color:var(--tinta-suave)">(${esc(g.un)})</small>` : ''}</td><td>${esc(g.tipoPeca || '—')}</td>
           <td class="num">${fmtInt(g.qtd)}</td><td class="num">${fmtMoeda(g.minimo)}</td><td class="num forte">${fmtMoeda(g.mediana)}</td><td class="num">${fmtMoeda(g.maximo)}</td>
-          <td>${fmtMoeda(g.ultimoValor)} <small style="color:var(--tinta-suave)">em ${esc(g.ultima || '—')} · <a class="link-btn" style="padding:0" onclick="abrirDetalheOS('${escAttr(g.ultimaOs)}')">OS ${esc(g.ultimaOs)}</a></small></td></tr>`).join('')}</tbody>
+          <td>${fmtMoeda(g.ultimoValor)} <small style="color:var(--tinta-suave)">em ${esc(g.ultima || '—')} · <a class="link-btn" style="padding:0" onclick="abrirDetalheOS('${escAttr(g.ultimaOs)}')">OS ${esc(g.ultimaOs)}</a></small> ${pdfLinkHtml(g.ultimaOs)}</td></tr>`).join('')}</tbody>
       </table></div></div>` : ''}
     <div class="cartao largo">
       <div class="cartao-cab"><h3>Itens</h3><small>${fmtInt(r.linhas.length)} linha(s)</small></div>
@@ -7357,7 +7358,8 @@ function desenharPrecosOS() {
         <thead><tr><th>OS</th><th>Conclusão</th><th>Placa</th><th>Modelo</th><th>Peça / serviço</th><th>Tipo</th>
           <th class="num">Qtd</th><th class="num">Unit.</th><th class="num">Peça</th><th class="num">Mão de obra</th><th class="num">Total</th><th>Oficina</th></tr></thead>
         <tbody>${r.linhas.map(x => `<tr>
-          <td><a class="link-btn" style="padding:0; font-family:var(--fonte-dados)" onclick="abrirDetalheOS('${escAttr(x.os)}')">${esc(x.os)}</a></td>
+          <td><a class="link-btn" style="padding:0; font-family:var(--fonte-dados)" onclick="abrirDetalheOS('${escAttr(x.os)}')">${esc(x.os)}</a>
+            ${pdfsDaOS(x.os).length ? `<div>${pdfLinkHtml(x.os)}</div>` : ''}</td>
           <td class="data-curta">${esc(x.data || '—')}</td>
           <td style="font-family:var(--fonte-dados)">${esc(x.placa)}</td><td>${esc(x.modelo)}</td>
           <td>${esc(x.peca || x.servico)}${x.peca && x.servico ? `<div class="vinculo">${esc(x.servico)}</div>` : ''}</td>
