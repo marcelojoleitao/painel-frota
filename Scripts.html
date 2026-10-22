@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.91.1';
+const VERSAO_PAINEL = '2.91.2';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -6402,12 +6402,27 @@ function abrirDetalheOS(os) {
         ${chavesResumo.length ? `<div class="grade-dados" style="margin-top:10px">
           ${chavesResumo.slice(0, 12).map(k => `<div class="dado"><div class="k">${esc(k)}</div><div class="v" style="font-size:13.5px">${esc(resumo[k])}</div></div>`).join('')}
         </div>` : ''}
-        <div class="grupo-titulo" style="margin-top:12px">Itens registrados (${r.itens.length})</div>
-        ${r.itens.length ? `<div class="tabela-rol" style="max-height:340px"><table class="tabela-simples" style="width:100%">
+        <div class="grupo-titulo" style="margin-top:12px">Itens registrados (${(r.itensFixos || r.itens).length})</div>
+        ${(r.itensFixos && r.itensFixos.length) ? `<div class="tabela-rol" style="max-height:360px"><table class="tabela-simples" style="width:100%">
+            <thead><tr><th>Grupo</th><th>Peça</th><th>Serviço</th><th>Tipo</th><th class="num">Qtd</th><th class="num">Unit.</th>
+              <th class="num">Peça</th><th class="num">Mão de obra</th><th class="num">Total</th></tr></thead>
+            <tbody>${r.itensFixos.map(i => `<tr><td>${esc(i.grupo)}</td><td><b>${esc(i.peca || '—')}</b>${i.un ? ` <small style="color:var(--tinta-suave)">${esc(i.un)}</small>` : ''}</td>
+              <td>${esc(i.servico || '—')}</td><td>${esc(i.tipoPeca || i.tipoManut || '')}</td>
+              <td class="num">${i.qtdP ? fmtDec(i.qtdP).replace(/,00$/, '') : '—'}</td><td class="num">${i.unitP ? fmtMoeda(i.unitP) : '—'}</td>
+              <td class="num">${i.totP ? fmtMoeda(i.totP) : '—'}</td><td class="num">${i.totM ? fmtMoeda(i.totM) : '—'}</td>
+              <td class="num forte">${fmtMoeda(i.total)}</td></tr>`).join('')}
+              <tr><td colspan="8" style="text-align:right"><b>Total da OS</b></td><td class="num forte">${fmtMoeda(r.itensFixos.reduce((t, i) => t + (i.total || 0), 0))}</td></tr></tbody>
+          </table></div>
+          ${r.itens.length ? `<details style="margin-top:8px"><summary class="foto-data" style="cursor:pointer">ver todas as colunas do detalhamento</summary>
+            <div class="tabela-rol" style="max-height:300px"><table class="tabela-simples" style="width:100%">
+              <thead><tr>${colunas.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+              <tbody>${r.itens.map(i => `<tr>${colunas.map(c => `<td>${esc(i[c] || '')}</td>`).join('')}</tr>`).join('')}</tbody>
+            </table></div></details>` : ''}`
+        : (r.itens.length ? `<div class="tabela-rol" style="max-height:340px"><table class="tabela-simples" style="width:100%">
             <thead><tr>${colunas.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
             <tbody>${r.itens.map(i => `<tr>${colunas.map(c => `<td>${esc(i[c] || '')}</td>`).join('')}</tr>`).join('')}</tbody>
           </table></div>`
-        : '<div class="cartao-dica">Nenhum item detalhado para esta OS na base de detalhamento.</div>'}`);
+        : '<div class="cartao-dica">Nenhum item detalhado para esta OS na base de detalhamento.</div>')}`);
     },
     e => htm('modal-os-conteudo', '<div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div>'));
   if (run) run.detalharOS(ESTADO.token, os);
@@ -7334,6 +7349,12 @@ function renderPrecosOS(c) {
   if (ESTADO.precosOS) desenharPrecosOS();
 }
 
+/** Etiqueta para abrir o PDF da OS: o link que o servidor achou ou, na falta, o índice do painel. */
+function pdfOSHtml(os, url) {
+  if (url) return `<a class="pdf-link" href="${escAttr(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${icoPdf()} PDF</a>`;
+  return pdfsDaOS(os).length ? pdfLinkHtml(os) : '';
+}
+
 function desenharPrecosOS() {
   const r = ESTADO.precosOS; if (!r) return;
   if (!r.linhas.length) { htm('prc-resultado', '<div class="cartao largo"><div class="vazio">Nenhum item encontrado' + (r.filtro.desde ? ' desde ' + esc(r.filtro.desde) : '') + '. Tente menos palavras ou outra grafia (ex.: "PNEU" em vez de "PNEUS").</div></div>'); return; }
@@ -7350,7 +7371,7 @@ function desenharPrecosOS() {
         <thead><tr><th>Peça</th><th>Tipo</th><th class="num">Vezes</th><th class="num">Menor</th><th class="num">Mediano</th><th class="num">Maior</th><th>Última</th></tr></thead>
         <tbody>${r.resumo.map(g => `<tr><td>${esc(g.peca)}${g.un ? ` <small style="color:var(--tinta-suave)">(${esc(g.un)})</small>` : ''}</td><td>${esc(g.tipoPeca || '—')}</td>
           <td class="num">${fmtInt(g.qtd)}</td><td class="num">${fmtMoeda(g.minimo)}</td><td class="num forte">${fmtMoeda(g.mediana)}</td><td class="num">${fmtMoeda(g.maximo)}</td>
-          <td>${fmtMoeda(g.ultimoValor)} <small style="color:var(--tinta-suave)">em ${esc(g.ultima || '—')} · <a class="link-btn" style="padding:0" onclick="abrirDetalheOS('${escAttr(g.ultimaOs)}')">OS ${esc(g.ultimaOs)}</a></small> ${pdfLinkHtml(g.ultimaOs)}</td></tr>`).join('')}</tbody>
+          <td>${fmtMoeda(g.ultimoValor)} <small style="color:var(--tinta-suave)">em ${esc(g.ultima || '—')} · <a class="link-btn" style="padding:0" onclick="abrirDetalheOS('${escAttr(g.ultimaOs)}')">OS ${esc(g.ultimaOs)}</a></small> ${pdfOSHtml(g.ultimaOs, g.ultimaPdf)}</td></tr>`).join('')}</tbody>
       </table></div></div>` : ''}
     <div class="cartao largo">
       <div class="cartao-cab"><h3>Itens</h3><small>${fmtInt(r.linhas.length)} linha(s)</small></div>
@@ -7359,7 +7380,7 @@ function desenharPrecosOS() {
           <th class="num">Qtd</th><th class="num">Unit.</th><th class="num">Peça</th><th class="num">Mão de obra</th><th class="num">Total</th><th>Oficina</th></tr></thead>
         <tbody>${r.linhas.map(x => `<tr>
           <td><a class="link-btn" style="padding:0; font-family:var(--fonte-dados)" onclick="abrirDetalheOS('${escAttr(x.os)}')">${esc(x.os)}</a>
-            ${pdfsDaOS(x.os).length ? `<div>${pdfLinkHtml(x.os)}</div>` : ''}</td>
+            ${pdfOSHtml(x.os, x.pdf)}</td>
           <td class="data-curta">${esc(x.data || '—')}</td>
           <td style="font-family:var(--fonte-dados)">${esc(x.placa)}</td><td>${esc(x.modelo)}</td>
           <td>${esc(x.peca || x.servico)}${x.peca && x.servico ? `<div class="vinculo">${esc(x.servico)}</div>` : ''}</td>

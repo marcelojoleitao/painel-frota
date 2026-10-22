@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.91.1';
+const CODIGO_VERSAO = '2.91.2';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -8114,6 +8114,23 @@ function detalharOS(token, os) {
         }
       }
     }
+    // Itens com as posições fixas do relatório de detalhamento (F a AD) — o que o
+    // modal mostra em primeiro plano; a tabela completa acima fica como detalhe.
+    const itensFixos = [];
+    try {
+      const det = _abaDetalhamento_();
+      if (det && det.getLastRow() >= 4) {
+        det.getRange(4, 1, det.getLastRow() - 3, 30).getValues().forEach(l => {
+          if (String(l[11] === null ? '' : l[11]).replace(/\.0+$/, '').replace(/\D/g, '') !== alvo) return;
+          const n = x => _num_(x) || 0;
+          itensFixos.push({ grupo: String(l[13] || '').trim(), peca: String(l[14] || '').trim(), un: String(l[15] || '').trim(),
+            tipoPeca: String(l[16] || '').trim(), servico: String(l[17] || '').trim(), tipoManut: String(l[18] || '').trim(),
+            qtdP: n(l[21]), unitP: n(l[22]), totP: n(l[23]), qtdM: n(l[24]), unitM: n(l[25]), totM: n(l[26]), total: n(l[27]),
+            placa: String(l[5] || '').trim(), modelo: String(l[6] || '').trim() });
+        });
+      }
+    } catch (e) { Logger.log('Itens fixos da OS: ' + e); }
+
     // resumo da OS, pelo OrçamentosDB
     let resumo = null;
     try {
@@ -8141,7 +8158,7 @@ function detalharOS(token, os) {
       }
     } catch (e) { Logger.log('Resumo da OS: ' + e); }
 
-    return { ok: true, os: alvo, itens: itens, colunas: cabecalho, resumo: resumo,
+    return { ok: true, os: alvo, itens: itens, colunas: cabecalho, resumo: resumo, itensFixos: itensFixos,
       // x.os é uma lista: o nome do arquivo pode trazer mais de um número (OS, NF…)
       pdf: (_indexarPdfsOS_() || []).filter(x => (x.os || []).map(o => String(o).replace(/\D/g, '')).indexOf(alvo) >= 0).map(x => x.url)[0] || '' };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
@@ -10947,6 +10964,16 @@ function pesquisarPrecosOS(token, filtro) {
         minimo: Math.min.apply(null, g.valores), mediana: Math.round(mediana(g.valores) * 100) / 100, maximo: Math.max.apply(null, g.valores),
         ultima: g.ultima, ultimaOs: g.ultimaOs, ultimoValor: g.ultimoValor };
     }).sort((a, b) => b.qtd - a.qtd || a.peca.localeCompare(b.peca));
+
+    // PDF de cada OS, pelo índice da pasta de PDFs (o nome pode ter vários números)
+    const pdfPorOs = {};
+    try {
+      (_indexarPdfsOS_() || []).forEach(f => (f.os || []).forEach(o => {
+        const k = String(o).replace(/\D/g, ''); if (k && !pdfPorOs[k]) pdfPorOs[k] = f.url;
+      }));
+    } catch (e) { Logger.log('PDFs na pesquisa de preços: ' + e); }
+    linhas.forEach(x => { x.pdf = pdfPorOs[x.os] || ''; });
+    resumo.forEach(g => { g.ultimaPdf = pdfPorOs[g.ultimaOs] || ''; });
 
     const LIMITE = 600;
     return { ok: true, total: linhas.length, linhas: linhas.slice(0, LIMITE), cortado: linhas.length > LIMITE,
