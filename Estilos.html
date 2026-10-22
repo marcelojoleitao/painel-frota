@@ -965,4 +965,20 @@ table.tabela td.acoes { text-align: right; }
 
 /* situação de OS sem nenhuma OS no momento: continua disponível, mas apagada */
 .os-nivel .subaba.zerada:not(.ativa) { opacity: .5; }
+
+/* Cabeçalho em duas camadas: marca e (usuário, versão, botões) na mesma linha,
+   abas embaixo. (Numa linha só as abas não cabem nem em 1920 px.) */
+.topo {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "marca . direita" "abas abas abas";
+  align-items: center; gap: 2px 14px; padding: 4px 16px 0;
+}
+.topo-marca { grid-area: marca; }
+.topo-direita { grid-area: direita; margin-left: 0; }
+.topo-abas { grid-area: abas; margin-left: 0; padding-bottom: 2px; }
+/* com as abas na linha de baixo, sobra espaço para o subtítulo da marca */
+@media (min-width: 901px) { .topo-sub { display: block; } }
+@media (max-width: 900px) {
+  .topo { grid-template-columns: auto minmax(0, 1fr) auto; }
+}
 </style>

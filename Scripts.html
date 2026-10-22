@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.91.2';
+const VERSAO_PAINEL = '2.91.3';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -909,7 +909,16 @@ function toast(msg, demorado) {
    ============================================================ */
 function debounce(fn, ms) { let t; return function () { clearTimeout(t); t = setTimeout(fn, ms); }; }
 
+/** Mantém --altura-topo igual à altura real do cabeçalho (os filtros e a gaveta se posicionam por ela). */
+function acompanharAlturaTopo() {
+  const topo = document.querySelector('.topo'); if (!topo) return;
+  const aplicar = () => { const h = Math.round(topo.getBoundingClientRect().height); if (h) document.documentElement.style.setProperty('--altura-topo', h + 'px'); };
+  aplicar();
+  try { new ResizeObserver(aplicar).observe(topo); } catch (e) { window.addEventListener('resize', aplicar); }
+}
+
 function iniciarApp() {
+  acompanharAlturaTopo();
   document.querySelectorAll('#abas .topo-aba').forEach(b => b.addEventListener('click', () => mudarAba(b.dataset.aba)));
   document.querySelectorAll('#subabas-gestao .subaba').forEach(b => b.addEventListener('click', () => {
     ESTADO.subGestao = b.dataset.sub;
