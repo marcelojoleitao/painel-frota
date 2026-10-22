@@ -72,7 +72,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.90.6';
+const VERSAO_PAINEL = '2.91.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -1538,6 +1538,7 @@ function renderOS(lista) {
     document.querySelectorAll('#subabas-os .subaba').forEach(b => b.classList.toggle('ativa', b.dataset.sub === ESTADO.subOS));
     if (ESTADO.subOS === 'aceites') renderAceites(lista);
     else if (ESTADO.subOS === 'acompanhar') renderOSAcompanhar(lista);
+    else if (ESTADO.subOS === 'precos') renderPrecosOS(c);
     else {
       c.innerHTML = '<div id="pano-busca-area"></div><div class="kpis" id="kpis-os"></div><div class="grade" id="graficos-os"></div>';
       renderOSPanorama(lista);
@@ -7279,4 +7280,91 @@ function excluirDocArq(d) {
   if (run) run.excluirDocumentoArquivo(ESTADO.token, d.id);
 }
 
+
+/* ============================================================
+   PREÇOS DE REFERÊNCIA — itens de OS anteriores (DetalhamentoDB)
+   ============================================================ */
+function renderPrecosOS(c) {
+  const f = ESTADO.filtroPrecos || (ESTADO.filtroPrecos = { veiculo: '', item: '', desde: '' });
+  c.innerHTML = `
+    <div class="cartao largo" style="margin-bottom:12px">
+      <div class="cartao-cab"><h3>Preços de referência</h3><small>itens já lançados em OS anteriores</small></div>
+      <div class="os-barra-acoes" style="flex-wrap:wrap">
+        <div class="form-campo" style="min-width:200px; flex:1"><label>Veículo — modelo, placa ou família</label>
+          <input type="search" id="prc-veic" placeholder="ex.: CRUZE" value="${escAttr(f.veiculo)}"></div>
+        <div class="form-campo" style="min-width:200px; flex:1"><label>Item — peça ou serviço</label>
+          <input type="search" id="prc-item" placeholder="ex.: PNEU" value="${escAttr(f.item)}"></div>
+        <div class="form-campo" style="width:130px"><label>Desde (opcional)</label>
+          <input type="text" id="prc-desde" placeholder="MM/AAAA" value="${escAttr(f.desde)}"></div>
+        <div style="align-self:flex-end; display:flex; gap:6px">
+          <button class="btn amarelo" id="prc-buscar">Buscar</button>
+          <button class="btn claro" id="prc-csv" ${ESTADO.precosOS && ESTADO.precosOS.linhas.length ? '' : 'disabled'}>⤓ CSV</button>
+        </div>
+      </div>
+      <div class="cartao-dica">Cada palavra precisa aparecer: "CRUZE" + "PNEU DIANTEIRO" traz só itens com pneu e dianteiro, de Cruze.
+        A busca no item olha grupo, peça, serviço e tipo de peça. Clique na OS para ver todos os itens dela.</div>
+    </div>
+    <div id="prc-resultado">${ESTADO.precosOS ? '' : '<div class="cartao largo"><div class="vazio">Informe o veículo e/ou o item e clique em Buscar.</div></div>'}</div>`;
+  const buscar = () => {
+    f.veiculo = val('prc-veic').trim(); f.item = val('prc-item').trim(); f.desde = val('prc-desde').trim();
+    if (!f.veiculo && !f.item) { toast('Informe o veículo e/ou o item.'); return; }
+    const btn = el('prc-buscar'); btn.disabled = true; btn.textContent = 'Buscando…';
+    htm('prc-resultado', '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Varrendo o detalhamento das OS…</div></div>');
+    const run = servidor('pesquisarPrecosOS',
+      r => {
+        btn.disabled = false; btn.textContent = 'Buscar';
+        if (!r || !r.ok) { htm('prc-resultado', '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha na busca.') + '</div></div>'); return; }
+        ESTADO.precosOS = r; desenharPrecosOS();
+        const csv = el('prc-csv'); if (csv) csv.disabled = !r.linhas.length;
+      },
+      e => { btn.disabled = false; btn.textContent = 'Buscar'; htm('prc-resultado', '<div class="cartao largo"><div class="vazio">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</div></div>'); });
+    if (run) run.pesquisarPrecosOS(ESTADO.token, { veiculo: f.veiculo, item: f.item, desde: f.desde });
+  };
+  ouvir('prc-buscar', 'click', buscar);
+  ['prc-veic', 'prc-item', 'prc-desde'].forEach(id => { const i = el(id); if (i) i.addEventListener('keydown', e => { if (e.key === 'Enter') buscar(); }); });
+  ouvir('prc-csv', 'click', () => {
+    const r = ESTADO.precosOS; if (!r) return;
+    baixarCsv('precos_referencia_' + new Date().toISOString().substring(0, 10) + '.csv',
+      ['OS', 'Conclusão', 'Competência', 'Placa', 'Modelo', 'Grupo', 'Peça', 'Tipo de peça', 'Un.', 'Qtd peça', 'Valor unit. peça', 'Total peça',
+       'Serviço', 'Qtd MO', 'Valor unit. MO', 'Total MO', 'Total', 'Oficina'],
+      r.linhas.map(x => [x.os, x.data, x.comp, x.placa, x.modelo, x.grupo, x.peca, x.tipoPeca, x.un, fmtDec(x.qtdP), fmtDec(x.unitP), fmtDec(x.totP),
+        x.servico, fmtDec(x.qtdM), fmtDec(x.unitM), fmtDec(x.totM), fmtDec(x.total), x.oficina]));
+  });
+  if (ESTADO.precosOS) desenharPrecosOS();
+}
+
+function desenharPrecosOS() {
+  const r = ESTADO.precosOS; if (!r) return;
+  if (!r.linhas.length) { htm('prc-resultado', '<div class="cartao largo"><div class="vazio">Nenhum item encontrado' + (r.filtro.desde ? ' desde ' + esc(r.filtro.desde) : '') + '. Tente menos palavras ou outra grafia (ex.: "PNEU" em vez de "PNEUS").</div></div>'); return; }
+  const moeda = v => v ? fmtMoeda(v) : '—';
+  htm('prc-resultado', `
+    <div class="kpis">
+      ${kpi('Itens encontrados', fmtInt(r.total), r.cortado ? 'mostrando os ' + r.linhas.length + ' mais recentes' : 'mais recentes primeiro', '', null, true)}
+      ${kpi('Ordens de serviço', fmtInt(r.os), 'distintas', '', null, true)}
+      ${kpi('Peças diferentes', fmtInt(r.resumo.length), 'com valor unitário', 'ciano', null, true)}
+    </div>
+    ${r.resumo.length ? `<div class="cartao largo" style="margin-bottom:12px">
+      <div class="cartao-cab"><h3>Faixa de preço por peça</h3><small>valor unitário da peça</small></div>
+      <div class="tabela-rol" style="max-height:340px"><table class="tabela-simples" style="width:100%">
+        <thead><tr><th>Peça</th><th>Tipo</th><th class="num">Vezes</th><th class="num">Menor</th><th class="num">Mediano</th><th class="num">Maior</th><th>Última</th></tr></thead>
+        <tbody>${r.resumo.map(g => `<tr><td>${esc(g.peca)}${g.un ? ` <small style="color:var(--tinta-suave)">(${esc(g.un)})</small>` : ''}</td><td>${esc(g.tipoPeca || '—')}</td>
+          <td class="num">${fmtInt(g.qtd)}</td><td class="num">${fmtMoeda(g.minimo)}</td><td class="num forte">${fmtMoeda(g.mediana)}</td><td class="num">${fmtMoeda(g.maximo)}</td>
+          <td>${fmtMoeda(g.ultimoValor)} <small style="color:var(--tinta-suave)">em ${esc(g.ultima || '—')} · <a class="link-btn" style="padding:0" onclick="abrirDetalheOS('${escAttr(g.ultimaOs)}')">OS ${esc(g.ultimaOs)}</a></small></td></tr>`).join('')}</tbody>
+      </table></div></div>` : ''}
+    <div class="cartao largo">
+      <div class="cartao-cab"><h3>Itens</h3><small>${fmtInt(r.linhas.length)} linha(s)</small></div>
+      <div class="tabela-rol" style="max-height:600px"><table class="tabela-simples" style="width:100%">
+        <thead><tr><th>OS</th><th>Conclusão</th><th>Placa</th><th>Modelo</th><th>Peça / serviço</th><th>Tipo</th>
+          <th class="num">Qtd</th><th class="num">Unit.</th><th class="num">Peça</th><th class="num">Mão de obra</th><th class="num">Total</th><th>Oficina</th></tr></thead>
+        <tbody>${r.linhas.map(x => `<tr>
+          <td><a class="link-btn" style="padding:0; font-family:var(--fonte-dados)" onclick="abrirDetalheOS('${escAttr(x.os)}')">${esc(x.os)}</a></td>
+          <td class="data-curta">${esc(x.data || '—')}</td>
+          <td style="font-family:var(--fonte-dados)">${esc(x.placa)}</td><td>${esc(x.modelo)}</td>
+          <td>${esc(x.peca || x.servico)}${x.peca && x.servico ? `<div class="vinculo">${esc(x.servico)}</div>` : ''}</td>
+          <td>${esc(x.tipoPeca || x.tipoManut || '')}</td>
+          <td class="num">${x.qtdP ? fmtDec(x.qtdP).replace(/,00$/, '') : '—'}</td>
+          <td class="num">${moeda(x.unitP)}</td><td class="num">${moeda(x.totP)}</td><td class="num">${moeda(x.totM)}</td>
+          <td class="num forte">${moeda(x.total)}</td><td>${esc(x.oficina || '—')}</td></tr>`).join('')}</tbody>
+      </table></div></div>`);
+}
 </script>

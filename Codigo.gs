@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.90.6';
+const CODIGO_VERSAO = '2.91.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -10842,4 +10842,100 @@ function _restaurarBases_(aplicar) {
   if (aplicar) { SpreadsheetApp.flush(); limparCache(); }
   Logger.log('');
   Logger.log(aplicar ? 'Pronto. Agora rode aplicarConsertoFormulas e reimporte orçamentos e aceites de 09/2026.' : 'Fim da simulação.');
+}
+
+
+/* ============================================================
+   PREÇOS DE REFERÊNCIA — busca de itens em OS anteriores
+   Para usar uma OS já paga como referência de preço numa OS nova:
+   "CRUZE" + "PNEU" devolve cada item de pneu lançado em OS de Cruze,
+   com quantidade, valor unitário, oficina e data, e um resumo por peça
+   (menor, mediano e maior valor unitário).
+   Fonte: DetalhamentoDB (itens) + OrçamentosDB (oficina da OS).
+   ============================================================ */
+function pesquisarPrecosOS(token, filtro) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  filtro = filtro || {};
+  const normT = t => _removerAcentos_(String(t || '').toUpperCase()).replace(/\s+/g, ' ').trim();
+  const termosV = normT(filtro.veiculo).split(' ').filter(x => x.length >= 2);
+  const termosI = normT(filtro.item).split(' ').filter(x => x.length >= 2);
+  if (!termosV.length && !termosI.length) return { ok: false, erro: 'Informe o veículo (modelo ou placa) e/ou o item (peça ou serviço).' };
+  let desde = '';
+  if (filtro.desde) {
+    try { desde = _formatarCompetencia_(filtro.desde, false); } catch (e) { return { ok: false, erro: e.message }; }
+  }
+  const chaveComp = c => c ? c.substring(3) + c.substring(0, 2) : '';
+  try {
+    const aba = _abaDetalhamento_();
+    if (!aba || aba.getLastRow() < 4) return { ok: false, erro: 'DetalhamentoDB vazio ou não encontrado.' };
+    const v = aba.getRange(1, 1, aba.getLastRow(), 30).getValues();
+    // posições do relatório de detalhamento (cabeçalho em duas linhas: 2 e 3)
+    const C = { placa: 5, modelo: 6, fabr: 7, familia: 10, os: 11, conclusao: 12, grupo: 13, peca: 14, un: 15,
+                tipoPeca: 16, servico: 17, tipoManut: 18, qtdP: 21, unitP: 22, totP: 23, qtdM: 24, unitM: 25, totM: 26, total: 27, comp: 29 };
+    const cab2 = v[1].map(c => normT(c)), cab3 = v[2].map(c => normT(c));
+    if (cab2[C.placa] !== 'PLACA' || cab2[C.peca] !== 'PECA' || !/VALOR UNIT/.test(cab3[C.unitP])) {
+      return { ok: false, erro: 'O cabeçalho do DetalhamentoDB não está no formato esperado (Placa em F, Peça em O, Valor Unit. em W).' };
+    }
+
+    // oficina pela OS
+    const oficina = {};
+    try {
+      const orc = _ssManut_().getSheetByName(CONFIG.ABA_ORCAMENTOS);
+      if (orc && orc.getLastRow() > 3) {
+        orc.getRange(4, 1, orc.getLastRow() - 3, 6).getValues().forEach(l => {
+          const os = String(l[0] === null ? '' : l[0]).replace(/\.0+$/, '').replace(/\D/g, '');
+          if (os && l[5]) oficina[os] = String(l[5]).trim();
+        });
+      }
+    } catch (e) { Logger.log('Oficina na pesquisa de preços: ' + e); }
+
+    const num = x => _num_(x) || 0;
+    const linhas = [];
+    for (let r = 3; r < v.length; r++) {
+      const l = v[r];
+      const pecaTxt = String(l[C.peca] || '').trim(), servTxt = String(l[C.servico] || '').trim();
+      if (!pecaTxt && !servTxt) continue;
+      const alvoV = normT([l[C.placa], l[C.modelo], l[C.fabr], l[C.familia]].join(' '));
+      if (termosV.some(t => alvoV.indexOf(t) < 0)) continue;
+      const alvoI = normT([l[C.grupo], pecaTxt, servTxt, l[C.tipoPeca], l[C.tipoManut]].join(' '));
+      if (termosI.some(t => alvoI.indexOf(t) < 0)) continue;
+      const data = Object.prototype.toString.call(l[C.conclusao]) === '[object Date]' && !isNaN(l[C.conclusao]) ? l[C.conclusao] : null;
+      let comp = String(l[C.comp] || '').trim();
+      if (!comp && data) comp = ('0' + (data.getMonth() + 1)).slice(-2) + '/' + data.getFullYear();
+      else if (comp) { try { comp = _formatarCompetencia_(comp, false); } catch (e) {} }
+      if (desde && comp && chaveComp(comp) < chaveComp(desde)) continue;
+      const os = String(l[C.os] === null ? '' : l[C.os]).replace(/\.0+$/, '').replace(/\D/g, '');
+      linhas.push({
+        os: os, data: data ? Utilities.formatDate(data, CONFIG.FUSO, 'dd/MM/yyyy') : _dataBR_(l[C.conclusao]),
+        ordem: data ? data.getTime() : 0, comp: comp,
+        placa: String(l[C.placa] || '').trim(), modelo: String(l[C.modelo] || '').trim(), fabricante: String(l[C.fabr] || '').trim(),
+        grupo: String(l[C.grupo] || '').trim(), peca: pecaTxt, un: String(l[C.un] || '').trim(),
+        tipoPeca: String(l[C.tipoPeca] || '').trim(), servico: servTxt, tipoManut: String(l[C.tipoManut] || '').trim(),
+        qtdP: num(l[C.qtdP]), unitP: num(l[C.unitP]), totP: num(l[C.totP]),
+        qtdM: num(l[C.qtdM]), unitM: num(l[C.unitM]), totM: num(l[C.totM]), total: num(l[C.total]),
+        oficina: oficina[os] || ''
+      });
+    }
+    linhas.sort((a, b) => b.ordem - a.ordem);
+
+    // resumo por peça (e tipo de peça): faixa do valor unitário
+    const grupos = {};
+    linhas.forEach(x => {
+      if (!(x.unitP > 0)) return;
+      const k = normT(x.peca) + '|' + normT(x.tipoPeca);
+      const g = grupos[k] || (grupos[k] = { peca: x.peca, tipoPeca: x.tipoPeca, un: x.un, valores: [], ultima: x.data, ultimaOs: x.os, ultimoValor: x.unitP });
+      g.valores.push(x.unitP);
+    });
+    const mediana = arr => { const s = arr.slice().sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+    const resumo = Object.keys(grupos).map(k => {
+      const g = grupos[k];
+      return { peca: g.peca, tipoPeca: g.tipoPeca, un: g.un, qtd: g.valores.length,
+        minimo: Math.min.apply(null, g.valores), mediana: Math.round(mediana(g.valores) * 100) / 100, maximo: Math.max.apply(null, g.valores),
+        ultima: g.ultima, ultimaOs: g.ultimaOs, ultimoValor: g.ultimoValor };
+    }).sort((a, b) => b.qtd - a.qtd || a.peca.localeCompare(b.peca));
+
+    const LIMITE = 600;
+    return { ok: true, total: linhas.length, linhas: linhas.slice(0, LIMITE), cortado: linhas.length > LIMITE,
+             resumo: resumo, os: new Set(linhas.map(x => x.os)).size, filtro: { veiculo: filtro.veiculo || '', item: filtro.item || '', desde: desde } };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
