@@ -74,7 +74,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.91.4';
+const VERSAO_PAINEL = '2.92.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -3768,22 +3768,27 @@ function renderAcompanhamentoMultas(c) {
         <div class="busca" style="max-width:300px"><input id="multa-busca" type="search" placeholder="AI, placa, processo, protocolo, órgão…" value="${escAttr(f.busca)}"></div>
         ${(f.status || f.orgao || f.busca || f.especial) ? '<button class="btn claro" id="multa-limpar">Limpar filtros</button>' : ''}
         <div style="flex:1"></div>
+        ${(() => { const n = (ESTADO.multasSel || new Set()).size; return `<button class="btn ${n ? 'amarelo' : 'claro'}" id="btn-defesas-lote" ${n ? '' : 'disabled'}
+            title="Gera as defesas das multas marcadas, uma após a outra">📄 Gerar defesas${n ? ' (' + n + ')' : ''}</button>
+          ${n ? '<button class="btn claro" id="btn-limpar-sel">Desmarcar</button>' : ''}`; })()}
         <button class="btn claro" id="btn-exportar-multas" title="Baixar a lista exibida em CSV">⤓ Exportar</button>
         <button class="btn amarelo" id="btn-nova-multa">+ Nova multa</button>
       </div>
+      <div id="defesas-lote-status"></div>
       <div class="tabela-rol os-rol" style="max-height:640px">
         <table class="tabela-multas">
           <colgroup>
-            <col style="width:3%"><col style="width:7%"><col style="width:11%"><col style="width:9%"><col style="width:9%">
+            <col style="width:3%"><col style="width:3%"><col style="width:6%"><col style="width:11%"><col style="width:9%"><col style="width:9%">
             <col style="width:12%"><col style="width:11%"><col style="width:9%"><col style="width:13%"><col style="width:9%"><col style="width:7%">
           </colgroup>
           <thead><tr>
-${cabecalho('linha', '#')}${cabecalho('tipo', 'Tipo')}${cabecalho('ai', 'AI')}${cabecalho('placa', 'Placa')}${cabecalho('orgao', 'Órgão')}
+<th title="Marcar todas as exibidas"><input type="checkbox" id="multa-sel-todas" ${filtradas.slice(0, 400).length && filtradas.slice(0, 400).every(m => (ESTADO.multasSel || new Set()).has(m.linha)) ? 'checked' : ''}></th>${cabecalho('linha', '#')}${cabecalho('tipo', 'Tipo')}${cabecalho('ai', 'AI')}${cabecalho('placa', 'Placa')}${cabecalho('orgao', 'Órgão')}
             ${cabecalho('processo', 'Processo')}${cabecalho('enquadramento', 'Enquadramento')}
 ${cabecalho('protocolo', 'Protocolo')}<th>Observações</th>${cabecalho('status', 'Status')}<th>Defesa</th>
           </tr></thead>
           <tbody>
           ${filtradas.slice(0, 400).map((m, ord) => `<tr class="${m.cobrada ? 'cobrada' : ''}">
+            <td><input type="checkbox" data-sel-multa="${m.linha}" ${(ESTADO.multasSel || new Set()).has(m.linha) ? 'checked' : ''}></td>
             <td style="color:var(--tinta-suave); font-size:11px">${m.linha}</td>
             <td><span class="tag-tipo ${String(m.tipo || '').toLowerCase()}">${esc(m.tipo || '—')}</span>
               <div class="vinculo">${esc(dataBR(m.dataInfracao))}</div></td>
@@ -3808,7 +3813,7 @@ ${cabecalho('protocolo', 'Protocolo')}<th>Observações</th>${cabecalho('status'
             <td>${m.linkDefesa ? `<a class="pdf-link" href="${escAttr(m.linkDefesa)}" target="_blank" rel="noopener">abrir</a>` : ''}
               <div style="margin-top:3px"><button class="link-btn" data-defesa="${m.linha}">${m.linkDefesa ? 'refazer' : 'gerar defesa'}</button></div>
               <div><button class="link-btn" data-editar="${m.linha}">editar</button></div></td>
-          </tr>`).join('') || '<tr><td colspan="11"><div class="vazio">Nenhum registro com esses filtros</div></td></tr>'}
+          </tr>`).join('') || '<tr><td colspan="12"><div class="vazio">Nenhum registro com esses filtros</div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -3854,6 +3859,20 @@ ${cabecalho('protocolo', 'Protocolo')}<th>Observações</th>${cabecalho('status'
       m.enquadramento, m.protocolo, m.status, dataBR(m.dataDefesa), m.cobrada ? 'sim' : 'não', m.observacoes || ''])));
   c.querySelectorAll('button[data-editar]').forEach(b => b.addEventListener('click', () => abrirFormMulta(parseInt(b.dataset.editar, 10))));
   c.querySelectorAll('button[data-defesa]').forEach(b => b.addEventListener('click', () => gerarDefesa(parseInt(b.dataset.defesa, 10), b)));
+  // seleção para gerar várias defesas
+  ESTADO.multasSel = ESTADO.multasSel || new Set();
+  c.querySelectorAll('input[data-sel-multa]').forEach(cb => cb.addEventListener('change', () => {
+    const l = parseInt(cb.dataset.selMulta, 10);
+    if (cb.checked) ESTADO.multasSel.add(l); else ESTADO.multasSel.delete(l);
+    atualizarBotaoLote();
+  }));
+  ouvir('multa-sel-todas', 'change', e => {
+    filtradas.slice(0, 400).forEach(m => { if (e.target.checked) ESTADO.multasSel.add(m.linha); else ESTADO.multasSel.delete(m.linha); });
+    c.querySelectorAll('input[data-sel-multa]').forEach(cb => { cb.checked = e.target.checked; });
+    atualizarBotaoLote();
+  });
+  ouvir('btn-limpar-sel', 'click', () => { ESTADO.multasSel.clear(); renderMultas(); });
+  ouvir('btn-defesas-lote', 'click', gerarDefesasLote);
   c.querySelectorAll('select[data-status]').forEach(sel => sel.addEventListener('change', () => alterarStatusMulta(parseInt(sel.dataset.status, 10), sel)));
   ajustarKpis();
 }
@@ -3963,6 +3982,65 @@ function abrirFormMulta(linha) {
       e => { btn.disabled = false; btn.textContent = 'Salvar'; toast('Erro: ' + (e && e.message ? e.message : e), true); });
     if (run) run.salvarMulta(ESTADO.token, linha || 0, campos);
   });
+}
+
+/** Atualiza o rótulo do botão do lote sem redesenhar a tabela. */
+function atualizarBotaoLote() {
+  const n = ESTADO.multasSel ? ESTADO.multasSel.size : 0;
+  const b = el('btn-defesas-lote'); if (!b) return;
+  b.disabled = !n; b.className = 'btn ' + (n ? 'amarelo' : 'claro');
+  b.textContent = '📄 Gerar defesas' + (n ? ' (' + n + ')' : '');
+}
+
+/**
+ * Gera as defesas marcadas, uma de cada vez — cada uma é uma chamada própria
+ * ao servidor, para nenhuma esbarrar no limite de tempo do Apps Script e para
+ * uma falha não derrubar as outras. Os links ficam listados no fim.
+ */
+function gerarDefesasLote() {
+  const linhas = Array.from(ESTADO.multasSel || []).sort((a, b) => a - b);
+  if (!linhas.length) return;
+  const refazer = linhas.filter(l => { const m = ESTADO.multas.multas.find(x => x.linha === l); return m && m.linkDefesa; }).length;
+  if (!confirm('Gerar ' + linhas.length + ' defesa(s)?' + (refazer ? '\n\n' + refazer + ' já têm defesa gerada e serão refeitas (a anterior vai para a lixeira).' : ''))) return;
+  const btn = el('btn-defesas-lote'); if (btn) btn.disabled = true;
+  const caixa = el('defesas-lote-status');
+  const feitos = [], falhas = [];
+  const pintar = (atual) => {
+    if (!caixa) return;
+    caixa.innerHTML = `<div class="cartao-dica" style="margin:8px 0; border-left:3px solid var(--azul); padding-left:8px">
+      ${atual ? `Gerando ${feitos.length + falhas.length + 1} de ${linhas.length} — linha ${atual}…` : `<b>Concluído:</b> ${feitos.length} gerada(s)${falhas.length ? `, <b style="color:var(--vermelho)">${falhas.length} com falha</b>` : ''}.`}
+      ${feitos.length ? `<div style="margin-top:4px; display:flex; flex-wrap:wrap; gap:4px 10px">${feitos.map(f =>
+        `<a class="pdf-link" href="${escAttr(f.url)}" target="_blank" rel="noopener">${icoPdf()} ${esc(f.ai || 'linha ' + f.linha)}</a>`).join('')}</div>` : ''}
+      ${falhas.length ? `<ul style="margin:4px 0 0 18px">${falhas.map(f => `<li>linha ${f.linha}${f.ai ? ' (' + esc(f.ai) + ')' : ''}: ${esc(f.erro)}</li>`).join('')}</ul>` : ''}</div>`;
+  };
+  const proxima = i => {
+    if (i >= linhas.length) {
+      pintar(null);
+      falhas.length ? toast(feitos.length + ' defesa(s) gerada(s), ' + falhas.length + ' com falha.', true) : toast(feitos.length + ' defesa(s) gerada(s).');
+      // mantém marcadas só as que falharam, para tentar de novo
+      ESTADO.multasSel = new Set(falhas.map(f => f.linha));
+      const resumo = caixa ? caixa.innerHTML : '';
+      renderMultas();
+      const nova = el('defesas-lote-status'); if (nova) nova.innerHTML = resumo;
+      return;
+    }
+    const linha = linhas[i];
+    const m = ESTADO.multas.multas.find(x => x.linha === linha) || {};
+    pintar(linha);
+    const run = servidor('gerarDefesaMulta',
+      r => {
+        if (!r || !r.ok) falhas.push({ linha: linha, ai: m.ai, erro: (r && r.erro) || 'falha sem mensagem' });
+        else {
+          feitos.push({ linha: linha, ai: m.ai, url: r.url });
+          m.linkDefesa = r.url; if (!m.dataDefesa) m.dataDefesa = new Date().toLocaleDateString('pt-BR');
+        }
+        proxima(i + 1);
+      },
+      e => { falhas.push({ linha: linha, ai: m.ai, erro: String(e && e.message ? e.message : e) }); proxima(i + 1); });
+    if (run) run.gerarDefesaMulta(ESTADO.token, linha);
+    else { falhas.push({ linha: linha, ai: m.ai, erro: 'função indisponível no servidor' }); proxima(i + 1); }
+  };
+  proxima(0);
 }
 
 function gerarDefesa(linha, botao) {
