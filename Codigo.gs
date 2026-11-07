@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.95.0';
+const CODIGO_VERSAO = '2.95.1';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4548,6 +4548,7 @@ function _htmlRelatorioAbast_(d, ini, fim, sessao, anterior, frotaAtiva) {
     '.kpis { display: table; width: 100%; table-layout: fixed; border-spacing: 5px 0; margin-bottom: 6px; }' +
     '.kpi { display: table-cell; background: #F6F8FC; border-left: 3px solid #0B2C5C; padding: 6px 8px; }' +
     '.kpi.alerta { border-left-color: #B23A2E; } .kpi.bom { border-left-color: #2F9E6B; }' +
+    '.kpi.total { background: #FFF6D6; border-left-color: #F2B705; } .kpi.total .v { font-size: 14pt; }' +
     '.kpi .r { font-size: 7pt; text-transform: uppercase; letter-spacing: .05em; color: #5A6576; }' +
     '.kpi .v { font-size: 12.5pt; font-weight: bold; color: #0B2C5C; white-space: nowrap; }' +
     '.kpi .s { font-size: 7pt; color: #5A6576; }' +
@@ -4575,8 +4576,14 @@ function _htmlRelatorioAbast_(d, ini, fim, sessao, anterior, frotaAtiva) {
     '<div class="per">' + periodo + '<br><span style="font-weight:normal; font-size:8pt; color:#5A6576">' + nMeses + ' competência(s)</span></div></div>' +
 
     '<h2>Panorama</h2>' +
+    // Conciliação com a nota fiscal: combustível + outras despesas = gasto total da competência
     '<div class="kpis">' +
-    kpi('Gasto total', _moedaBR_(d.valor), a ? variacao(d.valor, a.valor) : _moedaBR_(d.valor / nMeses) + ' por mês') +
+    kpi('Gasto com combustível', _moedaBR_(d.valor), _fmtInt_(d.registros) + ' abastecimento(s)' + (a ? ' · ' + variacao(d.valor, a.valor) : '')) +
+    kpi('Outras despesas', _moedaBR_(d.outros ? d.outros.valor : 0),
+      d.outros && d.outros.qtd ? _fmtInt_(d.outros.qtd) + ' transação(ões) de outros serviços' : 'nenhum outro serviço no período') +
+    kpi(nMeses > 1 ? 'Gasto total do período' : 'Gasto total da competência', _moedaBR_(d.valor + (d.outros ? d.outros.valor : 0)), 'combustível + outras despesas — valor que confere com a nota fiscal', 'total') +
+    '</div>' +
+    '<div class="kpis">' +
     kpi('Litros', _decBR_(d.litros), _decBR_(d.litros / nMeses) + ' por mês') +
     kpi('Km rodados', _fmtInt_(d.km), _fmtInt_(d.km / nMeses) + ' por mês') +
     kpi('Consumo médio', consumo(d.km, d.litros), 'km ÷ litros') +
@@ -4590,9 +4597,8 @@ function _htmlRelatorioAbast_(d, ini, fim, sessao, anterior, frotaAtiva) {
     kpi('Fora do Ceará', _fmtInt_(d.foraUf.qtd), _moedaBR_(d.foraUf.valor) + ' · ' + _decBR_(pct(d.foraUf.valor, d.valor)) + '%', d.foraUf.qtd ? 'alerta' : 'bom') +
     kpi('Glosa potencial (ANP)', _moedaBR_(d.glosaPotencial), d.itensGlosa + ' acima do teto', d.glosaPotencial ? 'alerta' : 'bom') +
     '</div>' +
-    (d.outros && d.outros.qtd ? '<p class="nota">Os números acima são só de <b>abastecimento</b>. Outros serviços pagos pelo cartão de combustível — ' +
-      _fmtInt_(d.outros.qtd) + ' transação(ões), ' + _moedaBR_(d.outros.valor) + ' — estão à parte, na seção <b>Outros serviços</b>. ' +
-      'Total do período: <b>' + _moedaBR_(d.valor + d.outros.valor) + '</b>.</p>' : '') +
+    (d.outros && d.outros.qtd ? '<p class="nota">Exceto pela primeira linha, os indicadores são só de <b>abastecimento</b>. As outras despesas pagas pelo cartão (' +
+      _fmtInt_(d.outros.qtd) + ' transação(ões), ' + _moedaBR_(d.outros.valor) + ') estão detalhadas na seção <b>Outros serviços</b>.</p>' : '') +
 
     '<h2>Evolução mensal</h2>' + colunas(meses, sMes, sKm, _moedaBR_, 'Gasto (R$)', 'Km rodados') +
 
