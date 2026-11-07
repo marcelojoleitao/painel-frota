@@ -74,7 +74,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.92.0';
+const VERSAO_PAINEL = '2.93.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -3421,6 +3421,33 @@ function desenharProcesso(c, r) {
           <div class="foto-data" id="proc-pecas-status"></div><div id="proc-pecas-result"></div>
         </div>`}
       </div>
+      ${r.tipo === 'Manutenção' ? `<div class="cartao">
+        <div class="cartao-cab"><h3>Arquivos para o processo</h3><small>tudo feito aqui, sem ferramenta externa • salvo na pasta do processo</small></div>
+        <div class="proc-rel">
+          <h4>Notas Fiscais das Oficinas (Consolidado)</h4>
+          <div class="cartao-dica" style="margin:0 0 6px">Escolha o ZIP baixado com as notas (ou os PDFs soltos). O painel abre o ZIP, junta os PDFs em um só,
+            em ordem de nome, e salva como <b>Notas Fiscais das Oficinas (Consolidado) ${esc(r.competencia.replace('/', '.'))}.pdf</b>.</div>
+          <label class="btn claro" style="cursor:pointer; display:inline-flex">Escolher ZIP ou PDFs
+            <input type="file" id="arq-notas" class="oculto" accept=".zip,.pdf,application/zip,application/pdf" multiple></label>
+          <span class="foto-data" id="arq-notas-nome" style="margin-left:8px"></span>
+          <div style="margin-top:6px"><button class="btn amarelo" id="btn-arq-notas" disabled>Juntar e salvar</button></div>
+          <div class="foto-data" id="arq-notas-status" style="margin-top:6px"></div>
+        </div>
+        <div class="proc-rel">
+          <h4>Relatório Ticket Hist. Negociações de OS</h4>
+          <div class="cartao-dica" style="margin:0 0 6px">Escolha o PDF baixado da Ticket. O painel comprime as imagens mantendo o texto;
+            se ainda ficar grande, passa para a compressão extrema (páginas viram imagem, como no "extremo" do iLovePDF).
+            Salva como <b>Relatório Ticket Hist. Negociações de OS ${esc(r.competencia.replace('/', '.'))}.pdf</b>.</div>
+          <label class="btn claro" style="cursor:pointer; display:inline-flex">Escolher PDF
+            <input type="file" id="arq-neg" class="oculto" accept=".pdf,application/pdf"></label>
+          <span class="foto-data" id="arq-neg-nome" style="margin-left:8px"></span>
+          <div style="margin-top:6px; display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+            <button class="btn amarelo" id="btn-arq-neg" disabled>Comprimir e salvar</button>
+            <label class="opcao" style="font-size:12.5px"><input type="checkbox" id="arq-neg-extrema"> já ir direto na extrema</label>
+          </div>
+          <div class="foto-data" id="arq-neg-status" style="margin-top:6px"></div>
+        </div>
+      </div>` : ''}
 
       <div class="cartao">
         <div class="cartao-cab"><h3>Documentos do processo</h3><small>gerados a partir dos modelos</small></div>
@@ -3483,6 +3510,7 @@ function desenharProcesso(c, r) {
   } else {
     ouvir('btn-proc-aceites', 'click', () => gerarAceites(r.competencia, { btn: 'btn-proc-aceites', status: 'proc-aceites-status', result: 'proc-aceites-result' }));
     ouvir('btn-proc-pecas', 'click', () => gerarPecas(r.competencia, { btn: 'btn-proc-pecas', status: 'proc-pecas-status', result: 'proc-pecas-result' }));
+    ligarArquivosProcesso(r.competencia);
   }
   ajustarKpis();
 }
@@ -7486,5 +7514,214 @@ function desenharPrecosOS() {
           <td class="num">${moeda(x.unitP)}</td><td class="num">${moeda(x.totP)}</td><td class="num">${moeda(x.totM)}</td>
           <td class="num forte">${moeda(x.total)}</td><td>${esc(x.oficina || '—')}</td></tr>`).join('')}</tbody>
       </table></div></div>`);
+}
+
+/* ============================================================
+   ARQUIVOS DO PROCESSO DE MANUTENÇÃO — juntar notas e comprimir relatório
+   Tudo no navegador (JSZip, pdf-lib, PDF.js); o servidor só grava o resultado.
+   ============================================================ */
+const LIBS_PDF = {
+  jszip:  ['https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js', 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js'],
+  pdflib: ['https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js', 'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js']
+};
+const _libsCarregadas = {};
+/** Carrega uma biblioteca (uma vez), tentando o endereço reserva se o primeiro falhar. */
+function carregarLib(nome, globalNome) {
+  if (window[globalNome]) return Promise.resolve(window[globalNome]);
+  if (_libsCarregadas[nome]) return _libsCarregadas[nome];
+  const urls = LIBS_PDF[nome];
+  _libsCarregadas[nome] = new Promise((ok, falha) => {
+    const tentar = i => {
+      if (i >= urls.length) { _libsCarregadas[nome] = null; falha(new Error('Não consegui carregar a biblioteca ' + nome + '.')); return; }
+      const sc = document.createElement('script');
+      sc.src = urls[i];
+      sc.onload = () => window[globalNome] ? ok(window[globalNome]) : tentar(i + 1);
+      sc.onerror = () => tentar(i + 1);
+      document.head.appendChild(sc);
+    };
+    tentar(0);
+  });
+  return _libsCarregadas[nome];
+}
+const tamanhoTxt = b => b >= 1048576 ? (b / 1048576).toFixed(1).replace('.', ',') + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
+function paraBase64(bytes) {
+  let bin = '';
+  const passo = 0x8000;
+  for (let i = 0; i < bytes.length; i += passo) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + passo));
+  return btoa(bin);
+}
+/** Envia o PDF pronto para o servidor gravar na pasta do processo. */
+function salvarPdfProcesso(competencia, qual, bytes, origem, statusId, btn) {
+  const st = el(statusId);
+  if (st) st.textContent = 'Gravando ' + tamanhoTxt(bytes.length) + ' no Drive…';
+  return new Promise(ok => {
+    const run = servidor('salvarArquivoProcesso',
+      r => {
+        if (btn) btn.disabled = false;
+        if (!r || !r.ok) { if (st) st.innerHTML = '<span style="color:var(--vermelho)">' + esc((r && r.erro) || 'Falha ao gravar.') + '</span>'; ok(false); return; }
+        if (st) st.innerHTML = `<a class="pdf-link" href="${escAttr(r.url)}" target="_blank" rel="noopener">${icoPdf()} ${esc(r.nome)}</a>
+          <span> • ${tamanhoTxt(r.tamanho)}${origem ? ' • ' + esc(origem) : ''}${r.substituidos ? ' • substituiu o anterior' : ''}</span>`;
+        toast('Salvo: ' + r.nome); ok(true);
+      },
+      e => { if (btn) btn.disabled = false; if (st) st.innerHTML = '<span style="color:var(--vermelho)">Erro: ' + esc(String(e && e.message ? e.message : e)) + '</span>'; ok(false); });
+    if (run) run.salvarArquivoProcesso(ESTADO.token, competencia, qual, { base64: paraBase64(bytes), origem: origem || '' });
+  });
+}
+
+function ligarArquivosProcesso(competencia) {
+  // ---- notas fiscais: ZIP (ou PDFs) → um PDF só
+  let escolhidosNotas = [];
+  ouvir('arq-notas', 'change', ev => {
+    escolhidosNotas = Array.from(ev.target.files || []);
+    txt('arq-notas-nome', escolhidosNotas.map(f => f.name + ' (' + tamanhoTxt(f.size) + ')').join(', '));
+    const b = el('btn-arq-notas'); if (b) b.disabled = !escolhidosNotas.length;
+  });
+  ouvir('btn-arq-notas', 'click', async () => {
+    const btn = el('btn-arq-notas'), st = el('arq-notas-status');
+    btn.disabled = true;
+    try {
+      st.textContent = 'Carregando as ferramentas de PDF…';
+      const PDFLib = await carregarLib('pdflib', 'PDFLib');
+      const pdfs = [];      // { nome, bytes }
+      for (const f of escolhidosNotas) {
+        if (/\.zip$/i.test(f.name) || /zip/.test(f.type)) {
+          const JSZip = await carregarLib('jszip', 'JSZip');
+          st.textContent = 'Abrindo ' + f.name + '…';
+          const zip = await JSZip.loadAsync(await f.arrayBuffer());
+          const entradas = Object.values(zip.files).filter(e => !e.dir && /\.pdf$/i.test(e.name) && !/__MACOSX/.test(e.name));
+          for (const e of entradas) pdfs.push({ nome: e.name.split('/').pop(), bytes: await e.async('uint8array') });
+        } else if (/\.pdf$/i.test(f.name)) {
+          pdfs.push({ nome: f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
+        }
+      }
+      if (!pdfs.length) throw new Error('Nenhum PDF encontrado no que foi escolhido.');
+      pdfs.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { numeric: true }));
+      const final = await PDFLib.PDFDocument.create();
+      const problemas = [];
+      let paginas = 0;
+      for (let i = 0; i < pdfs.length; i++) {
+        st.textContent = 'Juntando ' + (i + 1) + ' de ' + pdfs.length + ': ' + pdfs[i].nome;
+        try {
+          const doc = await PDFLib.PDFDocument.load(pdfs[i].bytes, { ignoreEncryption: true });
+          const copias = await final.copyPages(doc, doc.getPageIndices());
+          copias.forEach(pg => final.addPage(pg)); paginas += copias.length;
+        } catch (e) { problemas.push(pdfs[i].nome); }
+      }
+      if (!paginas) throw new Error('Nenhum dos PDFs pôde ser lido.');
+      const bytes = await final.save({ useObjectStreams: true });
+      const origem = pdfs.length + ' nota(s), ' + paginas + ' página(s)' + (problemas.length ? ' — NÃO entraram: ' + problemas.join(', ') : '');
+      if (problemas.length) toast(problemas.length + ' PDF(s) não puderam ser lidos e ficaram de fora.', true);
+      await salvarPdfProcesso(competencia, 'notas', bytes, origem, 'arq-notas-status', btn);
+    } catch (e) { btn.disabled = false; st.innerHTML = '<span style="color:var(--vermelho)">' + esc(e.message || String(e)) + '</span>'; }
+  });
+
+  // ---- histórico de negociações: comprimir
+  let escolhidoNeg = null;
+  ouvir('arq-neg', 'change', ev => {
+    escolhidoNeg = (ev.target.files || [])[0] || null;
+    txt('arq-neg-nome', escolhidoNeg ? escolhidoNeg.name + ' (' + tamanhoTxt(escolhidoNeg.size) + ')' : '');
+    const b = el('btn-arq-neg'); if (b) b.disabled = !escolhidoNeg;
+  });
+  ouvir('btn-arq-neg', 'click', async () => {
+    const btn = el('btn-arq-neg'), st = el('arq-neg-status');
+    btn.disabled = true;
+    try {
+      const original = new Uint8Array(await escolhidoNeg.arrayBuffer());
+      const extremaDireto = !!(el('arq-neg-extrema') || {}).checked;
+      const ALVO = 2 * 1048576;      // acima disso, parte para a extrema (o que o iLovePDF entregava: 1–2 MB)
+      let melhor = null, modo = '';
+      if (!extremaDireto) {
+        st.textContent = 'Comprimindo as imagens (o texto continua selecionável)…';
+        const leve = await comprimirImagensPdf(original, msg => { st.textContent = msg; });
+        melhor = leve; modo = 'imagens recomprimidas';
+      }
+      if (!melhor || melhor.length > ALVO) {
+        const extrema = await rasterizarPdf(original, msg => { st.textContent = msg; });
+        if (!melhor || extrema.length < melhor.length) { melhor = extrema; modo = 'compressão extrema (páginas como imagem)'; }
+      }
+      if (melhor.length >= original.length) { melhor = original; modo = 'sem ganho — mantido o original'; }
+      await salvarPdfProcesso(competencia, 'negociacoes', melhor,
+        tamanhoTxt(original.length) + ' → ' + tamanhoTxt(melhor.length) + ' (' + modo + ')', 'arq-neg-status', btn);
+    } catch (e) { btn.disabled = false; st.innerHTML = '<span style="color:var(--vermelho)">' + esc(e.message || String(e)) + '</span>'; }
+  });
+}
+
+/**
+ * Compressão que preserva o texto: cada imagem JPEG grande dentro do PDF é
+ * reduzida (lado maior até 1600 px) e regravada com qualidade menor. Imagens
+ * em CMYK ou de outros formatos ficam como estão.
+ */
+async function comprimirImagensPdf(bytes, avisar) {
+  const PDFLib = await carregarLib('pdflib', 'PDFLib');
+  const { PDFDocument, PDFName, PDFRawStream, PDFNumber } = PDFLib;
+  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  const ctx = doc.context;
+  const alvos = [];
+  ctx.enumerateIndirectObjects().forEach(([ref, obj]) => {
+    if (!(obj instanceof PDFRawStream)) return;
+    const d = obj.dict;
+    if (String(d.get(PDFName.of('Subtype'))) !== '/Image') return;
+    const filtro = String(d.get(PDFName.of('Filter')) || '');
+    if (filtro.indexOf('DCTDecode') < 0 || /Flate|LZW|ASCII/.test(filtro)) return;   // só JPEG puro
+    if (/CMYK/.test(String(d.get(PDFName.of('ColorSpace')) || ''))) return;
+    if (obj.contents.length < 40000) return;
+    alvos.push([ref, obj]);
+  });
+  const MAX = 1600, QUALIDADE = 0.55;
+  for (let i = 0; i < alvos.length; i++) {
+    const [ref, obj] = alvos[i];
+    if (avisar && i % 5 === 0) avisar('Comprimindo imagem ' + (i + 1) + ' de ' + alvos.length + '…');
+    try {
+      const bmp = await createImageBitmap(new Blob([obj.contents], { type: 'image/jpeg' }));
+      const fator = Math.min(1, MAX / Math.max(bmp.width, bmp.height));
+      const w = Math.max(1, Math.round(bmp.width * fator)), h = Math.max(1, Math.round(bmp.height * fator));
+      const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+      const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); g.drawImage(bmp, 0, 0, w, h);
+      bmp.close && bmp.close();
+      const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', QUALIDADE));
+      const novo = new Uint8Array(await blob.arrayBuffer());
+      if (novo.length >= obj.contents.length) continue;
+      const d = obj.dict.clone(ctx);
+      d.set(PDFName.of('Width'), PDFNumber.of(w));
+      d.set(PDFName.of('Height'), PDFNumber.of(h));
+      d.set(PDFName.of('ColorSpace'), PDFName.of('DeviceRGB'));
+      d.set(PDFName.of('BitsPerComponent'), PDFNumber.of(8));
+      d.set(PDFName.of('Filter'), PDFName.of('DCTDecode'));
+      d.delete(PDFName.of('DecodeParms')); d.delete(PDFName.of('Decode'));
+      d.set(PDFName.of('Length'), PDFNumber.of(novo.length));
+      ctx.assign(ref, PDFRawStream.of(d, novo));
+    } catch (e) { /* imagem que o navegador não decodifica fica como está */ }
+  }
+  return await doc.save({ useObjectStreams: true });
+}
+
+/**
+ * Compressão extrema: cada página é desenhada como imagem (PDF.js) a ~110 dpi e
+ * regravada em JPEG num PDF novo, do mesmo tamanho de página. O texto deixa de
+ * ser selecionável — o mesmo efeito do "extremo" das ferramentas on-line.
+ */
+async function rasterizarPdf(bytes, avisar) {
+  const PDFLib = await carregarLib('pdflib', 'PDFLib');
+  const pdfjs = await carregarPdfJs();
+  const origem = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+  const novo = await PDFLib.PDFDocument.create();
+  const DPI = 110, QUALIDADE = 0.5;
+  for (let n = 1; n <= origem.numPages; n++) {
+    if (avisar) avisar('Compressão extrema: página ' + n + ' de ' + origem.numPages + '…');
+    const pag = await origem.getPage(n);
+    const base = pag.getViewport({ scale: 1 });
+    const vp = pag.getViewport({ scale: DPI / 72 });
+    const cv = document.createElement('canvas');
+    cv.width = Math.ceil(vp.width); cv.height = Math.ceil(vp.height);
+    const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+    await pag.render({ canvasContext: g, viewport: vp }).promise;
+    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', QUALIDADE));
+    const img = await novo.embedJpg(new Uint8Array(await blob.arrayBuffer()));
+    const p = novo.addPage([base.width, base.height]);
+    p.drawImage(img, { x: 0, y: 0, width: base.width, height: base.height });
+    cv.width = cv.height = 0;
+    pag.cleanup && pag.cleanup();
+  }
+  return await novo.save({ useObjectStreams: true });
 }
 </script>

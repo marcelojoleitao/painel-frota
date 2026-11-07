@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.92.0';
+const CODIGO_VERSAO = '2.93.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -10978,5 +10978,40 @@ function pesquisarPrecosOS(token, filtro) {
     const LIMITE = 600;
     return { ok: true, total: linhas.length, linhas: linhas.slice(0, LIMITE), cortado: linhas.length > LIMITE,
              resumo: resumo, os: new Set(linhas.map(x => x.os)).size, filtro: { veiculo: filtro.veiculo || '', item: filtro.item || '', desde: desde } };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+
+/* ============================================================
+   ARQUIVOS DO PROCESSO DE MANUTENÇÃO
+   O painel recebe o PDF já pronto do navegador (as notas juntadas a partir do
+   ZIP, ou o histórico de negociações comprimido — o trabalho pesado é feito no
+   navegador, que aguenta os 100 MB do original) e só grava na pasta dos
+   documentos de pagamento, com o nome padrão da competência.
+   ============================================================ */
+const ARQUIVOS_PROCESSO = {
+  notas:       'Notas Fiscais das Oficinas (Consolidado)',
+  negociacoes: 'Relatório Ticket Hist. Negociações de OS'
+};
+
+function salvarArquivoProcesso(token, competencia, qual, arquivo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const base = ARQUIVOS_PROCESSO[qual];
+    if (!base) return { ok: false, erro: 'Tipo de arquivo desconhecido.' };
+    const comp = _formatarCompetencia_(competencia || '', true);          // MM/AAAA
+    if (!arquivo || !arquivo.base64) return { ok: false, erro: 'Nenhum arquivo recebido.' };
+    const bytes = Utilities.base64Decode(arquivo.base64);
+    if (bytes.length > 45 * 1024 * 1024) return { ok: false, erro: 'Arquivo acima de 45 MB depois do processamento — não dá para gravar por aqui.' };
+    if (!CONFIG.PASTA_DOCS_PAGAMENTO) return { ok: false, erro: 'Pasta dos documentos de pagamento não configurada.' };
+    const pasta = DriveApp.getFolderById(CONFIG.PASTA_DOCS_PAGAMENTO);
+    const prefixo = base + ' ' + comp.replace('/', '.');
+    const nome = prefixo + '.pdf';
+    const substituidos = _descartarPorPrefixo_(pasta, prefixo);
+    const arq = pasta.createFile(Utilities.newBlob(bytes, 'application/pdf', nome));
+    try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}  // como os demais documentos do processo
+    _logAcao_(p.ss, p.sessao.email, 'Arquivo do processo', '', comp, nome + ' | ' + Math.round(bytes.length / 1024) + ' KB' +
+      (arquivo.origem ? ' | ' + arquivo.origem : '') + (substituidos ? ' | substituiu ' + substituidos : ''));
+    return { ok: true, nome: nome, url: arq.getUrl(), tamanho: bytes.length, substituidos: substituidos };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
