@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.93.0';
+const CODIGO_VERSAO = '2.94.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -2422,9 +2422,13 @@ function importarBase(token, tipo, arquivo) {
   }
 }
 
-/** Abastecimento: o arquivo já vem na ordem das colunas de destino. */
+/**
+ * Abastecimento: o arquivo já vem na ordem das colunas de destino.
+ * Duplicada é a transação com o mesmo CÓDIGO (A) e o mesmo SERVIÇO (M): a Ticket
+ * repete o código para serviços diferentes, e esses não são duplicados.
+ */
 function _importarAbast_(destino, dados) {
-  const existentes = _codigosExistentes_(destino);
+  const existentes = _codigosExistentes_(destino, 12);
   const novos = {}, inserir = [];
   let lidos = 0, duplicados = 0, menor = '', maior = '';
   for (let i = 1; i < dados.length; i++) {
@@ -2432,11 +2436,12 @@ function _importarAbast_(destino, dados) {
     const codigo = _codigoTransacao_(linha[0]);
     if (!codigo) continue;
     lidos++;
-    if (existentes[codigo] || novos[codigo]) { duplicados++; continue; }
+    const chave = codigo + '|' + _normCab_(linha[12]);
+    if (existentes[chave] || novos[chave]) { duplicados++; continue; }
     const dia = _diaISO_(linha[4]);
     if (dia) { if (!menor || dia < menor) menor = dia; if (!maior || dia > maior) maior = dia; }
     inserir.push(_ajustarLinha_(linha, CONFIG.DEST_COLS));
-    novos[codigo] = true;
+    novos[chave] = true;
   }
   if (inserir.length) destino.getRange(Math.max(destino.getLastRow() + 1, 2), 1, inserir.length, CONFIG.DEST_COLS).setValues(inserir);
   return { lidos: lidos, inseridos: inserir.length, duplicados: duplicados, periodo: menor ? _brDia_(menor) + ' a ' + _brDia_(maior) : '' };
@@ -2473,11 +2478,16 @@ function _importarManut_(destino, dados) {
   return { lidos: lidos, inseridos: inserir.length, duplicados: duplicados, periodo: menor ? _brDia_(menor) + ' a ' + _brDia_(maior) : '' };
 }
 
-function _codigosExistentes_(aba) {
+/** Códigos já gravados. Com colServico (0-based), a chave é código|serviço. */
+function _codigosExistentes_(aba, colServico) {
   const mapa = {};
   const n = aba.getLastRow();
   if (n < 2) return mapa;
-  aba.getRange(2, 1, n - 1, 1).getDisplayValues().forEach(l => { const c = _codigoTransacao_(l[0]); if (c) mapa[c] = true; });
+  const largura = colServico === undefined ? 1 : colServico + 1;
+  aba.getRange(2, 1, n - 1, largura).getDisplayValues().forEach(l => {
+    const c = _codigoTransacao_(l[0]); if (!c) return;
+    mapa[colServico === undefined ? c : c + '|' + _normCab_(l[colServico])] = true;
+  });
   return mapa;
 }
 function _codigoTransacao_(v) { return String(v === null || v === undefined ? '' : v).replace(/\s+/g, '').replace(/\.0$/, ''); }
@@ -4222,7 +4232,7 @@ function gerarRelatorioAbastecimento(token, de, ate) {
     let tetos = null;
     try { tetos = _tetosAnp_(ss); } catch (e) { Logger.log('Tetos da ANP indisponíveis: ' + e); }
     const dados = _dadosRelatorioAbast_(ss, ini, fim, cadastro, tetos);
-    if (!dados.registros) return { ok: false, erro: 'Nenhum abastecimento no período ' + _rotMes_(ini) + ' a ' + _rotMes_(fim) + '.' };
+    if (!dados.registros && !dados.outros.qtd) return { ok: false, erro: 'Nenhum abastecimento no período ' + _rotMes_(ini) + ' a ' + _rotMes_(fim) + '.' };
 
     // mesmo número de meses imediatamente anterior, para comparação
     const nMeses = _mesesNoIntervalo_(ini, fim).length;
@@ -4235,7 +4245,8 @@ function gerarRelatorioAbastecimento(token, de, ate) {
     const nome = 'Relatorio_Abastecimento_' + ini.replace('-', '') + (ini === fim ? '' : '_a_' + fim.replace('-', '')) + '.pdf';
     const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);
     _logAcao_(p.ss, p.sessao.email, 'Relatório de abastecimento', '', _rotMes_(ini) + ' a ' + _rotMes_(fim), pdf.link || 'download direto');
-    return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '', resumo: { registros: dados.registros, valor: dados.valor, litros: dados.litros, km: dados.km, viaturas: Object.keys(dados.porPlaca).length, alertas: dados.totalAlertas, glosaPotencial: dados.glosaPotencial } };
+    return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '', resumo: { registros: dados.registros, valor: dados.valor, litros: dados.litros, km: dados.km, viaturas: Object.keys(dados.porPlaca).length, alertas: dados.totalAlertas, glosaPotencial: dados.glosaPotencial,
+      outrosQtd: dados.outros.qtd, outrosValor: dados.outros.valor } };
   } catch (e) {
     return { ok: false, erro: String(e.message || e) };
   }
@@ -4244,6 +4255,7 @@ function gerarRelatorioAbastecimento(token, de, ate) {
 function _dadosRelatorioAbast_(ss, ini, fim, cadastro, tetos) {
   const tab = _abaTransacoes_(ss, CONFIG.ABA_ABAST, ['PLACA', 'LITROS', 'VALOR EMISSAO']);
   const vazio = () => ({ registros: 0, valor: 0, litros: 0, km: 0, porPlaca: {}, porUnidade: {}, porUso: {}, porTipo: {}, porComb: {},
+    outros: { qtd: 0, valor: 0, porServico: {}, itens: [] },
     porPosto: {}, porCidade: {}, porMes: {}, porModelo: {}, porDiaSemana: {}, porFaixaHora: {}, foraUf: { qtd: 0, valor: 0 },
     glosaPotencial: 0, itensGlosa: 0, precoPorComb: {}, tetoPorComb: {}, intervalos: [],
     alertas: { semCadastro: [], kmNegativo: [], kmZero: [], consumoAlto: [], consumoBaixo: [], divergencia: [], precoAcima: [], duplicidade: [], foraExpediente: [], acimaTetoAnp: [] }, totalAlertas: 0 });
@@ -4254,7 +4266,9 @@ function _dadosRelatorioAbast_(ss, ini, fim, cadastro, tetos) {
   const iData = c('DATA TRANSACAO'), iPlaca = c('PLACA'), iLit = c('LITROS'), iVlL = c('VL/LITRO'),
         iKm = c('KM RODADOS OU HORAS TRABALHADAS'), iKmL = c('KM/LITRO OU LITROS/HORA'), iVal = c('VALOR EMISSAO'),
         iComb = c('TIPO COMBUSTIVEL'), iEst = c('NOME ESTABELECIMENTO'), iCid = c('CIDADE'), iUf = c('UF'),
-        iMot = c('NOME MOTORISTA'), iOdo = c('HODOMETRO OU HORIMETRO');
+        iMot = c('NOME MOTORISTA'), iOdo = c('HODOMETRO OU HORIMETRO'),
+        iCodT = c('CODIGO TRANSACAO'), iServT = c('SERVICO');
+  const ajustes = _ajustesCompetencia_(ss, 'abast');
   const somaPreco = {}, contaPreco = {}, porDia = {}, ultimoAbast = {};
   const soma = (obj, chave, r) => {
     const a = obj[chave] || (obj[chave] = { valor: 0, litros: 0, km: 0, qtd: 0, placas: {} });
@@ -4268,8 +4282,20 @@ function _dadosRelatorioAbast_(ss, ini, fim, cadastro, tetos) {
     if (!placa) continue;
     const bruto = l[iData];
     const dia = _diaISO_(bruto); if (!dia) continue;
-    const mes = dia.substring(0, 7);
+    const mes = _mesDaTransacao_(ajustes, l, iCodT, iServT, dia);   // competência ajustada, se houver
     if (mes < ini || mes > fim) continue;
+    // Serviços que não são abastecimento (óleo, bateria, balanceamento, lavagens…) ficam
+    // à parte: entrariam como "abastecimento" sem litros e distorceriam consumo e médias.
+    const servico = iServT >= 0 ? String(l[iServT] || '').trim() : '';
+    if (servico && !/abastec/i.test(servico)) {
+      const vOut = _num_(l[iVal]) || 0, sv = servico.toUpperCase();
+      const o = d.outros.porServico[sv] || (d.outros.porServico[sv] = { valor: 0, qtd: 0, placas: {} });
+      o.valor += vOut; o.qtd++; o.placas[placa] = true;
+      d.outros.qtd++; d.outros.valor += vOut;
+      d.outros.itens.push({ dia: dia, placa: placa, servico: servico, valor: vOut,
+        posto: String(l[iEst] || '').trim(), cidade: String(l[iCid] || '').trim(), modelo: (cadastro[placa] || {}).modeloCurto || '' });
+      continue;
+    }
     const hora = _horaDaCelula_(bruto);
     const reg = { placa: placa, dia: dia, mes: mes, hora: hora, valor: _num_(l[iVal]) || 0, litros: _num_(l[iLit]) || 0,
       km: _num_(l[iKm]) || 0, kmL: _num_(l[iKmL]) || 0, vlL: _num_(l[iVlL]) || 0, odo: _num_(l[iOdo]) || 0,
@@ -4564,6 +4590,9 @@ function _htmlRelatorioAbast_(d, ini, fim, sessao, anterior, frotaAtiva) {
     kpi('Fora do Ceará', _fmtInt_(d.foraUf.qtd), _moedaBR_(d.foraUf.valor) + ' · ' + _decBR_(pct(d.foraUf.valor, d.valor)) + '%', d.foraUf.qtd ? 'alerta' : 'bom') +
     kpi('Glosa potencial (ANP)', _moedaBR_(d.glosaPotencial), d.itensGlosa + ' acima do teto', d.glosaPotencial ? 'alerta' : 'bom') +
     '</div>' +
+    (d.outros && d.outros.qtd ? '<p class="nota">Os números acima são só de <b>abastecimento</b>. Outros serviços pagos pelo cartão de combustível — ' +
+      _fmtInt_(d.outros.qtd) + ' transação(ões), ' + _moedaBR_(d.outros.valor) + ' — estão à parte, na seção <b>Outros serviços</b>. ' +
+      'Total do período: <b>' + _moedaBR_(d.valor + d.outros.valor) + '</b>.</p>' : '') +
 
     '<h2>Evolução mensal</h2>' + colunas(meses, sMes, sKm, _moedaBR_, 'Gasto (R$)', 'Km rodados') +
 
@@ -4627,6 +4656,20 @@ function _htmlRelatorioAbast_(d, ini, fim, sessao, anterior, frotaAtiva) {
           '</td><td class="num">' + (teto ? 'R$ ' + _decBR3_(teto) : '—') + '</td><td class="num ' + (dif > 0 ? 'sobe' : dif < 0 ? 'desce' : '') + '">' +
           (teto ? (dif > 0 ? '+' : '') + _decBR_(dif) + '%' : '—') + '</td><td class="num">' + _moedaBR_(x.valor) + '</td></tr>';
       }).join('')) +
+
+    (d.outros && d.outros.qtd ? '<h2>Outros serviços <span class="conta">' + d.outros.qtd + '</span></h2>' +
+      '<p class="nota">Serviços pagos pelo cartão que não são abastecimento (coluna Serviço da AbastBD). Ficam fora de consumo, médias, rankings e alertas.</p>' +
+      '<table><tr><th>Serviço</th><th class="num">Transações</th><th class="num">Viaturas</th><th class="num">Valor</th></tr>' +
+      Object.keys(d.outros.porServico).sort((x, y) => d.outros.porServico[y].valor - d.outros.porServico[x].valor).map(k => {
+        const o = d.outros.porServico[k];
+        return '<tr><td>' + _esc_(k) + '</td><td class="num">' + o.qtd + '</td><td class="num">' + Object.keys(o.placas).length + '</td><td class="num forte">' + _moedaBR_(o.valor) + '</td></tr>';
+      }).join('') +
+      '<tr><td class="forte">Total</td><td class="num forte">' + d.outros.qtd + '</td><td></td><td class="num forte">' + _moedaBR_(d.outros.valor) + '</td></tr></table>' +
+      '<table><tr><th>Data</th><th>Placa</th><th>Modelo</th><th>Serviço</th><th>Estabelecimento</th><th class="num">Valor</th></tr>' +
+      d.outros.itens.slice().sort((x, y) => x.dia < y.dia ? -1 : x.dia > y.dia ? 1 : x.placa.localeCompare(y.placa)).map(i =>
+        '<tr><td>' + _brDia_(i.dia) + '</td><td>' + _esc_(i.placa) + '</td><td>' + _esc_(i.modelo) + '</td><td>' + _esc_(i.servico) +
+        '</td><td>' + _esc_(i.posto) + (i.cidade ? ' — ' + _esc_(i.cidade) : '') + '</td><td class="num">' + _moedaBR_(i.valor) + '</td></tr>').join('') +
+      '</table>' : '') +
 
     (d.totalAlertas ? '<div class="quebra"></div><h2>Alertas e inconsistências <span class="conta">' + d.totalAlertas + '</span></h2>' +
       '<p class="nota">Conferências automáticas aplicadas a todos os registros do período. Servem como roteiro de apuração, não como conclusão.</p>' + alertas : '') +
@@ -4887,10 +4930,12 @@ function _calcularGlosa_(ss, competencia, combustiveis) {
   const grupos = {}, semTeto = {};
   let total = 0, avaliados = 0, comGlosa = 0;
   const mesAlvo = competencia;
+  const ajustes = _ajustesCompetencia_(ss, 'abast');
   for (let r = tab.inicio; r < valores.length; r++) {
     const l = valores[r];
     const dia = _diaISO_(l[iData]); if (!dia) continue;
-    const comp = dia.substring(5, 7) + '/' + dia.substring(0, 4);
+    const mesT = _mesDaTransacao_(ajustes, l, iCod, iServ, dia);
+    const comp = mesT.substring(5, 7) + '/' + mesT.substring(0, 4);
     if (comp !== mesAlvo) continue;
     if (iServ >= 0 && String(l[iServ] || '').trim() && !/abastec/i.test(String(l[iServ]))) continue;
     const combustivel = String(l[iComb] || '').trim().toUpperCase();
@@ -4903,7 +4948,10 @@ function _calcularGlosa_(ss, competencia, combustiveis) {
     const preco = _num_(l[iVlL]) || 0;
     if (!uf || litros <= 0 || preco <= 0) continue;
     avaliados++;
-    const chave = comp + '|' + uf + '|' + _normCab_(produto.anp);
+    // o teto é o do mês em que o abastecimento aconteceu, mesmo quando a
+    // transação foi faturada (ajustada) noutra competência
+    const compDia = dia.substring(5, 7) + '/' + dia.substring(0, 4);
+    const chave = compDia + '|' + uf + '|' + _normCab_(produto.anp);
     const teto = tetos[chave];
     if (teto === undefined) {
       const k = produto.anp + ' / ' + uf;
@@ -11014,4 +11062,339 @@ function salvarArquivoProcesso(token, competencia, qual, arquivo) {
       (arquivo.origem ? ' | ' + arquivo.origem : '') + (substituidos ? ' | substituiu ' + substituidos : ''));
     return { ok: true, nome: nome, url: arq.getUrl(), tamanho: bytes.length, substituidos: substituidos };
   } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+
+
+/* ============================================================
+   AJUSTE DE COMPETÊNCIA DE TRANSAÇÃO
+   Uma transação de 09/2026 pode ser faturada pela Ticket na nota de 10/2026.
+   A competência natural é o mês da data da transação; aqui se registra a
+   exceção, sem mexer na AbastBD/ManutBD. Relatório de abastecimento, glosa e
+   relatório de transações passam a contar a transação na competência ajustada.
+   ============================================================ */
+const AJUSTES_COMP = { aba: 'AjustesCompetencia',
+  cab: ['Tipo', 'Código', 'Serviço', 'Data', 'Placa', 'Valor', 'Competência original', 'Competência ajustada', 'Motivo', 'Por', 'Em'] };
+
+function _abaAjustesComp_(ss, criar) {
+  let aba = ss.getSheetByName(AJUSTES_COMP.aba);
+  if (!aba && criar) {
+    aba = ss.insertSheet(AJUSTES_COMP.aba);
+    aba.getRange(1, 1, 1, AJUSTES_COMP.cab.length).setValues([AJUSTES_COMP.cab]).setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF');
+    aba.setFrozenRows(1);
+  }
+  return aba;
+}
+
+/** Mapa código|serviço → 'AAAA-MM' (competência ajustada) para o tipo. */
+function _ajustesCompetencia_(ss, tipo) {
+  const mapa = {};
+  try {
+    const aba = _abaAjustesComp_(ss, false);
+    if (!aba || aba.getLastRow() < 2) return mapa;
+    aba.getRange(2, 1, aba.getLastRow() - 1, 8).getDisplayValues().forEach(l => {
+      if (String(l[0]).trim() !== tipo) return;
+      const m = String(l[7]).match(/^(\d{2})\/(\d{4})$/);
+      if (m) mapa[_codigoTransacao_(l[1]) + '|' + _normCab_(l[2])] = m[2] + '-' + m[1];
+    });
+  } catch (e) { Logger.log('Ajustes de competência: ' + e); }
+  return mapa;
+}
+
+/** Mês (AAAA-MM) em que a transação conta: o ajustado, se houver, ou o da data. */
+function _mesDaTransacao_(ajustes, linha, iCod, iServ, dia) {
+  if (iCod >= 0) {
+    const k = _codigoTransacao_(linha[iCod]) + '|' + _normCab_(iServ >= 0 ? linha[iServ] : '');
+    if (ajustes[k]) return ajustes[k];
+  }
+  return dia.substring(0, 7);
+}
+
+/** Procura a transação pelo código, para ajustar a competência. */
+function buscarTransacaoAjuste(token, tipo, codigo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const nomeAba = tipo === 'manut' ? CONFIG.ABA_MANUT : CONFIG.ABA_ABAST;
+    const alvo = _codigoTransacao_(codigo).replace(/\D/g, '');
+    if (!alvo) return { ok: false, erro: 'Informe o código da transação.' };
+    const tab = _abaTransacoes_(p.ss, nomeAba, ['PLACA', 'VALOR EMISSAO']);
+    if (!tab) return { ok: false, erro: 'Aba ' + nomeAba + ' não encontrada.' };
+    const { valores, cab } = tab, c = n => cab.indexOf(n);
+    const iCod = c('CODIGO TRANSACAO') >= 0 ? c('CODIGO TRANSACAO') : 0, iServ = c('SERVICO'), iData = c('DATA TRANSACAO'),
+          iPlaca = c('PLACA'), iVal = c('VALOR EMISSAO'), iComb = c('TIPO COMBUSTIVEL'), iEst = c('NOME ESTABELECIMENTO');
+    const ajustes = _ajustesCompetencia_(p.ss, tipo);
+    const achados = [];
+    for (let r = tab.inicio; r < valores.length; r++) {
+      const l = valores[r];
+      if (_codigoTransacao_(l[iCod]).replace(/\D/g, '') !== alvo) continue;
+      const dia = _diaISO_(l[iData]);
+      const servico = String(iServ >= 0 ? l[iServ] : '').trim();
+      const ajustada = ajustes[_codigoTransacao_(l[iCod]) + '|' + _normCab_(servico)] || '';
+      achados.push({ codigo: _codigoTransacao_(l[iCod]), servico: servico, data: dia ? _brDia_(dia) : '', placa: String(l[iPlaca] || '').trim(),
+        valor: _num_(l[iVal]) || 0, combustivel: iComb >= 0 ? String(l[iComb] || '').trim() : '', estabelecimento: iEst >= 0 ? String(l[iEst] || '').trim() : '',
+        original: dia ? dia.substring(5, 7) + '/' + dia.substring(0, 4) : '', ajustada: ajustada ? ajustada.substring(5, 7) + '/' + ajustada.substring(0, 4) : '' });
+    }
+    if (!achados.length) return { ok: false, erro: 'Transação ' + alvo + ' não encontrada na ' + nomeAba + '.' };
+    return { ok: true, transacoes: achados };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Grava (ou remove, com competência vazia) o ajuste de uma transação. */
+function ajustarCompetenciaTransacao(token, tipo, codigo, servico, competencia, motivo) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  const trava = LockService.getScriptLock();
+  try { trava.waitLock(20000); } catch (e) { return { ok: false, erro: 'Planilha ocupada. Tente de novo.' }; }
+  try {
+    if (tipo !== 'abast' && tipo !== 'manut') return { ok: false, erro: 'Tipo inválido.' };
+    const busca = buscarTransacaoAjuste(token, tipo, codigo);
+    if (!busca.ok) return busca;
+    const t = busca.transacoes.find(x => _normCab_(x.servico) === _normCab_(servico)) || (busca.transacoes.length === 1 ? busca.transacoes[0] : null);
+    if (!t) return { ok: false, erro: 'Há mais de um serviço com esse código — escolha qual.' };
+    const nova = competencia ? _formatarCompetencia_(competencia, true) : '';
+    if (nova && nova === t.original) return { ok: false, erro: 'A transação já é de ' + nova + ' pela data; não precisa de ajuste.' };
+    const aba = _abaAjustesComp_(p.ss, true);
+    const n = aba.getLastRow();
+    let linha = -1;
+    if (n > 1) {
+      const vals = aba.getRange(2, 1, n - 1, 3).getDisplayValues();
+      for (let i = 0; i < vals.length; i++) {
+        if (vals[i][0] === tipo && _codigoTransacao_(vals[i][1]) === t.codigo && _normCab_(vals[i][2]) === _normCab_(t.servico)) { linha = i + 2; break; }
+      }
+    }
+    const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm');
+    if (!nova) {
+      if (linha > 0) aba.deleteRow(linha);
+      _logAcao_(p.ss, p.sessao.email, 'Ajuste de competência removido', t.placa, tipo + ' ' + t.codigo, t.servico + ' | volta para ' + t.original);
+      limparCache();
+      return { ok: true, removido: true, transacao: t };
+    }
+    const registro = [tipo, t.codigo, t.servico, t.data, t.placa, t.valor, t.original, nova, String(motivo || '').trim(), p.sessao.email, agora];
+    if (linha > 0) aba.getRange(linha, 1, 1, registro.length).setNumberFormat('@').setValues([registro.map(String)]);
+    else aba.getRange(Math.max(n + 1, 2), 1, 1, registro.length).setNumberFormat('@').setValues([registro.map(String)]);
+    _logAcao_(p.ss, p.sessao.email, 'Ajuste de competência', t.placa, tipo + ' ' + t.codigo, t.servico + ' | ' + t.original + ' → ' + nova + (motivo ? ' | ' + motivo : ''));
+    limparCache();
+    return { ok: true, transacao: Object.assign({}, t, { ajustada: nova }) };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; } finally { trava.releaseLock(); }
+}
+
+/** Ajustes que entram ou saem da competência informada. */
+function listarAjustesCompetencia(token, tipo, competencia) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    const aba = _abaAjustesComp_(p.ss, false);
+    if (!aba || aba.getLastRow() < 2) return { ok: true, ajustes: [] };
+    const lista = aba.getRange(2, 1, aba.getLastRow() - 1, AJUSTES_COMP.cab.length).getDisplayValues()
+      .filter(l => l[0] === tipo && (l[6] === competencia || l[7] === competencia))
+      .map(l => ({ codigo: l[1], servico: l[2], data: l[3], placa: l[4], valor: _num_(l[5]) || 0, original: l[6], ajustada: l[7], motivo: l[8], por: l[9], em: l[10],
+                   sentido: l[7] === competencia ? 'entra' : 'sai' }));
+    return { ok: true, ajustes: lista };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+
+/* ============================================================
+   RELATÓRIO DE TRANSAÇÕES POR VEÍCULO — abastecimento e manutenção
+   Refaz, a partir do que já foi importado (AbastBD / ManutBD), o relatório
+   que a Ticket entrega: agrupado por viatura, com subtotal, só com as colunas
+   que interessam ao processo. Respeita os ajustes de competência.
+   Formatos: PDF (mesmo visual dos demais relatórios) e Excel (.xlsx).
+   ============================================================ */
+function _dadosTransacoesVeiculo_(ss, tipo, compIso) {
+  const nomeAba = tipo === 'manut' ? CONFIG.ABA_MANUT : CONFIG.ABA_ABAST;
+  const tab = _abaTransacoes_(ss, nomeAba, ['PLACA', 'VALOR EMISSAO']);
+  if (!tab) throw new Error('Aba ' + nomeAba + ' não encontrada.');
+  const { valores, cab } = tab, c = n => cab.indexOf(n);
+  const iCod = c('CODIGO TRANSACAO') >= 0 ? c('CODIGO TRANSACAO') : 0, iServ = c('SERVICO'), iData = c('DATA TRANSACAO'),
+        iPlaca = c('PLACA'), iVal = c('VALOR EMISSAO'), iLit = c('LITROS'), iVlL = c('VL/LITRO'), iOdo = c('HODOMETRO OU HORIMETRO'),
+        iKm = c('KM RODADOS OU HORAS TRABALHADAS'), iKmL = c('KM/LITRO OU LITROS/HORA'), iComb = c('TIPO COMBUSTIVEL'),
+        iEst = c('NOME ESTABELECIMENTO'), iCid = c('CIDADE'), iUf = c('UF'), iMot = c('NOME MOTORISTA');
+  const ajustes = _ajustesCompetencia_(ss, tipo);
+  const cadastro = {};
+  _lerVeiculos_(ss).forEach(v => { cadastro[v.placa] = v; if (v.placaMerc && v.placaMerc !== v.placa) cadastro[v.placaMerc] = v; });
+  const txt = (l, i) => i >= 0 ? String(l[i] === null || l[i] === undefined ? '' : l[i]).trim() : '';
+  const num = (l, i) => i >= 0 ? (_num_(l[i]) || 0) : 0;
+  const porPlaca = {};
+  let total = 0, litros = 0, qtd = 0, ajustadas = 0, valorComb = 0;
+  for (let r = tab.inicio; r < valores.length; r++) {
+    const l = valores[r];
+    const placa = txt(l, iPlaca).toUpperCase(); if (!placa) continue;
+    const dia = _diaISO_(l[iData]); if (!dia) continue;
+    const mes = _mesDaTransacao_(ajustes, l, iCod, iServ, dia);
+    if (mes !== compIso) continue;
+    const bruto = l[iData];
+    let dataHora = null;
+    if (Object.prototype.toString.call(bruto) === '[object Date]' && !isNaN(bruto)) dataHora = bruto;
+    else { const m = String(bruto || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[\sT]+(\d{1,2}):(\d{2}))?/); if (m) dataHora = new Date(+m[3], +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0)); }
+    const servico = txt(l, iServ), comb = txt(l, iComb);
+    const it = { codigo: _codigoTransacao_(l[iCod]), dataHora: dataHora, ordem: dataHora ? dataHora.getTime() : 0,
+      servico: servico, comb: comb, motorista: txt(l, iMot), valor: num(l, iVal), litros: num(l, iLit), vlL: num(l, iVlL),
+      odo: num(l, iOdo), km: num(l, iKm), kmL: num(l, iKmL), estab: txt(l, iEst),
+      local: [txt(l, iCid), txt(l, iUf)].filter(Boolean).join('/'), ajustada: mes !== dia.substring(0, 7) };
+    if (it.ajustada) ajustadas++;
+    const v = cadastro[placa];
+    const g = porPlaca[placa] || (porPlaca[placa] = { placa: placa, modelo: v ? (v.modeloCurto || v.modelo || '') : '', unidade: v ? (v.unidadeCurta || v.unidade || '') : 'SEM CADASTRO', itens: [], valor: 0, litros: 0 });
+    g.itens.push(it); g.valor += it.valor; g.litros += it.litros;
+    total += it.valor; litros += it.litros; qtd++;
+    if (it.litros > 0) valorComb += it.valor;
+  }
+  const grupos = Object.keys(porPlaca).sort().map(k => { const g = porPlaca[k]; g.itens.sort((a, b) => a.ordem - b.ordem); return g; });
+  return { tipo: tipo, comp: compIso.substring(5, 7) + '/' + compIso.substring(0, 4), grupos: grupos, total: total, litros: litros, qtd: qtd, ajustadas: ajustadas, valorComb: valorComb };
+}
+
+function gerarRelatorioTransacoes(token, tipo, competencia, formato) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    if (tipo !== 'abast' && tipo !== 'manut') return { ok: false, erro: 'Tipo inválido.' };
+    const comp = _formatarCompetencia_(competencia || '', true);
+    const iso = comp.substring(3) + '-' + comp.substring(0, 2);
+    const d = _dadosTransacoesVeiculo_(p.ss, tipo, iso);
+    if (!d.qtd) return { ok: false, erro: 'Nenhuma transação de ' + (tipo === 'manut' ? 'manutenção' : 'abastecimento') + ' em ' + comp + '.' };
+    const rotTipo = tipo === 'manut' ? 'Manutenção' : 'Abastecimento';
+    const base = 'Relatório de Transações por Veículo - ' + rotTipo + ' ' + comp.replace('/', '.');
+    const resumo = { transacoes: d.qtd, viaturas: d.grupos.length, valor: d.total, litros: d.litros, ajustadas: d.ajustadas };
+    if (formato === 'xlsx') {
+      const x = _xlsxTransacoes_(d, base);
+      _logAcao_(p.ss, p.sessao.email, 'Relatório de transações (Excel)', '', rotTipo + ' ' + comp, d.qtd + ' transações');
+      return { ok: true, nome: base + '.xlsx', base64: x, mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', resumo: resumo };
+    }
+    const html = _htmlTransacoesVeiculo_(d, p.sessao);
+    const nome = base + '.pdf';
+    const pdf = _entregarPdf_(Utilities.newBlob(html, 'text/html', 'tmp.html').getAs('application/pdf').setName(nome), nome);
+    _logAcao_(p.ss, p.sessao.email, 'Relatório de transações (PDF)', '', rotTipo + ' ' + comp, pdf.link || 'download direto');
+    return { ok: true, nome: nome, link: pdf.link || '', base64: pdf.base64 || '', aviso: pdf.aviso || '', resumo: resumo };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+function _htmlTransacoesVeiculo_(d, sessao) {
+  const ab = d.tipo !== 'manut';
+  const agora = Utilities.formatDate(new Date(), CONFIG.FUSO, "dd/MM/yyyy 'às' HH:mm");
+  const dh = x => x ? Utilities.formatDate(x, CONFIG.FUSO, 'dd/MM/yyyy HH:mm') : '—';
+  const n0 = v => v ? Math.round(v).toLocaleString('pt-BR') : '—';
+  const n2 = v => v ? _decBR_(v) : '—';
+  const cols = ab ? 9 : 6;
+  let corpo = '';
+  d.grupos.forEach(g => {
+    corpo += '<tr class="unidade"><td colspan="' + cols + '"><span class="mono">' + _esc_(g.placa) + '</span> · ' + _esc_(g.modelo || '—') +
+      ' · <span style="font-weight:normal">' + _esc_(g.unidade) + '</span></td></tr>';
+    g.itens.forEach(i => {
+      const marca = i.ajustada ? ' <span class="tag">competência ajustada</span>' : '';
+      corpo += ab
+        ? '<tr><td class="c">' + dh(i.dataHora) + '</td><td>' + _esc_(i.motorista) + '</td><td>' + _esc_(/abastec/i.test(i.servico) || !i.servico ? i.comb : i.servico) + marca +
+          '</td><td class="num">' + n2(i.litros) + '</td><td class="num">' + n2(i.vlL) + '</td><td class="num forte">' + _moedaBR_(i.valor) +
+          '</td><td class="num">' + n0(i.odo) + '</td><td class="num">' + n0(i.km) + (i.kmL ? ' <small>(' + n2(i.kmL) + ' km/l)</small>' : '') +
+          '</td><td>' + _esc_(i.estab) + (i.local ? ' <small>— ' + _esc_(i.local) + '</small>' : '') + '</td></tr>'
+        : '<tr><td class="c">' + dh(i.dataHora) + '</td><td>' + _esc_(i.motorista) + '</td><td>' + _esc_(i.servico) + marca +
+          '</td><td>' + _esc_(i.estab) + (i.local ? ' <small>— ' + _esc_(i.local) + '</small>' : '') + '</td><td class="num">' + n0(i.odo) +
+          '</td><td class="num forte">' + _moedaBR_(i.valor) + '</td></tr>';
+    });
+    corpo += '<tr class="subtotal"><td colspan="' + (ab ? 3 : 5) + '">Subtotal ' + _esc_(g.placa) + ' — ' + g.itens.length + ' transação(ões)</td>' +
+      (ab ? '<td class="num">' + n2(g.litros) + '</td><td></td><td class="num">' + _moedaBR_(g.valor) + '</td><td colspan="3"></td>'
+          : '<td class="num">' + _moedaBR_(g.valor) + '</td>') + '</tr>';
+  });
+  const cabec = ab
+    ? '<th class="c" style="width:11%">Data / hora</th><th style="width:17%">Motorista</th><th style="width:13%">Combustível / serviço</th><th class="num" style="width:6%">Litros</th><th class="num" style="width:6%">R$/litro</th><th class="num" style="width:9%">Valor</th><th class="num" style="width:7%">Hodômetro</th><th class="num" style="width:10%">Km rodados</th><th>Posto — cidade</th>'
+    : '<th class="c" style="width:12%">Data / hora</th><th style="width:20%">Motorista</th><th style="width:20%">Serviço</th><th>Estabelecimento — cidade</th><th class="num" style="width:9%">Hodômetro</th><th class="num" style="width:11%">Valor</th>';
+  return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><style>' +
+    '@page { size: A4 landscape; margin: 11mm 9mm; } * { box-sizing: border-box; }' +
+    'body { font-family: Arial, Helvetica, sans-serif; color: #14181F; font-size: 8pt; margin: 0; }' +
+    '.cab { display: table; width: 100%; border-bottom: 4px solid #F2B705; padding-bottom: 8px; margin-bottom: 10px; }' +
+    '.cab > div { display: table-cell; vertical-align: middle; } .cab .marca { width: 70px; }' +
+    '.cab h1 { margin: 0; font-size: 15pt; color: #0B2C5C; } .cab .org { font-size: 9pt; color: #5A6576; }' +
+    '.cab .per { text-align: right; font-size: 10pt; font-weight: bold; color: #0B2C5C; }' +
+    '.kpis { display: table; width: 100%; table-layout: fixed; border-spacing: 5px 0; margin-bottom: 8px; }' +
+    '.kpi { display: table-cell; background: #F6F8FC; border-left: 3px solid #0B2C5C; padding: 6px 8px; }' +
+    '.kpi .r { font-size: 7pt; text-transform: uppercase; color: #5A6576; } .kpi .v { font-size: 12pt; font-weight: bold; color: #0B2C5C; }' +
+    'table { width: 100%; border-collapse: collapse; } thead { display: table-header-group; }' +
+    'th { background: #0B2C5C; color: #fff; text-align: left; padding: 4px 5px; font-size: 7.3pt; }' +
+    'td { padding: 2.5px 5px; border-bottom: 1px solid #E3E8F0; font-size: 7.3pt; vertical-align: top; }' +
+    'tr { page-break-inside: avoid; }' +
+    'tr.unidade td { background: #E8EEFA; font-weight: bold; color: #0B2C5C; font-size: 8.3pt; padding-top: 5px; }' +
+    'tr.subtotal td { background: #EFF2F7; font-weight: bold; }' +
+    '.tag { background: #F2B705; color: #14181F; border-radius: 7px; padding: 0 5px; font-size: 6.3pt; }' +
+    '.num { text-align: right; } .c { text-align: center; } .forte { font-weight: bold; } .mono { font-family: "Courier New", monospace; font-weight: bold; }' +
+    'small { color: #5A6576; }' +
+    '.total td { background: #0B2C5C; color: #fff; font-size: 10.5pt; font-weight: bold; padding: 7px 10px; border: 0; }' +
+    '.rodape { margin-top: 10px; border-top: 1px solid #E3E8F0; padding-top: 5px; font-size: 7pt; color: #5A6576; }' +
+    '</style></head><body>' +
+    '<div class="cab"><div class="marca">' + _brasaoHtml_() + '</div>' +
+    '<div><h1>Relatório de Transações por Veículo — ' + (ab ? 'Abastecimento' : 'Manutenção') + '</h1><div class="org">16ª Superintendência da Polícia Rodoviária Federal — Ceará • Contrato nº 08/2021 (Ticket)</div></div>' +
+    '<div class="per">Mês de Referência<br>' + _esc_(d.comp) + '</div></div>' +
+    '<div class="kpis">' +
+    '<div class="kpi"><div class="r">Valor total</div><div class="v">' + _moedaBR_(d.total) + '</div></div>' +
+    '<div class="kpi"><div class="r">Transações</div><div class="v">' + d.qtd + '</div></div>' +
+    '<div class="kpi"><div class="r">Viaturas</div><div class="v">' + d.grupos.length + '</div></div>' +
+    (ab ? '<div class="kpi"><div class="r">Litros</div><div class="v">' + _decBR_(d.litros) + '</div></div>' +
+          '<div class="kpi"><div class="r">Preço médio por litro</div><div class="v">' + _moedaBR_(d.litros ? d.valorComb / d.litros : 0) + '</div></div>' : '') +
+    '</div>' +
+    (d.ajustadas ? '<div style="background:#FFF8E1; border-left:3px solid #F2B705; padding:6px 9px; margin-bottom:8px">' + d.ajustadas +
+      ' transação(ões) com competência ajustada: faturadas em ' + _esc_(d.comp) + ' por decisão registrada no painel, embora a data seja de outro mês.</div>' : '') +
+    '<table><thead><tr>' + cabec + '</tr></thead><tbody>' + corpo + '</tbody></table>' +
+    '<table class="total" style="margin-top:6px"><tr><td>Total da competência — ' + d.qtd + ' transação(ões) em ' + d.grupos.length + ' viatura(s)' +
+    (ab ? ' · ' + _decBR_(d.litros) + ' litros' : '') + '</td><td style="text-align:right">' + _moedaBR_(d.total) + '</td></tr></table>' +
+    '<div class="rodape">Gerado pelo Painel da Frota em ' + agora + (sessao && sessao.nome ? ' por ' + _esc_(sessao.nome) : '') +
+    ' • Fonte: ' + (ab ? 'AbastBD' : 'ManutBD') + ' (relatório de transações importado da Ticket)</div>' +
+    '</body></html>';
+}
+
+/** Excel do relatório: planilha temporária formatada, exportada como .xlsx e apagada em seguida. */
+function _xlsxTransacoes_(d, titulo) {
+  const ab = d.tipo !== 'manut';
+  const cab = ab ? ['Placa', 'Modelo', 'Unidade', 'Data / hora', 'Motorista', 'Combustível / serviço', 'Litros', 'R$/litro', 'Valor (R$)', 'Hodômetro', 'Km rodados', 'Km/litro', 'Posto', 'Cidade/UF', 'Código transação']
+                 : ['Placa', 'Modelo', 'Unidade', 'Data / hora', 'Motorista', 'Serviço', 'Estabelecimento', 'Cidade/UF', 'Hodômetro', 'Valor (R$)', 'Código transação'];
+  const N = cab.length;
+  const linhas = [], grupoRows = [], subRows = [];
+  const vazio = () => new Array(N).fill('');
+  const iValor = cab.indexOf('Valor (R$)'), iLitros = cab.indexOf('Litros');
+  d.grupos.forEach(g => {
+    const gr = vazio(); gr[0] = g.placa + ' · ' + (g.modelo || '—') + ' · ' + g.unidade; linhas.push(gr); grupoRows.push(linhas.length);
+    g.itens.forEach(i => {
+      linhas.push(ab
+        ? [g.placa, g.modelo, g.unidade, i.dataHora || '', i.motorista, (/abastec/i.test(i.servico) || !i.servico ? i.comb : i.servico) + (i.ajustada ? ' (competência ajustada)' : ''),
+           i.litros || '', i.vlL || '', i.valor, i.odo || '', i.km || '', i.kmL || '', i.estab, i.local, i.codigo]
+        : [g.placa, g.modelo, g.unidade, i.dataHora || '', i.motorista, i.servico + (i.ajustada ? ' (competência ajustada)' : ''), i.estab, i.local, i.odo || '', i.valor, i.codigo]);
+    });
+    const st = vazio(); st[0] = 'Subtotal ' + g.placa + ' — ' + g.itens.length + ' transação(ões)'; st[iValor] = g.valor; if (ab) st[iLitros] = g.litros;
+    linhas.push(st); subRows.push(linhas.length);
+  });
+  const tot = vazio(); tot[0] = 'TOTAL — ' + d.qtd + ' transação(ões) em ' + d.grupos.length + ' viatura(s)'; tot[iValor] = d.total; if (ab) tot[iLitros] = d.litros;
+  linhas.push(tot);
+
+  const tmp = SpreadsheetApp.create('[TEMP] ' + titulo);
+  try {
+    const sh = tmp.getSheets()[0];
+    sh.setName(ab ? 'Abastecimento' : 'Manutenção');
+    const INI = 4;   // título nas linhas 1-2, cabeçalho na 4
+    if (sh.getMaxColumns() < N) sh.insertColumnsAfter(sh.getMaxColumns(), N - sh.getMaxColumns());
+    if (sh.getMaxRows() < INI + linhas.length + 2) sh.insertRowsAfter(sh.getMaxRows(), INI + linhas.length + 2 - sh.getMaxRows());
+    sh.getRange(1, 1).setValue(titulo).setFontSize(14).setFontWeight('bold').setFontColor('#0B2C5C');
+    sh.getRange(2, 1).setValue('16ª Superintendência da Polícia Rodoviária Federal — Ceará • gerado em ' +
+      Utilities.formatDate(new Date(), CONFIG.FUSO, 'dd/MM/yyyy HH:mm')).setFontColor('#5A6576');
+    sh.getRange(INI, 1, 1, N).setValues([cab]).setFontWeight('bold').setBackground('#0B2C5C').setFontColor('#FFFFFF').setWrap(true).setVerticalAlignment('middle');
+    sh.getRange(INI + 1, 1, linhas.length, N).setValues(linhas).setFontSize(9);
+    const corpo = r => sh.getRange(INI + 1, r, linhas.length, 1);
+    corpo(4).setNumberFormat('dd/MM/yyyy HH:mm');
+    corpo(iValor + 1).setNumberFormat('#,##0.00');
+    if (ab) { corpo(7).setNumberFormat('#,##0.00'); corpo(8).setNumberFormat('#,##0.000'); corpo(10).setNumberFormat('#,##0'); corpo(11).setNumberFormat('#,##0'); corpo(12).setNumberFormat('#,##0.00'); }
+    else corpo(9).setNumberFormat('#,##0');
+    corpo(N).setNumberFormat('@');
+    const a1 = r => 'A' + (INI + r) + ':' + _letraColuna_(N) + (INI + r);
+    if (grupoRows.length) sh.getRangeList(grupoRows.map(a1)).setBackground('#E8EEFA').setFontWeight('bold').setFontColor('#0B2C5C');
+    if (subRows.length) sh.getRangeList(subRows.map(a1)).setBackground('#EFF2F7').setFontWeight('bold');
+    sh.getRange(a1(linhas.length)).setBackground('#0B2C5C').setFontColor('#FFFFFF').setFontWeight('bold');
+    sh.setFrozenRows(INI);
+    sh.autoResizeColumns(1, N);
+    sh.setColumnWidth(1, 90);
+    SpreadsheetApp.flush();
+    const url = 'https://docs.google.com/spreadsheets/d/' + tmp.getId() + '/export?format=xlsx';
+    let resp = null;
+    for (let t = 0; t < 3; t++) {
+      resp = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+      if (resp.getResponseCode() === 200) break;
+      Utilities.sleep(1500 * (t + 1));
+    }
+    if (!resp || resp.getResponseCode() !== 200) throw new Error('Falha ao exportar o Excel (HTTP ' + (resp ? resp.getResponseCode() : '—') + ').');
+    return Utilities.base64Encode(resp.getContent());
+  } finally {
+    try { DriveApp.getFileById(tmp.getId()).setTrashed(true); } catch (e) {}
+  }
 }

@@ -74,7 +74,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.93.0';
+const VERSAO_PAINEL = '2.94.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -2772,6 +2772,7 @@ function gerarRelAbastecimento(de, ate, ids) {
         <div class="dado"><div class="k">Valor</div><div class="v">${fmtMoeda(r.resumo.valor)}</div></div>
         <div class="dado"><div class="k">Viaturas</div><div class="v">${fmtInt(r.resumo.viaturas)}</div></div>
         <div class="dado"><div class="k">Alertas</div><div class="v ${r.resumo.alertas ? 'alerta-txt' : 'ok-txt'}">${fmtInt(r.resumo.alertas)}</div></div>
+        ${r.resumo.outrosQtd ? `<div class="dado"><div class="k">Outros serviços (à parte)</div><div class="v">${fmtInt(r.resumo.outrosQtd)} • ${fmtMoeda(r.resumo.outrosValor)}</div></div>` : ''}
       </div>`;
     },
     e => { if (btn) { btn.disabled = false; btn.textContent = rotulo; } if (status) status.textContent = ''; falhaNoCartao(ids.result, e); });
@@ -3420,6 +3421,29 @@ function desenharProcesso(c, r) {
           <button class="btn amarelo" id="btn-proc-pecas">Gerar PDF</button>
           <div class="foto-data" id="proc-pecas-status"></div><div id="proc-pecas-result"></div>
         </div>`}
+        <div class="proc-rel">
+          <h4>Relatório de Transações por Veículo</h4>
+          <div class="cartao-dica" style="margin:0 0 6px">O relatório de transações da Ticket refeito a partir do que já foi importado, agrupado por viatura,
+            só com as colunas que interessam. Respeita os ajustes de competência abaixo.</div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap">
+            <button class="btn amarelo" id="btn-proc-trans-pdf">Gerar PDF</button>
+            <button class="btn claro" id="btn-proc-trans-xlsx">⤓ Excel</button>
+          </div>
+          <div class="foto-data" id="proc-trans-status"></div><div id="proc-trans-result"></div>
+        </div>
+      </div>
+
+      <div class="cartao">
+        <div class="cartao-cab"><h3>Ajuste de competência de transação</h3><small>quando a Ticket fatura numa competência diferente da data</small></div>
+        <div class="cartao-dica" style="margin:0 0 8px">Pela regra, a transação conta no mês da sua data. Se ela veio faturada noutra nota
+          (ex.: abastecimento de 30/09 cobrado na fatura de 10/2026), procure pelo código e mova. Vale para o relatório,
+          ${r.tipo === 'Abastecimento' ? 'a glosa (com o teto da ANP do mês do abastecimento) ' : ''}e o relatório de transações. A base importada não é alterada.</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end">
+          <div class="form-campo" style="width:200px"><label>Código da transação</label><input type="text" id="aj-codigo" style="font-family:var(--fonte-dados)"></div>
+          <button class="btn claro" id="aj-buscar">Buscar</button>
+        </div>
+        <div id="aj-achados" style="margin-top:8px"></div>
+        <div id="aj-lista" style="margin-top:10px"></div>
       </div>
       ${r.tipo === 'Manutenção' ? `<div class="cartao">
         <div class="cartao-cab"><h3>Arquivos para o processo</h3><small>tudo feito aqui, sem ferramenta externa • salvo na pasta do processo</small></div>
@@ -3511,6 +3535,12 @@ function desenharProcesso(c, r) {
     ouvir('btn-proc-aceites', 'click', () => gerarAceites(r.competencia, { btn: 'btn-proc-aceites', status: 'proc-aceites-status', result: 'proc-aceites-result' }));
     ouvir('btn-proc-pecas', 'click', () => gerarPecas(r.competencia, { btn: 'btn-proc-pecas', status: 'proc-pecas-status', result: 'proc-pecas-result' }));
     ligarArquivosProcesso(r.competencia);
+  }
+  {
+    const tipoT = r.tipo === 'Abastecimento' ? 'abast' : 'manut';
+    ouvir('btn-proc-trans-pdf', 'click', () => gerarTransacoesVeiculo(tipoT, r.competencia, 'pdf'));
+    ouvir('btn-proc-trans-xlsx', 'click', () => gerarTransacoesVeiculo(tipoT, r.competencia, 'xlsx'));
+    ligarAjusteCompetencia(tipoT, r.competencia);
   }
   ajustarKpis();
 }
@@ -7723,5 +7753,90 @@ async function rasterizarPdf(bytes, avisar) {
     pag.cleanup && pag.cleanup();
   }
   return await novo.save({ useObjectStreams: true });
+}
+
+/* ---------- Relatório de Transações por Veículo (PDF / Excel) ---------- */
+function gerarTransacoesVeiculo(tipo, competencia, formato) {
+  const btn = el(formato === 'xlsx' ? 'btn-proc-trans-xlsx' : 'btn-proc-trans-pdf'), st = el('proc-trans-status'), res = el('proc-trans-result');
+  const rotulo = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Gerando…';
+  st.textContent = 'Lendo as transações de ' + competencia + '…'; res.innerHTML = '';
+  const run = servidor('gerarRelatorioTransacoes',
+    r => {
+      btn.disabled = false; btn.textContent = rotulo; st.textContent = '';
+      if (!r || !r.ok) { falhaNoCartao('proc-trans-result', (r && r.erro) || 'Falha ao gerar.'); return; }
+      let entrega;
+      if (formato === 'xlsx') {
+        const bin = atob(r.base64), arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        const url = URL.createObjectURL(new Blob([arr], { type: r.mime }));
+        const a = document.createElement('a'); a.href = url; a.download = r.nome; document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 120000);
+        entrega = `<a class="btn amarelo" href="${escAttr(url)}" download="${escAttr(r.nome)}" style="margin-top:8px; text-decoration:none">⤓ Baixar ${esc(r.nome)}</a>`;
+      } else entrega = entregarPdf(r);
+      const z = r.resumo || {};
+      res.innerHTML = entrega + `<div class="cartao-dica" style="margin-top:6px">${fmtInt(z.transacoes)} transação(ões) • ${fmtInt(z.viaturas)} viatura(s) • ${fmtMoeda(z.valor)}
+        ${z.litros ? ' • ' + fmtDec(z.litros) + ' litros' : ''}${z.ajustadas ? ' • <b>' + z.ajustadas + ' com competência ajustada</b>' : ''}</div>`;
+    },
+    e => { btn.disabled = false; btn.textContent = rotulo; st.textContent = ''; falhaNoCartao('proc-trans-result', e); });
+  if (run) run.gerarRelatorioTransacoes(ESTADO.token, tipo, competencia, formato);
+}
+
+/* ---------- Ajuste de competência de transação ---------- */
+function ligarAjusteCompetencia(tipo, competencia) {
+  const listar = () => {
+    const run = servidor('listarAjustesCompetencia', r => {
+      if (!r || !r.ok) { htm('aj-lista', ''); return; }
+      if (!r.ajustes.length) { htm('aj-lista', '<div class="foto-data">Nenhuma transação ajustada para dentro ou para fora de ' + esc(competencia) + '.</div>'); return; }
+      htm('aj-lista', `<div class="grupo-titulo">Ajustes que afetam ${esc(competencia)}</div>
+        <div class="tabela-rol"><table class="tabela-simples" style="width:100%"><thead><tr><th>Código</th><th>Serviço</th><th>Data</th><th>Placa</th>
+          <th class="num">Valor</th><th>Movimento</th><th>Motivo</th><th></th></tr></thead><tbody>
+        ${r.ajustes.map(a => `<tr><td style="font-family:var(--fonte-dados)">${esc(a.codigo)}</td><td>${esc(a.servico)}</td><td>${esc(a.data)}</td>
+          <td style="font-family:var(--fonte-dados)">${esc(a.placa)}</td><td class="num">${fmtMoeda(a.valor)}</td>
+          <td>${a.sentido === 'entra' ? '<b style="color:var(--verde)">entra</b> (de ' + esc(a.original) + ')' : '<b style="color:var(--vermelho)">sai</b> (para ' + esc(a.ajustada) + ')'}</td>
+          <td>${esc(a.motivo || '—')}<div class="vinculo">${esc((a.por || '').split('@')[0])} • ${esc(a.em)}</div></td>
+          <td><button class="btn claro" style="padding:2px 8px" data-aj-desfazer="${escAttr(a.codigo)}" data-aj-serv="${escAttr(a.servico)}">desfazer</button></td></tr>`).join('')}
+        </tbody></table></div>`);
+      document.querySelectorAll('[data-aj-desfazer]').forEach(b => b.addEventListener('click', () => salvar(b.dataset.ajDesfazer, b.dataset.ajServ, '', '')));
+    });
+    if (run) run.listarAjustesCompetencia(ESTADO.token, tipo, competencia);
+  };
+  const salvar = (codigo, servico, nova, motivo) => {
+    const run = servidor('ajustarCompetenciaTransacao', r => {
+      if (!r || !r.ok) { toast((r && r.erro) || 'Falha ao ajustar.', true); return; }
+      toast(r.removido ? 'Ajuste desfeito: a transação volta para ' + r.transacao.original + '.' : 'Transação ' + r.transacao.codigo + ' agora conta em ' + r.transacao.ajustada + '.');
+      htm('aj-achados', ''); listar();
+    }, e => toast('Erro: ' + (e && e.message ? e.message : e), true));
+    if (run) run.ajustarCompetenciaTransacao(ESTADO.token, tipo, codigo, servico, nova, motivo);
+  };
+  const buscar = () => {
+    const codigo = val('aj-codigo').trim();
+    if (!codigo) { toast('Informe o código da transação.'); return; }
+    htm('aj-achados', '<div class="foto-data">Procurando…</div>');
+    const run = servidor('buscarTransacaoAjuste', r => {
+      if (!r || !r.ok) { htm('aj-achados', '<div class="foto-data" style="color:var(--vermelho)">' + esc((r && r.erro) || 'Não encontrada.') + '</div>'); return; }
+      htm('aj-achados', r.transacoes.map((t, i) => `<div class="alerta-item" style="cursor:default; padding:8px 10px; margin-bottom:6px">
+          <div><b style="font-family:var(--fonte-dados)">${esc(t.codigo)}</b> • ${esc(t.servico || '—')}${t.combustivel ? ' (' + esc(t.combustivel) + ')' : ''} • ${esc(t.data)} •
+            <span style="font-family:var(--fonte-dados)">${esc(t.placa)}</span> • ${fmtMoeda(t.valor)}${t.estabelecimento ? ' • ' + esc(t.estabelecimento) : ''}</div>
+          <div class="foto-data" style="margin:3px 0 6px">Pela data: <b>${esc(t.original)}</b>${t.ajustada ? ' • hoje ajustada para <b>' + esc(t.ajustada) + '</b>' : ''}</div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center">
+            <input type="text" id="aj-comp-${i}" value="${escAttr(t.ajustada || (t.original === competencia ? '' : competencia))}" placeholder="MM/AAAA" style="width:100px">
+            <input type="text" id="aj-motivo-${i}" placeholder="motivo (ex.: faturada na NF de ${escAttr(competencia)})" style="flex:1; min-width:200px">
+            <button class="btn amarelo" data-aj-salvar="${i}">Mover</button>
+            ${t.ajustada ? `<button class="btn claro" data-aj-volta="${i}">Desfazer</button>` : ''}
+          </div></div>`).join(''));
+      document.querySelectorAll('[data-aj-salvar]').forEach(b => b.addEventListener('click', () => {
+        const t = r.transacoes[+b.dataset.ajSalvar];
+        const nova = val('aj-comp-' + b.dataset.ajSalvar).trim();
+        if (!/^\d{1,2}\/\d{4}$/.test(nova)) { toast('Competência no formato MM/AAAA.'); return; }
+        salvar(t.codigo, t.servico, nova, val('aj-motivo-' + b.dataset.ajSalvar).trim());
+      }));
+      document.querySelectorAll('[data-aj-volta]').forEach(b => b.addEventListener('click', () => { const t = r.transacoes[+b.dataset.ajVolta]; salvar(t.codigo, t.servico, '', ''); }));
+    });
+    if (run) run.buscarTransacaoAjuste(ESTADO.token, tipo, codigo);
+  };
+  ouvir('aj-buscar', 'click', buscar);
+  const inp = el('aj-codigo'); if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') buscar(); });
+  listar();
 }
 </script>
