@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.95.1';
+const CODIGO_VERSAO = '2.95.2';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -4548,7 +4548,6 @@ function _htmlRelatorioAbast_(d, ini, fim, sessao, anterior, frotaAtiva) {
     '.kpis { display: table; width: 100%; table-layout: fixed; border-spacing: 5px 0; margin-bottom: 6px; }' +
     '.kpi { display: table-cell; background: #F6F8FC; border-left: 3px solid #0B2C5C; padding: 6px 8px; }' +
     '.kpi.alerta { border-left-color: #B23A2E; } .kpi.bom { border-left-color: #2F9E6B; }' +
-    '.kpi.total { background: #FFF6D6; border-left-color: #F2B705; } .kpi.total .v { font-size: 14pt; }' +
     '.kpi .r { font-size: 7pt; text-transform: uppercase; letter-spacing: .05em; color: #5A6576; }' +
     '.kpi .v { font-size: 12.5pt; font-weight: bold; color: #0B2C5C; white-space: nowrap; }' +
     '.kpi .s { font-size: 7pt; color: #5A6576; }' +
@@ -4581,7 +4580,7 @@ function _htmlRelatorioAbast_(d, ini, fim, sessao, anterior, frotaAtiva) {
     kpi('Gasto com combustível', _moedaBR_(d.valor), _fmtInt_(d.registros) + ' abastecimento(s)' + (a ? ' · ' + variacao(d.valor, a.valor) : '')) +
     kpi('Outras despesas', _moedaBR_(d.outros ? d.outros.valor : 0),
       d.outros && d.outros.qtd ? _fmtInt_(d.outros.qtd) + ' transação(ões) de outros serviços' : 'nenhum outro serviço no período') +
-    kpi(nMeses > 1 ? 'Gasto total do período' : 'Gasto total da competência', _moedaBR_(d.valor + (d.outros ? d.outros.valor : 0)), 'combustível + outras despesas — valor que confere com a nota fiscal', 'total') +
+    kpi(nMeses > 1 ? 'Gasto total do período' : 'Gasto total da competência', _moedaBR_(d.valor + (d.outros ? d.outros.valor : 0)), 'combustível + outras despesas — valor que confere com a nota fiscal') +
     '</div>' +
     '<div class="kpis">' +
     kpi('Litros', _decBR_(d.litros), _decBR_(d.litros / nMeses) + ' por mês') +
