@@ -981,4 +981,35 @@ table.tabela td.acoes { text-align: right; }
 @media (max-width: 900px) {
   .topo { grid-template-columns: auto minmax(0, 1fr) auto; }
 }
+
+/* ---------- Pagamentos → Transações (visão da base da Ticket) ---------- */
+.trans-barra { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.trans-barra label { font-size: 12px; color: var(--tinta-suave); display: flex; gap: 6px; align-items: center; }
+.trans-barra select, .trans-barra input[type=search] { padding: 6px 8px; border: 1px solid var(--borda); border-radius: 6px; font: inherit; font-size: 13px; }
+.trans-barra input[type=search] { flex: 1 1 220px; min-width: 160px; }
+.trans-tipo { display: inline-flex; border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; }
+.trans-tipo button { border: 0; background: var(--branco); padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer; color: var(--tinta); }
+.trans-tipo button.ativa { background: var(--azul); color: #fff; font-weight: 600; }
+.trans-cols { border: 1px solid var(--borda); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: var(--papel); }
+.trans-cols.oculto { display: none; }
+.trans-cols-acoes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.trans-cols-acoes input { padding: 5px 8px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12px; }
+.trans-cols-acoes .trans-nota { font-size: 11px; color: var(--tinta-suave); }
+.trans-cols-lista { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 2px 12px; max-height: 260px; overflow: auto; }
+.trans-cols-lista label { font-size: 12px; display: flex; gap: 6px; align-items: center; padding: 2px 0; cursor: pointer; }
+.trans-cols-lista label.oculto { display: none; }
+.trans-resumo { font-size: 12px; color: var(--tinta-suave); margin-bottom: 6px; }
+.trans-tabela-envolto { overflow: auto; max-height: calc(100vh - 260px); border: 1px solid var(--borda); border-radius: 8px; }
+.trans-tabela { border-collapse: collapse; font-size: 12px; width: max-content; min-width: 100%; }
+.trans-tabela th, .trans-tabela td { padding: 5px 8px; border-bottom: 1px solid #EEF1F6; white-space: nowrap; text-align: left; }
+.trans-tabela thead th { position: sticky; top: 0; background: var(--azul); color: #fff; font-weight: 600; cursor: pointer; z-index: 1; user-select: none; }
+.trans-tabela tfoot td { position: sticky; bottom: 0; background: #FFF6D6; font-weight: 700; border-top: 2px solid var(--amarelo); }
+.trans-tabela .num { text-align: right; font-variant-numeric: tabular-nums; }
+.trans-tabela td.n { color: var(--tinta-suave); text-align: right; position: sticky; left: 0; background: var(--branco); }
+.trans-tabela thead th.n { left: 0; background: var(--azul); color: #fff; z-index: 2; }
+.trans-tabela tfoot td.n { background: #FFF6D6; }
+.trans-tabela tbody tr:nth-child(even) td { background: #F8FAFD; }
+.trans-tabela tbody tr:hover td { background: #EAF1FC; }
+.trans-tabela tr.ajustada td { background: #FFF9E6; }
+.tag-aj { display: inline-block; font-size: 10px; padding: 0 4px; border-radius: 4px; background: var(--amarelo); color: var(--azul-fundo); font-weight: 700; }
 </style>

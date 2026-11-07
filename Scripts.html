@@ -74,7 +74,7 @@ function val(id) { const e = el(id); return e ? e.value : ''; }
 function ouvir(id, ev, fn) { const e = el(id); if (e) e.addEventListener(ev, fn); }
 
 /* ---------- Estado ---------- */
-const VERSAO_PAINEL = '2.94.0';
+const VERSAO_PAINEL = '2.95.0';
 const CHAVE_FILTROS_OCULTOS = 'painelFrotaFiltrosOcultos';
 const CHAVE_TOKEN = 'painel_frota_token';
 const ESTADO = {
@@ -358,10 +358,12 @@ function renderAba() {
   else if (ESTADO.aba === 'manut') renderManut(lista);
   else if (ESTADO.aba === 'os') renderOS(lista);
   else if (ESTADO.aba === 'pagamentos') {
-    const ehProcesso = ESTADO.subPag !== 'panorama' && ESTADO.admin;
-    cls('pag-panorama', 'oculto', ehProcesso);
+    const ehTrans = ESTADO.subPag === 'transacoes' && ESTADO.admin;
+    const ehProcesso = !ehTrans && ESTADO.subPag !== 'panorama' && ESTADO.admin;
+    cls('pag-panorama', 'oculto', ehProcesso || ehTrans);
     cls('pag-processo', 'oculto', !ehProcesso);
-    if (ehProcesso) renderProcessoPagamento(); else renderPagamentos();
+    cls('pag-transacoes', 'oculto', !ehTrans);
+    if (ehTrans) renderTransacoes(); else if (ehProcesso) renderProcessoPagamento(); else renderPagamentos();
   }
   else if (ESTADO.aba === 'patrimonio') renderPatrimonio(lista);
   else if (ESTADO.aba === 'acoes') renderAcoes(lista);
@@ -3298,6 +3300,142 @@ function enviarDocumento(placa, tipo, arquivo) {
    PROCESSO DE PAGAMENTO — abastecimento e manutenção
    ============================================================ */
 const TIPO_PROC = { abast: 'Abastecimento', manut: 'Manutenção' };
+
+/* ============================================================
+   TRANSAÇÕES — a base da Ticket por competência, com colunas escolhidas
+   ============================================================ */
+const TRANS_PADRAO = {
+  abast: ['DATA TRANSACAO', 'PLACA', 'NOME MOTORISTA', 'SERVICO', 'TIPO COMBUSTIVEL', 'LITROS', 'VL/LITRO', 'HODOMETRO OU HORIMETRO',
+    'KM RODADOS OU HORAS TRABALHADAS', 'KM/LITRO OU LITROS/HORA', 'VALOR EMISSAO', 'NOME ESTABELECIMENTO', 'CIDADE'],
+  manut: ['DATA TRANSACAO', 'PLACA', 'NOME MOTORISTA', 'SERVICO', 'VALOR EMISSAO', 'NOME ESTABELECIMENTO', 'CIDADE', 'UF']
+};
+const TRANS = { tipo: 'abast', comp: {}, dados: {}, cols: {}, busca: '', ordem: null, painelCols: false };
+const normTx = s => String(s || '').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+const numBR = v => { const t = String(v || '').replace(/^R\$\s*/, '').replace(/\./g, '').replace(',', '.').trim(); const n = parseFloat(t); return isNaN(n) ? null : n; };
+const somavel = nome => /^(LITROS|VALOR|KM RODADOS|QTD|QUANTIDADE|DESCONTO|TOTAL)/.test(normTx(nome));
+
+function colunasTrans(d) {
+  const tipo = d.tipo;
+  if (!TRANS.cols[tipo]) {
+    let lista = d.preferencia;
+    if (!lista) { try { const g = lerGuardado('transCols_' + tipo); if (g) lista = JSON.parse(g); } catch (e) {} }
+    if (!lista || !lista.length) lista = TRANS_PADRAO[tipo];
+    const alvo = new Set(lista.map(normTx));
+    TRANS.cols[tipo] = new Set(d.colunas.filter(c => alvo.has(normTx(c))));
+    if (!TRANS.cols[tipo].size) TRANS.cols[tipo] = new Set(d.colunas.slice(0, 12));
+  }
+  return TRANS.cols[tipo];
+}
+let _salvarColsTimer = null;
+function salvarColsTrans(tipo) {
+  const lista = Array.from(TRANS.cols[tipo] || []);
+  guardar('transCols_' + tipo, JSON.stringify(lista));
+  clearTimeout(_salvarColsTimer);
+  _salvarColsTimer = setTimeout(() => {
+    const run = servidor('salvarColunasTransacoes', r => { if (r && r.ok) { const d = TRANS.dados[tipo + '|' + (TRANS.comp[tipo] || '')]; if (d) d.preferencia = lista; el('trans-salvo') && (el('trans-salvo').textContent = 'Visão salva'); } });
+    if (run) run.salvarColunasTransacoes(ESTADO.token, tipo, lista);
+  }, 700);
+}
+
+function renderTransacoes() {
+  const c = el('pag-transacoes'); if (!c) return;
+  const tipo = TRANS.tipo, comp = TRANS.comp[tipo] || '';
+  const d = TRANS.dados[tipo + '|' + comp];
+  if (!d) {
+    c.innerHTML = '<div class="cartao largo"><div class="vazio"><div class="spinner" style="border-color:#dfe4ee; border-top-color:var(--azul); margin-bottom:10px"></div>Lendo as transações de ' + (tipo === 'abast' ? 'abastecimento' : 'manutenção') + '…</div></div>';
+    const run = servidor('lerTransacoesCompetencia', r => {
+      if (!r || !r.ok) { c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc((r && r.erro) || 'Falha ao ler.') + '</div></div>'; return; }
+      TRANS.comp[tipo] = r.competencia;
+      TRANS.dados[tipo + '|' + r.competencia] = r;
+      if (!comp) TRANS.dados[tipo + '|'] = r;
+      renderTransacoes();
+    }, e => { c.innerHTML = '<div class="cartao largo"><div class="vazio">' + esc(e && e.message ? e.message : String(e)) + '</div></div>'; });
+    if (run) run.lerTransacoesCompetencia(ESTADO.token, tipo, comp);
+    return;
+  }
+  const cols = colunasTrans(d);
+  const idx = d.colunas.map((n, i) => i).filter(i => cols.has(d.colunas[i]));
+  c.innerHTML = `<div class="cartao largo trans">
+    <div class="trans-barra">
+      <div class="trans-tipo">
+        <button class="${tipo === 'abast' ? 'ativa' : ''}" data-t="abast">Abastecimento</button>
+        <button class="${tipo === 'manut' ? 'ativa' : ''}" data-t="manut">Manutenção</button>
+      </div>
+      <label>Competência <select id="trans-comp">${d.competencias.map(x => `<option value="${x.comp}" ${x.comp === d.competencia ? 'selected' : ''}>${x.comp} (${fmtInt(x.qtd)})</option>`).join('')}</select></label>
+      <input id="trans-busca" type="search" placeholder="Filtrar (placa, motorista, posto…)" value="${escAttr(TRANS.busca)}">
+      <button class="btn claro" id="trans-btn-cols">Colunas (${idx.length}/${d.colunas.length})</button>
+      <button class="btn claro" id="trans-csv">Exportar CSV</button>
+      <button class="btn claro" id="trans-recarregar" title="Ler de novo da planilha">↻</button>
+    </div>
+    <div id="trans-painel-cols" class="trans-cols ${TRANS.painelCols ? '' : 'oculto'}">
+      <div class="trans-cols-acoes"><button class="btn claro" data-acao="padrao">Padrão</button><button class="btn claro" data-acao="todas">Todas</button><button class="btn claro" data-acao="nenhuma">Nenhuma</button>
+        <input id="trans-cols-busca" type="search" placeholder="Procurar coluna"><span id="trans-salvo" class="trans-nota">A escolha fica salva para ${tipo === 'abast' ? 'abastecimento' : 'manutenção'}.</span></div>
+      <div class="trans-cols-lista">${d.colunas.map((n, i) => `<label data-n="${escAttr(normTx(n))}"><input type="checkbox" data-i="${i}" ${cols.has(n) ? 'checked' : ''}> ${esc(n)}</label>`).join('')}</div>
+    </div>
+    <div id="trans-resumo" class="trans-resumo"></div>
+    <div class="trans-tabela-envolto"><table class="trans-tabela" id="trans-tabela"></table></div>
+  </div>`;
+  c.querySelectorAll('.trans-tipo button').forEach(b => b.onclick = () => { if (TRANS.tipo === b.dataset.t) return; TRANS.tipo = b.dataset.t; TRANS.ordem = null; renderTransacoes(); });
+  el('trans-comp').onchange = e => { TRANS.comp[tipo] = e.target.value; TRANS.ordem = null; renderTransacoes(); };
+  el('trans-busca').oninput = e => { TRANS.busca = e.target.value; desenharTabelaTrans(); };
+  el('trans-btn-cols').onclick = () => { TRANS.painelCols = !TRANS.painelCols; cls('trans-painel-cols', 'oculto', !TRANS.painelCols); };
+  el('trans-recarregar').onclick = () => { delete TRANS.dados[tipo + '|' + comp]; delete TRANS.dados[tipo + '|' + d.competencia]; renderTransacoes(); };
+  el('trans-csv').onclick = () => {
+    const vis = linhasTransVisiveis(d), ix = idxTrans(d);
+    baixarCsv('Transacoes_' + (tipo === 'abast' ? 'Abastecimento' : 'Manutencao') + '_' + d.competencia.replace('/', '-') + '.csv', ix.map(i => d.colunas[i]), vis.map(r => ix.map(i => d.linhas[r][i])));
+  };
+  el('trans-cols-busca').oninput = e => { const q = normTx(e.target.value); c.querySelectorAll('.trans-cols-lista label').forEach(l => l.classList.toggle('oculto', q && l.dataset.n.indexOf(q) < 0)); };
+  c.querySelectorAll('.trans-cols-lista input').forEach(ch => ch.onchange = () => {
+    const n = d.colunas[+ch.dataset.i];
+    if (ch.checked) cols.add(n); else cols.delete(n);
+    el('trans-btn-cols').textContent = 'Colunas (' + cols.size + '/' + d.colunas.length + ')';
+    salvarColsTrans(tipo); desenharTabelaTrans();
+  });
+  c.querySelectorAll('.trans-cols-acoes button').forEach(b => b.onclick = () => {
+    const a = b.dataset.acao;
+    cols.clear();
+    if (a === 'todas') d.colunas.forEach(n => cols.add(n));
+    if (a === 'padrao') { const alvo = new Set(TRANS_PADRAO[tipo].map(normTx)); d.colunas.forEach(n => { if (alvo.has(normTx(n))) cols.add(n); }); }
+    salvarColsTrans(tipo); TRANS.painelCols = true; renderTransacoes();
+  });
+  desenharTabelaTrans();
+}
+function idxTrans(d) { const cols = TRANS.cols[d.tipo]; return d.colunas.map((n, i) => i).filter(i => cols.has(d.colunas[i])); }
+function linhasTransVisiveis(d) {
+  const q = normTx(TRANS.busca), ix = idxTrans(d);
+  let rs = d.linhas.map((l, i) => i);
+  if (q) { const termos = q.split(' '); rs = rs.filter(r => { const t = normTx(d.linhas[r].join(' ')); return termos.every(x => t.indexOf(x) >= 0); }); }
+  if (TRANS.ordem && ix.indexOf(TRANS.ordem.i) >= 0) {
+    const i = TRANS.ordem.i, s = TRANS.ordem.dir, num = d.numericas[i];
+    const data = /DATA/.test(normTx(d.colunas[i]));
+    const chave = v => { if (num) { const n = numBR(v); return n === null ? -Infinity : n; } if (data) { const m = String(v).match(/(\d{2})\/(\d{2})\/(\d{4})(.*)/); return m ? m[3] + m[2] + m[1] + m[4] : String(v); } return normTx(v); };
+    rs.sort((a, b) => { const x = chave(d.linhas[a][i]), y = chave(d.linhas[b][i]); return (x < y ? -1 : x > y ? 1 : 0) * s; });
+  }
+  return rs;
+}
+function desenharTabelaTrans() {
+  const d = TRANS.dados[TRANS.tipo + '|' + (TRANS.comp[TRANS.tipo] || '')]; const t = el('trans-tabela'); if (!d || !t) return;
+  const ix = idxTrans(d), rs = linhasTransVisiveis(d);
+  const LIM = 3000, mostrar = rs.slice(0, LIM);
+  const soma = {}; ix.forEach(i => { if (d.numericas[i] && somavel(d.colunas[i])) soma[i] = 0; });
+  rs.forEach(r => Object.keys(soma).forEach(i => { const n = numBR(d.linhas[r][i]); if (n !== null) soma[i] += n; }));
+  const temAjuste = d.ajustadas.some(x => x);
+  const seta = i => TRANS.ordem && TRANS.ordem.i === i ? (TRANS.ordem.dir > 0 ? ' ▲' : ' ▼') : '';
+  if (!ix.length) { t.innerHTML = '<tbody><tr><td class="vazio">Nenhuma coluna escolhida — abra “Colunas”.</td></tr></tbody>'; }
+  else t.innerHTML = '<thead><tr><th class="n">#</th>' + ix.map(i => `<th data-i="${i}" class="${d.numericas[i] ? 'num' : ''}">${esc(d.colunas[i])}${seta(i)}</th>`).join('') + '</tr></thead><tbody>' +
+    mostrar.map((r, k) => `<tr class="${d.ajustadas[r] ? 'ajustada' : ''}"><td class="n">${k + 1}${d.ajustadas[r] ? ' <span class="tag-aj" title="Competência ajustada manualmente">aj.</span>' : ''}</td>` +
+      ix.map(i => `<td class="${d.numericas[i] ? 'num' : ''}">${esc(d.linhas[r][i])}</td>`).join('') + '</tr>').join('') + '</tbody>' +
+    (Object.keys(soma).length ? '<tfoot><tr><td class="n">Σ</td>' + ix.map(i => `<td class="num">${soma[i] !== undefined ? fmtDec(soma[i], 2) : ''}</td>`).join('') + '</tr></tfoot>' : '');
+  t.querySelectorAll('th[data-i]').forEach(th => th.onclick = () => {
+    const i = +th.dataset.i; TRANS.ordem = TRANS.ordem && TRANS.ordem.i === i ? (TRANS.ordem.dir > 0 ? { i, dir: -1 } : null) : { i, dir: 1 }; desenharTabelaTrans();
+  });
+  const iv = d.colunas.findIndex(n => normTx(n) === 'VALOR EMISSAO');
+  let total = 0; if (iv >= 0) rs.forEach(r => { const n = numBR(d.linhas[r][iv]); if (n !== null) total += n; });
+  el('trans-resumo').innerHTML = `<b>${fmtInt(rs.length)}</b> de ${fmtInt(d.linhas.length)} transação(ões) em ${esc(d.competencia)}` +
+    (iv >= 0 ? ` · Valor emissão <b>${fmtMoeda(total)}</b>` : '') +
+    (temAjuste ? ` · <span class="tag-aj">aj.</span> = competência ajustada` : '') +
+    (rs.length > LIM ? ` · mostrando as ${fmtInt(LIM)} primeiras (o CSV leva todas)` : '') + ' · clique no título da coluna para ordenar';
+}
 
 function renderProcessoPagamento() {
   const c = el('pag-processo'); if (!c) return;

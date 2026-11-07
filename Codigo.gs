@@ -16,7 +16,7 @@
  */
 
 /** Versão deste arquivo — o painel compara com a versão da interface. */
-const CODIGO_VERSAO = '2.94.0';
+const CODIGO_VERSAO = '2.95.0';
 
 const CONFIG = {
   ID_BASE:        '1w2K4UNAmMY_2WCTlyNdmj-b7AEgvBiW0wxW_1PPa6a8',
@@ -11397,4 +11397,77 @@ function _xlsxTransacoes_(d, titulo) {
   } finally {
     try { DriveApp.getFileById(tmp.getId()).setTrashed(true); } catch (e) {}
   }
+}
+
+
+/* ============================================================
+   TRANSAÇÕES — visão analítica da AbastBD / ManutBD por competência
+   Como olhar a planilha da Ticket, com a escolha de colunas salva por
+   usuário e por tipo (abastecimento e manutenção têm colunas próprias).
+   ============================================================ */
+function lerTransacoesCompetencia(token, tipo, competencia) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    if (tipo !== 'abast' && tipo !== 'manut') return { ok: false, erro: 'Tipo inválido.' };
+    const nomeAba = tipo === 'manut' ? CONFIG.ABA_MANUT : CONFIG.ABA_ABAST;
+    const aba = p.ss.getSheetByName(nomeAba);
+    if (!aba || aba.getLastRow() < 2) return { ok: false, erro: 'Aba ' + nomeAba + ' vazia ou não encontrada.' };
+    const nCols = aba.getLastColumn(), nLin = aba.getLastRow();
+    const topo = aba.getRange(1, 1, Math.min(5, nLin), nCols).getDisplayValues();
+    let linCab = 0;
+    for (let i = 0; i < topo.length; i++) if (topo[i].some(x => _normCab_(x) === 'DATA TRANSACAO')) { linCab = i; break; }
+    const cabRaw = topo[linCab].map(x => String(x).trim());
+    let ultima = cabRaw.length; while (ultima > 0 && !cabRaw[ultima - 1]) ultima--;
+    const cab = cabRaw.slice(0, ultima).map((x, i) => x || _letraColuna_(i + 1));
+    const norm = cab.map(x => _normCab_(x));
+    const iCod = Math.max(0, norm.indexOf('CODIGO TRANSACAO')), iServ = norm.indexOf('SERVICO'), iData = norm.indexOf('DATA TRANSACAO');
+    if (iData < 0) return { ok: false, erro: 'Coluna DATA TRANSACAO não encontrada na ' + nomeAba + '.' };
+    if (nLin <= linCab + 1) return { ok: false, erro: 'Sem transações na ' + nomeAba + '.' };
+    const faixa = aba.getRange(linCab + 2, 1, nLin - linCab - 1, ultima);
+    const brutos = faixa.getValues(), exibidos = faixa.getDisplayValues();
+    const ajustes = _ajustesCompetencia_(p.ss, tipo);
+    // competências disponíveis (pela data, mais as ajustadas) e as linhas da escolhida
+    const comps = {};
+    let alvo = competencia ? _formatarCompetencia_(competencia, true) : '';
+    const linhas = [], marcas = [];
+    const doMes = [];
+    for (let r = 0; r < brutos.length; r++) {
+      const dia = _diaISO_(brutos[r][iData]); if (!dia) continue;
+      const mes = _mesDaTransacao_(ajustes, brutos[r], iCod, iServ, dia);
+      const c = mes.substring(5, 7) + '/' + mes.substring(0, 4);
+      comps[c] = (comps[c] || 0) + 1;
+      doMes.push([c, r, mes !== dia.substring(0, 7)]);
+    }
+    const lista = Object.keys(comps).sort((a, b) => (b.substring(3) + b.substring(0, 2)).localeCompare(a.substring(3) + a.substring(0, 2)));
+    if (!alvo) alvo = lista[0] || '';
+    doMes.forEach(([c, r, aj]) => { if (c === alvo) { linhas.push(exibidos[r]); marcas.push(aj ? 1 : 0); } });
+    // colunas numéricas (para alinhar e somar na tela)
+    const numericas = cab.map((_, j) => {
+      let n = 0, t = 0;
+      for (let i = 0; i < linhas.length && t < 200; i++) { const v = String(linhas[i][j] || '').trim(); if (!v) continue; t++; if (/^-?[\d.]+(,\d+)?$/.test(v.replace(/^R\$\s*/, ''))) n++; }
+      return t > 0 && n / t > 0.9;
+    });
+    return { ok: true, tipo: tipo, competencia: alvo, competencias: lista.map(c => ({ comp: c, qtd: comps[c] })),
+      colunas: cab, numericas: numericas, linhas: linhas, ajustadas: marcas, preferencia: _prefColunasTransacoes_(p.sessao.email, tipo) };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
+}
+
+/** Colunas escolhidas pelo usuário para o tipo (null = ainda não escolheu). */
+function _prefColunasTransacoes_(email, tipo) {
+  try {
+    const v = PropertiesService.getScriptProperties().getProperty('COLS_TRANS_' + tipo + '_' + String(email || '').toLowerCase());
+    return v ? JSON.parse(v) : null;
+  } catch (e) { return null; }
+}
+
+function salvarColunasTransacoes(token, tipo, colunas) {
+  const p = _prepararAcao_(token); if (p.erroPadrao) return p.erroPadrao;
+  try {
+    if (tipo !== 'abast' && tipo !== 'manut') return { ok: false, erro: 'Tipo inválido.' };
+    const chave = 'COLS_TRANS_' + tipo + '_' + String(p.sessao.email || '').toLowerCase();
+    const lista = (colunas || []).map(String).slice(0, 80);
+    if (!lista.length) PropertiesService.getScriptProperties().deleteProperty(chave);
+    else PropertiesService.getScriptProperties().setProperty(chave, JSON.stringify(lista));
+    return { ok: true, colunas: lista };
+  } catch (e) { return { ok: false, erro: String(e.message || e) }; }
 }
